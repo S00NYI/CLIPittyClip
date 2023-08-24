@@ -1,4 +1,4 @@
-name: CLIPittyCLIP
+name: CLIPittyClip
 channels:
   - bioconda
   - conda-forge
