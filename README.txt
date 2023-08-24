@@ -25,40 +25,51 @@ CLIPittyClip has been tested in:
 -------------------------------------------------------------------------------------------------------------------
 Installation:
 
-Use the CLIPittyClip-env.txt to install necessary packages:
-conda env create -n CLIPittyClip_env -f CLIpittyClip_environment.yml
-CONDA_SUBDIR=osx-64 conda env create -n CLIPittyClip_env -f CLIpittyClip_environment.yml
+Use the CLIpittyClip_environment.yml to install necessary packages:
+    conda env create -n CLIPittyClip_env -f CLIpittyClip_environment.yml
 
-**Using mamba instead of conda will be much faster.
+For Apple silicon, you may need to add CONDA_SUBDIR=osx-64 in front of the conda comment:
+    CONDA_SUBDIR=osx-64 conda env create -n CLIPittyClip_env -f CLIpittyClip_environment.yml
 
-Activate the created environment and install Homer by following instructions on Homer website.
+** Using mamba instead of conda will be much faster.
+
+Activate the created environment and install Homer by following instructions on Homer website:
+    http://homer.ucsd.edu/homer/introduction/install.html
 CLIPittyClip_env environment created will have all the necessary requisites to install Homer.
 
 Finally, add directory in which CLIPittyClip.sh is located in to PATH variable by running install_zshrc.sh (or install_bashrc.sh) file.
-
-install.sh file can be deleted afterwards.
+    Use one that matches your Shell. Modern Apple products use zsh as default.
+    install.sh file can be deleted afterwards.
 
 -------------------------------------------------------------------------------------------------------------------
 Restart terminal and CLIPittyClip.sh can be ran as following:
 
-CLIPittyClip.sh -i JL0361 -y Input -x /PATH/TO/GENOME/ANNOTATION/GRCh38.primary_assembly.genome -b 2 
+CLIPittyClip.sh -i PROJECT_ID -y PROJECT_TYPE -x /PATH/TO/GENOME/ANNOTATION/ANNOTATION_FILE_NAME
 
-Bowtie2 index files can be made by using bowtie2-build and supplying genome fasta files.
-Bowtie2 index files consist of 6 files: 
-GRCh38.primary_assembly.genome.1.bt2
-GRCh38.primary_assembly.genome.2.bt2
-GRCh38.primary_assembly.genome.3.bt2
-GRCh38.primary_assembly.genome.4.bt2
-GRCh38.primary_assembly.genome.rev.1.bt2
-GRCh38.primary_assembly.genome.rev.2.bt2
+Options -i, -y, and -x are required.
+    For more detailed usage information, type CLIPittyClip.sh in terminal after installation and press enter.
+    Make sure to activate the conda environment.
 
-Genome file for bedtools genomecov will have same path and name scheme as bowtie2 index: /PATH/TO/GENOME/ANNOTATION/GRCh38.primary_assembly.genome.fa.fai
-This file can be easily made by: samtools faidx /PATH/TO/GENOME/ANNOTATION/GRCh38.primary_assembly.genome.fa
+-x specifies path to Bowtie2 index
+    Bowtie2 index files can be made by using bowtie2-build and supplying genome fasta files.
+        Here, we are showing example Bowtie2 index file made using GRCh38.primary_assembly.genome.fa downloaded from GENCODE.
+    Bowtie2 index files consist of 6 files: 
+        GRCh38.primary_assembly.genome.1.bt2
+        GRCh38.primary_assembly.genome.2.bt2
+        GRCh38.primary_assembly.genome.3.bt2
+        GRCh38.primary_assembly.genome.4.bt2
+        GRCh38.primary_assembly.genome.rev.1.bt2
+        GRCh38.primary_assembly.genome.rev.2.bt2
 
-Indices are supplied in indices.tar.gz file, which can be unziped using gunzip indices.tar.gz
+    For this example, -x option should be specified as:
+        /PATH/TO/GENOME/ANNOTATION/GRCh38.primary_assembly.genome
+
+Genome file for bedtools genomecov should have same path and name scheme as bowtie2 index: 
+    /PATH/TO/GENOME/ANNOTATION/GRCh38.primary_assembly.genome.fa.fai
+    This .fa.fai file can be easily made by: 
+        samtools faidx /PATH/TO/GENOME/ANNOTATION/GRCh38.primary_assembly.genome.fa
 
 -------------------------------------------------------------------------------------------------------------------
-For more detailed usage information, type CLIPittyClip.sh in terminal and press enter.
 
 
 
