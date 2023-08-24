@@ -28,14 +28,14 @@ Installation:
 Use the CLIpittyClip_environment.yml to install necessary packages:
     conda env create -n CLIPittyClip_env -f CLIpittyClip_environment.yml
 
-For Apple silicon, you may need to add CONDA_SUBDIR=osx-64 in front of the conda comment:
+For Apple silicon, you may need to add CONDA_SUBDIR=osx-64 in front of the conda commands:
     CONDA_SUBDIR=osx-64 conda env create -n CLIPittyClip_env -f CLIpittyClip_environment.yml
 
 ** Using mamba instead of conda will be much faster.
 
 Activate the created environment and install Homer by following instructions on Homer website:
     http://homer.ucsd.edu/homer/introduction/install.html
-CLIPittyClip_env environment created will have all the necessary requisites to install Homer.
+    CLIPittyClip_env environment created will have all the necessary prerequisites to install Homer.
 
 Finally, add directory in which CLIPittyClip.sh is located in to PATH variable by running install_zshrc.sh (or install_bashrc.sh) file.
     Use one that matches your Shell. Modern Apple products use zsh as default.
@@ -52,7 +52,7 @@ Options -i, -y, and -x are required.
 
 -x specifies path to Bowtie2 index
     Bowtie2 index files can be made by using bowtie2-build and supplying genome fasta files.
-        Here, we are showing example Bowtie2 index file made using GRCh38.primary_assembly.genome.fa downloaded from GENCODE.
+        Here are example Bowtie2 index files made using GRCh38.primary_assembly.genome.fa downloaded from GENCODE.
     Bowtie2 index files consist of 6 files: 
         GRCh38.primary_assembly.genome.1.bt2
         GRCh38.primary_assembly.genome.2.bt2
