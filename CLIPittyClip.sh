@@ -4,7 +4,7 @@ EXP_ID=""
 # Type of CLIP experiment for naming:
 EXP_TYPE=""
 # Allowed mismatch for barcode demultiplexing:
-barcodeMis=2
+barcodeMis=0
 # Minimum read length after 5 and 3' trimming/clipping:
 minLength=16
 # Path to genome index:
