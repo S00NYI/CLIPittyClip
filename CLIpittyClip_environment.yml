@@ -1,0 +1,29 @@
+name: CLIPittyCLIP
+channels:
+  - bioconda
+  - conda-forge
+  - chaolinzhanglab
+dependencies:
+  - wget
+  - python
+  - trim-galore
+  - bedtools
+  - samtools=1.15
+  - pandas
+  - numpy
+  - scipy
+  - seaborn
+  - matplotlib
+  - perl=5.32.1
+  - fastx_toolkit
+  - bowtie2
+  - ca-certificates
+  - openssl
+  - perl-threaded
+  - perl-yaml
+  - perl-bioperl
+  - perl-math-cdf
+  - bwa
+  - htslib=1.15
+  - certifi
+  - ctk
