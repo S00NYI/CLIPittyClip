@@ -1,9 +1,9 @@
------------------------------------------------------------------------------------------------------------------------------------------------------------
+-------------------------------------------------------------------------------------------------------------------
 CLIPittyClip: Single-line CLIP data analysis pipeline
 Version 0.1
 Author: Soon Yi
 Last update: 2023-08-06
------------------------------------------------------------------------------------------------------------------------------------------------------------
+-------------------------------------------------------------------------------------------------------------------
 This is a standard CLIP analysis pipeline, from fastq.gz to peaks.
 
 The pipeline utilizes following programs: 
@@ -17,12 +17,12 @@ The pipeline utilizes following programs:
 Make sure conda environment has all the necessary programs installed.
 For more information, see CLIPittyClip_environment.yml and CLIPittyclip-CondaInfo.txt.
 
------------------------------------------------------------------------------------------------------------------------------------------------------------
+-------------------------------------------------------------------------------------------------------------------
 CLIPittyClip has been tested in:
 - Apple MacBook Air M2 Ventura 13.5
 - Ubuntu 20.04.6 LTS 64bit
 
------------------------------------------------------------------------------------------------------------------------------------------------------------
+-------------------------------------------------------------------------------------------------------------------
 Installation:
 
 Use the CLIPittyClip-env.txt to install necessary packages:
@@ -38,7 +38,7 @@ Finally, add directory in which CLIPittyClip.sh is located in to PATH variable b
 
 install.sh file can be deleted afterwards.
 
------------------------------------------------------------------------------------------------------------------------------------------------------------
+-------------------------------------------------------------------------------------------------------------------
 Restart terminal and CLIPittyClip.sh can be ran as following:
 
 CLIPittyClip.sh -i JL0361 -y Input -x /PATH/TO/GENOME/ANNOTATION/GRCh38.primary_assembly.genome -b 2 
@@ -57,7 +57,7 @@ This file can be easily made by: samtools faidx /PATH/TO/GENOME/ANNOTATION/GRCh3
 
 Indices are supplied in indices.tar.gz file, which can be unziped using gunzip indices.tar.gz
 
------------------------------------------------------------------------------------------------------------------------------------------------------------
+-------------------------------------------------------------------------------------------------------------------
 For more detailed usage information, type CLIPittyClip.sh in terminal and press enter.
 
 
