@@ -44,7 +44,7 @@ mv colnames.txt ${BASE_NAME}_peakCoverage.txt
 
 for cov_file in coverage_*; do
     echo $(echo $(basename "${cov_file}" .sorted.collapsed.bed) | cut -d '_' -f 2-) > temp1.txt
-    awk 'FNR>1 {print $7}' ${cov_file} > temp2.txt && cat temp1.txt temp2.txt > temp3.txt
+    awk 'FNR>0 {print $7}' ${cov_file} > temp2.txt && cat temp1.txt temp2.txt > temp3.txt
     paste ${BASE_NAME}_peakCoverage.txt temp3.txt > temp4.txt && mv temp4.txt ${BASE_NAME}_peakCoverage.txt
     rm temp*.txt
 done
