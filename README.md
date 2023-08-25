@@ -1,8 +1,7 @@
--------------------------------------------------------------------------------------------------------------------
-CLIPittyClip: Single-line CLIP data analysis pipeline
-Version 0.1
-Author: Soon Yi
-Last update: 2023-08-06
+# CLIPittyClip: Single-line CLIP data analysis pipeline
+- Version 0.2
+- Author: Soon Yi
+- Last update: 2023-08-25
 -------------------------------------------------------------------------------------------------------------------
 This is a standard CLIP analysis pipeline, from fastq.gz to peaks.
 
@@ -14,7 +13,7 @@ The pipeline utilizes following programs:
  - bedtools (bamtobed, genomecov)
  - Homer (makeTagDirectory, findPeaks)
 
-Make sure conda environment has all the necessary programs installed.
+Make sure conda environment has all the necessary programs installed.  
 For more information, see CLIPittyClip_environment.yml and CLIPittyclip-CondaInfo.txt.
 
 -------------------------------------------------------------------------------------------------------------------
@@ -23,38 +22,42 @@ CLIPittyClip has been tested in:
 - Apple MacBook Pro M2 Montery 12.6
 - Apple MacBook Air M2 Ventura 13.5
 - Ubuntu 20.04.6 LTS 64bit
-
 -------------------------------------------------------------------------------------------------------------------
-Installation:
+## Installation:
 
 Use the CLIpittyClip_environment.yml to install necessary packages:
+
     conda env create -n CLIPittyClip_env -f CLIpittyClip_environment.yml
 
 For Apple silicon, you may need to add CONDA_SUBDIR=osx-64 in front of the conda commands:
+
     CONDA_SUBDIR=osx-64 conda env create -n CLIPittyClip_env -f CLIpittyClip_environment.yml
 
-** Using mamba instead of conda will be much faster.
+***Note***: Using mamba instead of conda will be much faster.
 
-Activate the created environment and install Homer by following instructions on Homer website:
-    http://homer.ucsd.edu/homer/introduction/install.html
-    CLIPittyClip_env environment created will have all the necessary prerequisites to install Homer.
+Activate the created environment and install Homer by following instructions on Homer website.  
+CLIPittyClip_env environment created will have all the necessary prerequisites to install Homer.
+> http://homer.ucsd.edu/homer/introduction/install.html
 
-Finally, add directory in which CLIPittyClip.sh is located in to PATH variable by running install_zshrc.sh (or install_bashrc.sh) file.
-    Use one that matches your Shell. Modern Apple products use zsh as default.
-    install.sh file can be deleted afterwards.
+Make sure to add Homer to PATH variable.  
+
+Finally, add directory in which CLIPittyClip.sh is located in to PATH variable by running install_zshrc.sh (or install_bashrc.sh) file.  
+Use one that matches your Shell. Modern Apple products use zsh as default. install.sh file can be deleted afterwards.  
 
 -------------------------------------------------------------------------------------------------------------------
-Restart terminal and CLIPittyClip.sh can be ran as following:
+## Usage:
+Restart terminal and activate the CLIPittyClip_env.  
+CLIPittyClip.sh can be ran as following:
 
-CLIPittyClip.sh -i PROJECT_ID -y PROJECT_TYPE -x /PATH/TO/GENOME/ANNOTATION/ANNOTATION_FILE_NAME
+    CLIPittyClip.sh -i PROJECT_ID -y PROJECT_TYPE -x /PATH/TO/GENOME/ANNOTATION/ANNOTATION_FILE_NAME
 
-Options -i, -y, and -x are required.
-    For more detailed usage information, type CLIPittyClip.sh in terminal after installation and press enter.
-    Make sure to activate the conda environment.
+Options -i, -y, and -x are required.  
+For more detailed usage information, type CLIPittyClip.sh in terminal after installation and press enter.  
 
 -x specifies path to Bowtie2 index
     Bowtie2 index files can be made by using bowtie2-build and supplying genome fasta files.
         Here are example Bowtie2 index files made using GRCh38.primary_assembly.genome.fa downloaded from GENCODE.
+
     Bowtie2 index files consist of 6 files: 
         GRCh38.primary_assembly.genome.1.bt2
         GRCh38.primary_assembly.genome.2.bt2
