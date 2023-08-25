@@ -19,6 +19,8 @@ For more information, see CLIPittyClip_environment.yml and CLIPittyclip-CondaInf
 
 -------------------------------------------------------------------------------------------------------------------
 CLIPittyClip has been tested in:
+- Apple MacbOok Pro (2016) Intel Core i7 Montery 12.6
+- Apple MacBook Pro M2 Montery 12.6
 - Apple MacBook Air M2 Ventura 13.5
 - Ubuntu 20.04.6 LTS 64bit
 
