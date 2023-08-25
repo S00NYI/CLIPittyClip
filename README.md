@@ -49,32 +49,32 @@ Use one that matches your Shell. Modern Apple products use zsh as default. insta
 Restart terminal and activate the CLIPittyClip_env.  
 CLIPittyClip.sh can be ran as following:
 
-    CLIPittyClip.sh -i PROJECT_ID -y PROJECT_TYPE -x /PATH/TO/GENOME/ANNOTATION/ANNOTATION_FILE_NAME
+    CLIPittyClip.sh -i ID -y TYPE -x /PATH/TO/GENOME/ANNOTATION/ANNOTATION_FILE_NAME
 
-Options -i, -y, and -x are required.  
-For more detailed usage information, type CLIPittyClip.sh in terminal after installation and press enter.  
+Options **-i**, **-y**, and **-x** are required.  
 
--x specifies path to Bowtie2 index
-    Bowtie2 index files can be made by using bowtie2-build and supplying genome fasta files.
-        Here are example Bowtie2 index files made using GRCh38.primary_assembly.genome.fa downloaded from GENCODE.
+-i and -y is used to define the input fasta.gz name.
+- ID (*i*) is your experimental ID (e.g. SY0124).
+- Type (*y*) is your short handle describing the experiemnt (e.g. HuR_CLIP).
+- Then, input fastq.gz should have filename as <ins>*SY0124_HuR_CLIP.fastq.gz*</ins>.
 
-    Bowtie2 index files consist of 6 files: 
-        GRCh38.primary_assembly.genome.1.bt2
-        GRCh38.primary_assembly.genome.2.bt2
-        GRCh38.primary_assembly.genome.3.bt2
-        GRCh38.primary_assembly.genome.4.bt2
-        GRCh38.primary_assembly.genome.rev.1.bt2
-        GRCh38.primary_assembly.genome.rev.2.bt2
+-x specifies path to index files for bowtie2 mapping and genome file for bedGraph generation:  
+- Bowtie2 index files can be made by using bowtie2-build and supplying genome fasta files.
+- Here are example Bowtie2 index files made using GRCh38.primary_assembly.genome.fa downloaded from GENCODE.
+  - GRCh38.primary_assembly.genome.1.bt2
+  - GRCh38.primary_assembly.genome.2.bt2
+  - GRCh38.primary_assembly.genome.3.bt2
+  - GRCh38.primary_assembly.genome.4.bt2
+  - GRCh38.primary_assembly.genome.rev.1.bt2
+  - GRCh38.primary_assembly.genome.rev.2.bt2
+- For this example, -x option should be specified as:
+  - /PATH/TO/GENOME/ANNOTATION/GRCh38.primary_assembly.genome
 
-    For this example, -x option should be specified as:
-        /PATH/TO/GENOME/ANNOTATION/GRCh38.primary_assembly.genome
-
-Genome file for bedtools genomecov should have same path and name scheme as bowtie2 index: 
-    /PATH/TO/GENOME/ANNOTATION/GRCh38.primary_assembly.genome.fa.fai
-    This .fa.fai file can be easily made by: 
-        samtools faidx /PATH/TO/GENOME/ANNOTATION/GRCh38.primary_assembly.genome.fa
+- Genome file for bedtools genomecov should also have same path and name scheme as bowtie2 index:
+  - /PATH/TO/GENOME/ANNOTATION/GRCh38.primary_assembly.genome.fa.fai
+  - This .fa.fai file can be easily made by:
+    - samtools faidx /PATH/TO/GENOME/ANNOTATION/GRCh38.primary_assembly.genome.fa
 
 -------------------------------------------------------------------------------------------------------------------
-
-
+For more detailed usage information, type CLIPittyClip.sh in terminal after installation and press enter.  
 
