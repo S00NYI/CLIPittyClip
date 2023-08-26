@@ -12,6 +12,7 @@ else
   echo "Adding $SCRIPT_DIR to PATH..."
   echo "PATH=$PATH:$SCRIPT_DIR" >> ~/.bashrc
   chmod +x "$SCRIPT_DIR/CLIPittyClip.sh"
+  chmod +x "$SCRIPT_DIR/CombinedPeakCalling.sh"
   echo "Done! You can now run CLIPittyClip.sh in directory containing your fastq.gz file."
   echo "Make sure to restart your terminal or run 'source ~/.bashrc'."
 fi
