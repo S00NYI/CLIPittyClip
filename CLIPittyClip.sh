@@ -27,7 +27,7 @@ function show_info {
   echo "-----------------------------------------------------------------------------------------------"
   echo "CLIPittyClip: Single-line CLIP data analysis pipeline"
   echo "-----------------------------------------------------------------------------------------------"
-  echo "Version 0.1"
+  echo "Version 0.2"
   echo "Author: Soon Yi"
   echo "Last update: 2023-08-06"
   echo "-----------------------------------------------------------------------------------------------"
@@ -138,7 +138,7 @@ fi
 BASE_NAME="${EXP_ID}_${EXP_TYPE}"
 echo "-----------------------------------------------------------------------------------------------" | tee -a ${BASE_NAME}_logs.txt
 echo "CLIPittyClip: Single-line CLIP data analysis pipeline" | tee -a ${BASE_NAME}_logs.txt
-echo "Version 0.1" | tee -a ${BASE_NAME}_logs.txt
+echo "Version 0.2" | tee -a ${BASE_NAME}_logs.txt
 echo "Author: Soon Yi" | tee -a ${BASE_NAME}_logs.txt
 echo "Last update: 2023-08-06" | tee -a ${BASE_NAME}_logs.txt
 echo "-----------------------------------------------------------------------------------------------" | tee -a ${BASE_NAME}_logs.txt
