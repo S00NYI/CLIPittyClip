@@ -1,13 +1,96 @@
+# Peak calling minimum distance for HOMER 
 PeakMinDist=50
+# Peak size for HOMER
 PeakSize=20
+# Fragment size for HOMER
 FragLength=25
+# Base name for file
 BASE_NAME=Combined
 
+# Function to display information
+function show_info {
+  echo "-----------------------------------------------------------------------------------------------"
+  echo "CLIPittyClip: Single-line CLIP data analysis pipeline"
+  echo "-----------------------------------------------------------------------------------------------"
+  echo "Version 1.0.0"
+  echo "Author: Soon Yi"
+  echo "Last update: 2023-10-25"
+  echo "-----------------------------------------------------------------------------------------------"
+  echo "This is a part of the CLIPittyCLIP analysis pipeline, from bed files to peaks."
+  echo "This script will combine all bed files and call peaks using HOMER."
+  echo "The pipeline utilizes following programs: "
+  echo " - bedtools (coverage)"
+  echo " - Homer (makeTagDirectory, findPeaks)"
+  echo "Make sure conda environment has all the necessary programs installed."
+  echo "-----------------------------------------------------------------------------------------------"
+}
+
+function show_usage {
+  echo "-----------------------------------------------------------------------------------------------"
+  echo "Usage: CombinedPeakCalling.sh -p ? -z ? -f ?"
+  echo "- If no option is selected, the program will run with default values (see below)."
+  echo "- Make a folder named "BED" that contains all bed files that you want to call peaks on."
+  echo "- Run this program inside the directory that contains "BED" folder."
+  echo "-----------------------------------------------------------------------------------------------"
+  echo "Options:"
+  echo "  -h: print usage information"
+  echo "  -p: minimum distance between peaks for homer            (default: 50)"
+  echo "  -z: size of peaks for homer                             (default: 20)"
+  echo "  -f: fragment length for homer                           (default: 25)"
+  echo "-----------------------------------------------------------------------------------------------"
+}
+
+function on_exit {
+  read -p "Press enter to exit."
+}
+
+while getopts "p:z:f:h" opt; do
+  case $opt in
+    p)
+      PeakMinDist="$OPTARG"
+      ;;
+    z)
+      PeakSize="$OPTARG"
+      ;;
+    f)
+      FragLength="$OPTARG"
+      ;;
+    h)
+      show_info
+      show_usage
+      on_exit
+      exit 0
+      ;;
+    \?)
+      echo "Error: Invalid option -$OPTARG" >&2
+      show_usage
+      on_exit
+      exit 1
+      ;;
+    :)
+      echo "Error: Option -$OPTARG requires an argument." >&2
+      show_usage
+      on_exit
+      exit 1
+      ;;
+  esac
+done
+
+# Count the number of .bed files in the current directory
+bedFileCount=$(ls BED |wc -l)
+
+# If no .bed files are found, print a message and exit
+if [[ $bedFileCount -eq 0 ]]; then
+  echo "No .bed files found in BED folder. Exiting."
+  on_exit
+  exit 1
+fi
+
 ## Combine all bed files:
-echo -e "\n# Combine collapsed BED files to make global BED file for the experiment." | tee -a ${BASE_NAME}_logs.txt
-echo -e "  Combining $(ls collapsedBED |wc -l) files to a single bed file..." | tee -a ${BASE_NAME}_logs.txt
-ls -l collapsedBED | tee -a ${BASE_NAME}_logs.txt > /dev/null
-cat collapsedBED/*.bed > ${BASE_NAME}.bed 
+echo -e "\n# Combine BED files to make global BED file for the experiment." | tee -a ${BASE_NAME}_logs.txt
+echo -e "  Combining $(ls BED |wc -l) files to a single bed file..." | tee -a ${BASE_NAME}_logs.txt
+ls -l BED | tee -a ${BASE_NAME}_logs.txt > /dev/null
+cat BED/*.bed > ${BASE_NAME}.bed 
 
 ## Make Tag Directory and call peaks:
 echo -e "\n# Use HOMER to call peaks, with minimum distance of ${PeakMinDist}, peak size of ${PeakSize}, and fragment length of ${FragLength}" | tee -a ${BASE_NAME}_logs.txt
