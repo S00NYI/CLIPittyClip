@@ -1,16 +1,16 @@
 # CLIPittyClip: Single-line CLIP data analysis pipeline
-- Version 0.2
+- Version 1.0
 - Author: Soon Yi
-- Last update: 2023-08-25
+- Last update: 2023-10-25
 -------------------------------------------------------------------------------------------------------------------
-This is a standard CLIP analysis pipeline, from fastq.gz to peaks.
+CLIPittyClip is a single command line CLIP analysis pipeline, from fastq.gz to peaks.
 
 The pipeline utilizes following programs: 
- - fastx_toolkit (collapser, barcode_splitter, trimmer, clipper)
+ - fastx_toolkit (fastq_quality_filter, collapser, barcode_splitter, trimmer, clipper)
  - ctk (stripBarcode, tag2collapse)
  - bowtie2
  - samtools (view, sort, index)
- - bedtools (bamtobed, genomecov)
+ - bedtools (bamtobed, genomecov, coverage)
  - Homer (makeTagDirectory, findPeaks)
 
 Make sure conda environment has all the necessary programs installed.  
@@ -44,13 +44,31 @@ Make sure to add Homer to PATH variable.
 Finally, add directory in which CLIPittyClip.sh is located in to PATH variable by running install_zshrc.sh (or install_bashrc.sh) file.  
 Use one that matches your Shell. Modern Apple products use zsh as default. install.sh file can be deleted afterwards.  
 
+Restart terminal and activate the CLIPittyClip_env before using the CLIPittyClip pipeline.  
+
+-------------------------------------------------------------------------------------------------------------------
+## CLIPittyClip.sh Options:
+ - -h: print usage information
+ - **-i: experiment ID**
+ - **-y: experiment type (e.g., Input, Enrich, or Fraction)**
+ - -q: quality score threshold                             (default: 30)
+ - -d: barcode file for demultiplexing.                    (default: no)
+ - -b: allowed barcode mismatch for demultiplexing         (default:  0)
+ - -l: minimum read length after 5/3 end trimming/clipping (default: 16)
+ - **-x: path to genome index for bowtie2 mapping**
+ - -m: allowed mismatch for mapping                        (default:  0)
+ - -s: seed length for mapping                             (default: 15)
+ - -t: number of threads to utilize for mapping            (default:  1)
+ - -p: minimum distance between peaks for homer            (default: 50)
+ - -z: size of peaks for homer                             (default: 20)
+ - -f: fragment length for homer                           (default: 25)
+
 -------------------------------------------------------------------------------------------------------------------
 ## Usage:
-Restart terminal and activate the CLIPittyClip_env.  
 CLIPittyClip.sh can be ran as following:
-
-    CLIPittyClip.sh -i ID -y TYPE -x /PATH/TO/GENOME/ANNOTATION/ANNOTATION_FILE_NAME
-
+```
+CLIPittyClip.sh -i ID -y TYPE -x /PATH/TO/GENOME/ANNOTATION/ANNOTATION_FILE_NAME
+```
 Options **-i**, **-y**, and **-x** are required.  
 
 -i and -y is used to define the input fasta.gz name.
@@ -75,6 +93,16 @@ Options **-i**, **-y**, and **-x** are required.
   - This .fa.fai file can be easily made by:
     - samtools faidx /PATH/TO/GENOME/ANNOTATION/GRCh38.primary_assembly.genome.fa
 
+-d option is used to turn on/off fastq. demultiplexing:
+- If demultiplexing is required, make sure to set -d option to yes (default is no).
+  - If -d option is set to 'yes', barcode file should be provided.
+  - Barcode file format information: http://hannonlab.cshl.edu/fastx_toolkit/commandline.html#fastx_barcode_splitter_usage
+  - Barcode file should have the same name convention as fastq.gz file, followed by '_BC.txt'.
+   - For the example fastq.gz above, barcode file should have filename as <ins>*SY0124_HuR_CLIP_BC.txt*</ins>
+
 -------------------------------------------------------------------------------------------------------------------
-For more detailed usage information, type CLIPittyClip.sh in terminal after installation and press enter.  
+
+
+
+
 
