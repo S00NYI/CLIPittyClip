@@ -25,7 +25,7 @@ CLIPittyClip has been tested in:
 -------------------------------------------------------------------------------------------------------------------
 ## Installation:
 
-Use the CLIpittyClip_environment.yml to install necessary packages:
+Use the CLIPittyClip_environment.yml to install necessary packages:
 
     conda env create -n CLIPittyClip_env -f CLIpittyClip_environment.yml
 
@@ -63,6 +63,8 @@ Restart terminal and activate the CLIPittyClip_env before using the CLIPittyClip
  - -z: size of peaks for homer                             (default: 20)
  - -f: fragment length for homer                           (default: 25)
 
+Options in **bold** are required.
+
 -------------------------------------------------------------------------------------------------------------------
 ## Usage:
 CLIPittyClip.sh can be ran as following:
@@ -72,9 +74,10 @@ CLIPittyClip.sh -i ID -y TYPE -x /PATH/TO/GENOME/ANNOTATION/ANNOTATION_FILE_NAME
 Options **-i**, **-y**, and **-x** are required.  
 
 -i and -y is used to define the input fasta.gz name.
-- ID (*i*) is your experimental ID (e.g. SY0124).
+- ID (*i*) is your experimental ID (e.g. SY1004).
 - Type (*y*) is your short handle describing the experiemnt (e.g. HuR_CLIP).
-- Then, input fastq.gz should have filename as <ins>*SY0124_HuR_CLIP.fastq.gz*</ins>.
+- Then, input fastq.gz should have filename as: id_type.fastq.gz
+ - For the examples above, input fastq.gz file should have file name as <ins>*SY1004_HuR_CLIP.fastq.gz*</ins>.
 
 -x specifies path to index files for bowtie2 mapping and genome file for bedGraph generation:  
 - Bowtie2 index files can be made by using bowtie2-build and supplying genome fasta files.
@@ -98,11 +101,17 @@ Options **-i**, **-y**, and **-x** are required.
   - If -d option is set to 'yes', barcode file should be provided.
   - Barcode file format information: http://hannonlab.cshl.edu/fastx_toolkit/commandline.html#fastx_barcode_splitter_usage
   - Barcode file should have the same name convention as fastq.gz file, followed by '_BC.txt'.
-   - For the example fastq.gz above, barcode file should have filename as <ins>*SY0124_HuR_CLIP_BC.txt*</ins>
+   - For the example fastq.gz above, barcode file should have filename as <ins>*SY1004_HuR_CLIP_BC.txt*</ins>
 
 -------------------------------------------------------------------------------------------------------------------
+## Note on read architecture:
+The read architecture is as following:
 
+5' - **UMI** | **Barcode** | **CCC** | **Reads** | **L32** - 3'
 
-
-
+- 7nt long unique molecular identifier (UMI) used to collapse duplicate reads.
+- 6nt long barcode used for library multiplexing.
+- CCC Spacer
+- Reads
+- L32 RNA Linker
 
