@@ -174,7 +174,8 @@ fi
 BASE_NAME="${EXP_ID}_${EXP_TYPE}"
 
 show_info | tee -a ${BASE_NAME}_logs.txt
-echo "# Analysis started: $(date +'%Y:%m:%d:%H:%M')\n" | tee -a ${BASE_NAME}_logs.txt
+echo "# Analysis started: $(date +'%Y/%m/%d %H:%M')" | tee -a ${BASE_NAME}_logs.txt
+echo "# User Input: '$0 $@'\n" | tee -a ${BASE_NAME}_logs.txt
 
 ## Check if specified fastq file exists
 if [ ! -e "${BASE_NAME}.fastq.gz" ]; then
@@ -196,7 +197,7 @@ if [ "$DEMUX" == "yes" ]; then
     echo "# Barcode information found! Demultiplexing will be performed based on the barcode information.\n" | tee -a ${BASE_NAME}_logs.txt
   fi
 else
-  echo "# Demultiplexing will be skipped.\n" | tee -a ${BASE_NAME}_logs.txt
+  echo "# Demultiplexing will be skipped. Option -d will be ignored.\n" | tee -a ${BASE_NAME}_logs.txt
 fi
 
 ## Check if bedtools genome index file exists.
@@ -364,5 +365,5 @@ mv peakCoverage ${BASE_NAME}_peaks
 mv ${BASE_NAME}_peakCoverage.txt ${BASE_NAME}_peaks
 mv ${BASE_NAME}_peaks ${BASE_NAME}
 
-echo "\nAnalysis Finished: $(date +'%Y:%m:%d:%H:%M')" | tee -a ${BASE_NAME}_logs.txt
+echo "\n# Analysis Finished: $(date +'%Y/%m/%d %H:%M')" | tee -a ${BASE_NAME}_logs.txt
 mv ${BASE_NAME}_logs.txt ${BASE_NAME}
