@@ -45,7 +45,10 @@ Finally, add directory in which CLIPittyClip.sh is located in to PATH variable b
 Use one that matches your Shell. Modern Apple products use zsh as default. install.sh file can be deleted afterwards.  
 
 Restart terminal and activate the CLIPittyClip_env before using the CLIPittyClip pipeline.  
-
+```
+conda activate CLIPittyClip_env
+```
+ 
 -------------------------------------------------------------------------------------------------------------------
 ## CLIPittyClip.sh Options:
  - -h: print usage information
@@ -67,6 +70,8 @@ Options in **bold** are required.
 
 -------------------------------------------------------------------------------------------------------------------
 ## Usage:
+On terminal, traverse to directory containing your fastq.gz file.
+
 CLIPittyClip.sh can be ran as following:
 ```
 CLIPittyClip.sh -i ID -y TYPE -x /PATH/TO/GENOME/ANNOTATION/ANNOTATION_FILE_NAME
@@ -96,7 +101,7 @@ Options **-i**, **-y**, and **-x** are required.
   - This .fa.fai file can be easily made by:
     - samtools faidx /PATH/TO/GENOME/ANNOTATION/GRCh38.primary_assembly.genome.fa
 
--d option is used to turn on/off fastq. demultiplexing:
+-d option is used to turn on/off sample demultiplexing:
 - If demultiplexing is required, make sure to set -d option to yes (default is no).
   - If -d option is set to 'yes', barcode file should be provided.
   - Barcode file format information: http://hannonlab.cshl.edu/fastx_toolkit/commandline.html#fastx_barcode_splitter_usage
