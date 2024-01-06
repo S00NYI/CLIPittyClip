@@ -22,7 +22,7 @@ CLIPittyClip has been tested in:
 -------------------------------------------------------------------------------------------------------------------
 ## Installation:
 
-Use the CLIPittyClip_environment.yml to install necessary packages:
+Use the install_environment.yml to install necessary packages:
 ```
 conda env create -n CLIPittyClip_env -f install_environment.yml
 ```
