@@ -1,7 +1,7 @@
 # CLIPittyClip: Single-line CLIP data analysis pipeline
-- Version 1.0
+- Version 2.0
 - Author: Soon Yi
-- Last update: 2023-10-25
+- Last updated: 2024-01-05
 -------------------------------------------------------------------------------------------------------------------
 CLIPittyClip is a single command line CLIP analysis pipeline, from fastq.gz to peaks.
 
@@ -12,13 +12,10 @@ The pipeline utilizes following programs:
  - samtools (view, sort, index)
  - bedtools (bamtobed, genomecov, coverage)
  - Homer (makeTagDirectory, findPeaks)
-
-Make sure conda environment has all the necessary programs installed.  
-For more information, see CLIPittyClip_environment.yml and CLIPittyclip-CondaInfo.txt.
-
+  
 -------------------------------------------------------------------------------------------------------------------
 CLIPittyClip has been tested in:
-- Apple MacbOok Pro (2016) Intel Core i7 Montery 12.6
+- Apple MacBook Pro (2016) Intel Core i7 Montery 12.6
 - Apple MacBook Pro M2 Montery 12.6
 - Apple MacBook Air M2 Ventura 13.5
 - Ubuntu 20.04.6 LTS 64bit
@@ -26,50 +23,67 @@ CLIPittyClip has been tested in:
 ## Installation:
 
 Use the CLIPittyClip_environment.yml to install necessary packages:
-
-    conda env create -n CLIPittyClip_env -f CLIpittyClip_environment.yml
-
-For Apple silicon, you may need to add CONDA_SUBDIR=osx-64 in front of the conda commands:
-
-    CONDA_SUBDIR=osx-64 conda env create -n CLIPittyClip_env -f CLIpittyClip_environment.yml
-
+```
+conda env create -n CLIPittyClip_env -f install_environment.yml
+```
+For MacBook with Apple silicon, you may want to try the following if above conda call does not work:
+```
+CONDA_SUBDIR=osx-64 conda env create -n CLIPittyClip_env -f install_environment.yml
+```
 ***Note***: Using mamba instead of conda will be much faster.
 
-Activate the created environment and install Homer by following instructions on Homer website.  
-CLIPittyClip_env environment created will have all the necessary prerequisites to install Homer.
-> http://homer.ucsd.edu/homer/introduction/install.html
+Restart terminal and activate the CLIPittyClip_env: 
+```
+conda activate CLIPittyClip_env
+```
 
-Make sure to add Homer to PATH variable.  
+Install Homer by following instructions on Homer website: http://homer.ucsd.edu/homer/introduction/install.html 
 
-Finally, add directory in which CLIPittyClip.sh is located in to PATH variable by running install_zshrc.sh (or install_bashrc.sh) file.  
-Use one that matches your Shell. Modern Apple products use zsh as default. install.sh file can be deleted afterwards.  
+CLIPittyClip_env environment have all the necessary prerequisites to install Homer.
 
-Restart terminal and activate the CLIPittyClip_env before using the CLIPittyClip pipeline.  
+Also, make sure to add Homer to PATH variable.  
+
+Lastly, add directory in which CLIPittyClip.sh is located in to PATH variable by running install_zshrc.sh (or install_bashrc.sh) file.  
+```
+bash /install_bashrc.sh
+```
+OR
+```
+bash /install_zshrc.sh
+```
+Restart terminal and activate the CLIPittyClip_env. You are now ready to use CLIPittyClip programs.  
 ```
 conda activate CLIPittyClip_env
 ```
  
 -------------------------------------------------------------------------------------------------------------------
-## CLIPittyClip.sh Options:
- - -h: print usage information
- - **-i: experiment ID**
- - **-y: experiment type (e.g., Input, Enrich, or Fraction)**
- - -q: quality score threshold                             (default: 30)
- - -d: barcode file for demultiplexing.                    (default: no)
- - -b: allowed barcode mismatch for demultiplexing         (default:  0)
- - -l: minimum read length after 5/3 end trimming/clipping (default: 16)
- - **-x: path to genome index for bowtie2 mapping**
- - -m: allowed mismatch for mapping                        (default:  0)
- - -s: seed length for mapping                             (default: 15)
- - -t: number of threads to utilize for mapping            (default:  1)
- - -p: minimum distance between peaks for homer            (default: 50)
- - -z: size of peaks for homer                             (default: 20)
- - -f: fragment length for homer                           (default: 25)
+## CLIPittyClip.sh 
+### Options:
 
 Options in **bold** are required.
 
+| Options  |Descriptions                                                |Default|
+| :-------:|------------------------------------------------------------|:-----:|
+| h        | print usage information                                    |       |
+| **i**    | **experiment ID**                                          |       |
+| **y**    | **experiment type (e.g., Input, Enrich, or Fraction)**     |       |
+| k        | keep intermediate files (yes/no)                           |no     |
+| q        | quality score threshold (for fastx_quality_filter)         |30     |
+| d        | perform demultiplexing (yes/no)                            |no     |
+| b        | allowed number of mismatches in barcode for demultiplexing |0      |
+| 5        | number of nucleotide to clip from the 5'-end               |10     |
+| 3        | sequence of the 3'-end adapter                             |L32: GTGTCAGTCACTTCCAGCGG|
+| l        | minimum read length after 5/3 end trimming/clipping        |16     |
+| **x**    | **path to genome index**                                   |       |
+| m        | allowed mismatch for mapping                               |0      |
+| s        | seed length for mapping                                    |15     |
+| t        | number of threads to be utilized by bowtie/samtools        |1      |
+| p        | minimum distance between peaks for homer                   |50     |
+| z        | size of peaks for homer                                    |20     |
+| f        | fragment length for homer                                  |25     |
+
 -------------------------------------------------------------------------------------------------------------------
-## Usage:
+### Usage:
 On terminal, traverse to directory containing your fastq.gz file.
 
 CLIPittyClip.sh can be ran as following:
@@ -109,7 +123,67 @@ Options **-i**, **-y**, and **-x** are required.
    - For the example fastq.gz above, barcode file should have filename as <ins>*SY1004_HuR_CLIP_BC.txt*</ins>
 
 -------------------------------------------------------------------------------------------------------------------
-## Note on read architecture:
+## MAPittyMap.sh 
+### Options:
+
+Options in **bold** are required.
+
+| Options  |Descriptions                                                |Default|
+| :-------:|------------------------------------------------------------|:-----:|
+| h        | print usage information                                    |       |
+| **i**    | **experiment ID**                                          |       |
+| **y**    | **experiment type (e.g., Input, Enrich, or Fraction)**     |       |
+| k        | keep intermediate files (yes/no)                           |no     |
+| **x**    | **path to genome index**                                   |       |
+| m        | allowed mismatch for mapping                               |0      |
+| s        | seed length for mapping                                    |15     |
+| t        | number of threads to be utilized by bowtie/samtools        |1      |
+| p        | minimum distance between peaks for homer                   |50     |
+| z        | size of peaks for homer                                    |20     |
+| f        | fragment length for homer                                  |25     |
+
+-------------------------------------------------------------------------------------------------------------------
+### Usage:
+Similar to CLIPittyClip.sh, but uses processed fasta files.
+
+MAPittyMap.sh can be ran as following:
+```
+MAPittyMap.sh -i ID -y TYPE -x /PATH/TO/GENOME/ANNOTATION/ANNOTATION_FILE_NAME
+```
+Options **-i**, **-y**, and **-x** are required. 
+
+See CLIPittyClip.sh usage section for more information.
+
+- If using groomed.fasta output from CLIPittyClip.sh:
+  - Copy *groomed.fasta to a separate location (not required, but good for organization.)
+  - In the directory containing the *groomed.fasta, run MapittyMap.sh.
+  - For option -i, use the same input as the original CLIPittyClip.sh run.
+  - For option -y, add '_collapsed_rmBC_groomed' at the end of the original input.
+  - For example: 
+    - CLIPittyClip.sh -i JL100 -y Input -x path-to-genome-index
+    - MapittyMap.sh -i JL100 -y Input_collapsed_rmBC_groomed -x path-to-diff-genome-index
+
+-------------------------------------------------------------------------------------------------------------------
+## PEAKittyPeak.sh 
+### Options:
+
+Options in **bold** are required.
+
+| Options  |Descriptions                                                |Default|
+| :-------:|------------------------------------------------------------|:-----:|
+| h        | print usage information                                    |       |
+| p        | minimum distance between peaks for homer                   |50     |
+| z        | size of peaks for homer                                    |20     |
+| f        | fragment length for homer                                  |25     |
+
+-------------------------------------------------------------------------------------------------------------------
+### Usage:
+- Make a folder named \"BED\" that contains all bed files that you want to call peaks on.
+  - Run this program inside the directory that contains \"BED\" folder (**not** inside the \"BED\" folder)
+  - The program will then make a bed file that combines all the provided bed files.
+  - Peak calling will be performed using the combined bed file.
+-------------------------------------------------------------------------------------------------------------------
+## Note on read architecture in CoCLIP Experiment:
 The read architecture is as following:
 
 5' - **UMI** | **Barcode** | **CCC** | **Reads** | **L32** - 3'
