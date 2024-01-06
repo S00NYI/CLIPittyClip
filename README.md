@@ -45,11 +45,11 @@ Also, make sure to add Homer to PATH variable.
 
 Lastly, add directory in which CLIPittyClip.sh is located in to PATH variable by running install_zshrc.sh (or install_bashrc.sh) file.  
 ```
-bash /install_bashrc.sh
+bash install_bashrc.sh
 ```
 OR
 ```
-bash /install_zshrc.sh
+bash install_zshrc.sh
 ```
 Restart terminal and activate the CLIPittyClip_env. You are now ready to use CLIPittyClip programs.  
 ```
