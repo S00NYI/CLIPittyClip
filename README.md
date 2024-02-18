@@ -12,7 +12,8 @@ The pipeline utilizes following programs:
  - samtools (view, sort, index)
  - bedtools (bamtobed, genomecov, coverage)
  - Homer (makeTagDirectory, findPeaks)
-  
+-------------------------------------------------------------------------------------------------------------------
+ ![alt text](https://github.com/S00NYI/CLIPittyClip/blob/main/Analysis_Outline.png?raw=true)
 -------------------------------------------------------------------------------------------------------------------
 CLIPittyClip has been tested in:
 - Apple MacBook Pro (2016) Intel Core i7 Montery 12.6
