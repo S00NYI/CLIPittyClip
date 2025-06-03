@@ -406,8 +406,8 @@ mv ${BASE_NAME}_mapped_reads ${BASE_NAME}
 
 ## Make Tag Directory and call peaks:
 echo "\n# Use HOMER to call peaks, with minimum distance of ${PeakMinDist}, peak size of ${PeakSize}, and fragment length of ${FragLength}" | tee -a ${BASE_NAME}_logs.txt
-makeTagDirectory ${BASE_NAME}_TagDir/ ${BASE_NAME}.bed -single -format bed 2>&1 | tee -a ${BASE_NAME}_logs.txt 
-findPeaks ${BASE_NAME}_TagDir/ -o auto -style factor -L 2 -localSize 10000 -strand separate -minDist ${PeakMinDist} -size ${PeakSize} -fragLength ${FragLength} 2>&1 | tee -a ${BASE_NAME}_logs.txt 
+makeTagDirectory ${HOMER_INPUT_NAME}_TagDir/ ${HOMER_INPUT_NAME}.bed -single -format bed 2>&1 | tee -a ${BASE_NAME}_logs.txt 
+findPeaks ${HOMER_INPUT_NAME}_TagDir/ -o auto -style factor -L 2 -localSize 10000 -strand separate -minDist ${PeakMinDist} -size ${PeakSize} -fragLength ${FragLength} 2>&1 | tee -a ${BASE_NAME}_logs.txt 
 
 ## Process output peaks file to create peaks bed file:
 echo "\n# Process peaks.txt to generate peaks BED file." | tee -a ${BASE_NAME}_logs.txt
