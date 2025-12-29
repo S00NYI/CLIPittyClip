@@ -61,9 +61,11 @@ flowchart TD
 
 ## Installation
 
+> ⚠️ **Development Version**: This is the `v3-development` branch. For the stable release, use the `main` branch.
+
 ### 1. Clone Repository
 ```bash
-git clone https://github.com/S00NYI/CLIPittyClip.git
+git clone -b v3-development https://github.com/S00NYI/CLIPittyClip.git
 cd CLIPittyClip
 ```
 
