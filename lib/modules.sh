@@ -1,0 +1,1102 @@
+#!/bin/bash
+
+# lib/modules.sh - Analysis modules for CLIPittyClip
+
+source "$(dirname "${BASH_SOURCE[0]}")/utils.sh"
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Group File Parsing for CIMS/CITS Aggregation
+# ═══════════════════════════════════════════════════════════════════════════
+
+# parse_groups_file - Parse groups.txt and output sample→group mapping
+# Input: groups_file path, output_map temp file path
+# Format: sample_name<TAB>group_name (lines starting with # are comments)
+parse_groups_file() {
+    local groups_file="$1"
+    local output_map="$2"
+    
+    log_info "Parsing groups file: $groups_file"
+    
+    > "$output_map"  # Clear output file
+    
+    while IFS=$'\t' read -r sample group || [[ -n "$sample" ]]; do
+        # Skip comments and empty lines
+        [[ "$sample" =~ ^#.*$ ]] && continue
+        [[ -z "$sample" ]] && continue
+        
+        # Strip common extensions
+        sample="${sample%.fastq.gz}"
+        sample="${sample%.fq.gz}"
+        sample="${sample%.fastq}"
+        sample="${sample%.fq}"
+        
+        # Write mapping
+        echo -e "${sample}\t${group}" >> "$output_map"
+    done < "$groups_file"
+    
+    local group_count=$(cut -f2 "$output_map" | sort -u | wc -l | tr -d ' ')
+    local sample_count=$(wc -l < "$output_map" | tr -d ' ')
+    log_info "Parsed $sample_count samples into $group_count groups"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+
+# 0. Demultiplexing
+function run_demultiplexing {
+    local input_fastq="$1"
+    local barcode_file="$2"
+    local run_sample_size="$3"
+    # Note: dedup_mode parameter ignored - dedup is now handled by caller
+    local mismatches="${MISMATCHES:-1}" # Default to 1 if unset/passed global
+
+    log_info "Starting Demultiplexing with cutadapt..."
+    log_info "Barcode File: $barcode_file"
+    log_info "Allowed Mismatches: $mismatches"
+    
+    # Input is either the original pooled file or already-deduplicated file
+    local work_input="$input_fastq"
+    # We call the script relative to the repo root
+    local checker_script="${SCRIPT_DIR}/check_barcodes.sh"
+    
+    if [[ ! -x "$checker_script" ]]; then
+        # Fallback if not executable or found (chmod just in case)
+        chmod +x "$checker_script" 2>/dev/null
+    fi
+
+    "$checker_script" -f "$barcode_file" -m "$mismatches"
+    if [ $? -ne 0 ]; then
+        log_error "Barcode collisions detected. Aborting pipeline to prevent data mix-up."
+        exit 1
+    fi
+    log_info "Barcode safety check PASSED."
+
+    # 2. Calculate average barcode length to set cutadapt error rate
+
+    # 2. Calculate average barcode length to set cutadapt error rate
+    # cutadapt -e is a rate (0.1 = 10%). 
+    # rate = mismatches / length
+    # We grep the first barcode to estimate length (assuming uniform)
+    local first_seq=$(awk '{print $2; exit}' "$barcode_file")
+    local bc_len=${#first_seq}
+    
+    # Calculate rate using awk for floating point
+    local error_rate=$(awk "BEGIN {print $mismatches / $bc_len}")
+    
+    # Cap strictness if 0 errors
+    if [[ "$mismatches" -eq 0 ]]; then
+        error_rate=0
+    fi
+    
+    log_info "Calculated cutadapt error rate: $error_rate ($mismatches errors in ${bc_len}bp)"
+
+    # Create demux output directory
+    mkdir -p demux_fastq
+    
+    # Convert barcodes for cutadapt
+    local fasta_barcodes="barcodes.fasta"
+    awk '{print ">"$1"\n"$2}' "$barcode_file" > "$fasta_barcodes"
+
+    local cmd="cutadapt \
+        -e $error_rate --no-indels \
+        -g file:$fasta_barcodes \
+        -o \"demux_fastq/{name}.fastq.gz\" \
+        $work_input \
+        -j ${THREADS:-1}"
+    
+    log_info "Running demultiplexing..."
+    execute_cmd "$cmd"
+
+    # Check outputs
+    count=$(ls demux_fastq/*.fastq.gz 2>/dev/null | wc -l)
+    if [ "$count" -eq 0 ]; then
+        log_error "Demultiplexing failed. No output files created."
+        exit 1
+    fi
+    log_info "Demultiplexing complete. Created $count sample files in 'demux_fastq/'."
+    
+    # Cleanup Deduplicated Temp File if it exists
+    if [[ "$work_input" != "$input_fastq" ]] && [[ -f "$work_input" ]]; then
+        log_info "Deleting temporary deduplicated file: $work_input"
+        rm -f "$work_input"
+    fi
+}
+
+# 1. Preprocessing with fastp
+run_preprocessing() {
+    local input_file="$1"
+    local output_prefix="$2"
+    local umi_len="$3" 
+    local adapter3="$4"
+    local threads="$5"
+    local sample_size="$6"
+    local dedup_mode="$7"
+    
+    update_status_first "Preprocessing"
+    log_info "Starting preprocessing with fastp..."
+    
+    # Define Fastp Command Function
+    run_fastp_cmd() {
+        local in_f="$1"
+        local cmd="fastp -i ${in_f} -o ${output_prefix}_cleaned.fastq.gz \
+            --thread ${threads} \
+            --length_required 16 \
+            --average_qual 30 \
+            --html ${output_prefix}_fastp.html \
+            --json ${output_prefix}_fastp.json"
+            
+        if [ -n "$adapter3" ]; then cmd+=" --adapter_sequence ${adapter3}"; fi
+        if [ "$umi_len" -gt 0 ]; then cmd+=" --umi --umi_loc=read1 --umi_len=${umi_len} --umi_delim=#"; fi
+        if [ "$sample_size" -gt 0 ]; then cmd+=" --reads_to_process $sample_size"; fi
+        
+        # Note: DEDUP is handled externally via seqkit before fastp if requested.
+        # But if dedup was somehow passed to this function, we ignore fastp's internal dedup 
+        # because seqkit is superior for this use case.
+        
+        log_info "Running: $cmd"
+        execute_cmd "$cmd"
+    }
+
+    # Preparation: Handle Input File (Sampling / Dedup / Repair)
+    # We create a pipeline of commands to prepare the input for fastp
+    
+    local final_input="$input_file"
+    local temp_dedup=""
+    
+    # 1. Deduplication (SeqKit) - High Priority to reduce load
+    if [ "$dedup_mode" == "true" ]; then
+        update_status "  Deduplicating (SeqKit)" 
+        log_info "Deduplication: Running seqkit rmdup (by sequence, ignoring quality)..."
+        temp_dedup="${output_prefix}_dedup_temp.fastq.gz"
+        
+        local decompress="gzip -dc"
+        if command -v pigz &> /dev/null; then decompress="pigz -dc"; fi
+        
+        # Use seqkit rmdup -s (by seq) -o output.gz
+        seqkit rmdup -s -o "$temp_dedup" "$input_file" 2>> "${LOG_FILE}"
+        
+        if [[ $? -eq 0 && -s "$temp_dedup" ]]; then
+             final_input="$temp_dedup"
+             log_info "Deduplication complete."
+             update_status "  Preprocessing (Fastp)"
+        else
+             log_warning "SeqKit Deduplication failed or produced empty file. Reverting to original input."
+             rm -f "$temp_dedup"
+        fi
+    fi
+
+    # 2. Run Fastp on prepared input
+    run_fastp_cmd "$final_input"
+    exit_code=$?
+
+    # 3. Failure Recovery: Sanitize FASTQ (Empty Read / Truncation Fix)
+    if [ $exit_code -ne 0 ]; then
+        log_warning "fastp failed on $(basename "$final_input"). Attempting to repair malformed/empty reads..."
+        
+        local repaired_file="${output_prefix}_repaired.fastq.gz"
+        local source_for_repair="$final_input" 
+        # Note: If dedup failed, final_input is original. If dedup succeeded but fastp failed, final_input is deduped.
+        # We repair whatever failed.
+        
+        local decompress="gzip -dc"
+        if command -v pigz &> /dev/null; then decompress="pigz -dc"; fi
+        
+        # AWK Script: filter empty sequences and ensure 4-line records
+        # Logic: Read 4 lines. If seq (line 2) > 0 length, print. 
+        # Implicitly drops truncated records at end of file.
+        $decompress "$source_for_repair" | awk '{h=$0; getline s; getline p; getline q; if (length(s) > 0 && length(q) > 0) {print h; print s; print p; print q}}' | gzip > "$repaired_file"
+        
+        if [[ -s "$repaired_file" ]]; then
+            log_info "Repair successful. Retrying fastp with repaired file..."
+            run_fastp_cmd "$repaired_file"
+            exit_code=$?
+            
+            if [ $exit_code -eq 0 ]; then
+                rm "$repaired_file"
+            fi
+        else
+            log_error "Repair failed (empty output). The input file might be completely corrupt."
+        fi
+    fi
+    
+    # Cleanup temp dedup file
+    if [[ -n "$temp_dedup" && -f "$temp_dedup" ]]; then
+        rm "$temp_dedup"
+    fi
+
+    if [ $exit_code -eq 0 ]; then
+        log_info "Preprocessing complete."
+    else
+        log_error "fastp failed even after repair attempt."
+        exit 1
+    fi
+}
+
+# 2. Mapping with STAR
+run_mapping_star() {
+    local input_fastq="$1"
+    local output_prefix="$2"
+    local genome_dir="$3"
+    local threads="$4"
+    local mismatch_max="$5"
+
+    update_status "Mapping (STAR)"
+    log_info "Starting mapping with STAR..."
+
+    local read_command="gzip -dc"
+    if [[ "$input_fastq" != *.gz ]]; then
+        read_command="cat"
+    fi
+
+    local cmd="STAR --runThreadN ${threads} \
+        --genomeDir ${genome_dir} \
+        --readFilesIn ${input_fastq} \
+        --readFilesCommand ${read_command} \
+        --outFileNamePrefix ${output_prefix}. \
+        --outSAMtype BAM SortedByCoordinate \
+        --outFilterMultimapNmax 10 \
+        --outFilterMismatchNmax ${mismatch_max} \
+        --outSAMattributes NH HI AS nM NM MD \
+        --alignEndsType EndToEnd \
+        $ADV_ALIGNER_ARGS"
+
+    log_info "Running: $cmd"
+    execute_cmd "$cmd"
+    if [ $? -ne 0 ]; then
+        log_error "STAR mapping failed. Check the log file for details."
+        exit 1
+    fi
+    
+    samtools index "${output_prefix}.Aligned.sortedByCoord.out.bam"
+    if [ $? -ne 0 ]; then
+        log_error "samtools index failed. The BAM file might be empty or invalid."
+        exit 1
+    fi
+
+    log_info "Mapping complete. Output: ${output_prefix}.Aligned.sortedByCoord.out.bam"
+}
+
+
+# 2c. Parse Alignment for CIMS/CITS
+# parseAlignment.pl requires SAM input (not BAM)
+# This function converts BAM→SAM, optionally runs calmd for MD tags, then parses
+run_parse_alignment() {
+    local bam_file="$1"
+    local output_bed="$2"
+    local mutation_file="$3"
+    local genome_index="$4"
+    
+    update_status "Processing Alignment"
+    log_info "Parsing alignment for CIMS/CITS..."
+    log_info "Input BAM: $bam_file"
+    
+    # Step 1: Convert BAM to SAM (parseAlignment.pl requires SAM input)
+    local sam_file="${bam_file%.bam}.sam"
+    log_info "Converting BAM to SAM for parseAlignment.pl..."
+    samtools view -h "$bam_file" > "$sam_file"
+    
+    if [[ ! -s "$sam_file" ]]; then
+        log_error "BAM to SAM conversion failed or empty output: $sam_file"
+        return 1
+    fi
+    
+    local work_sam="$sam_file"
+    
+    # Step 2: (Optional) Run samtools calmd for MD tag standardization
+    local ref_fasta=$(find "$genome_index" -name "*.fa" -o -name "*.fasta" 2>/dev/null | head -n 1)
+    
+    if [[ -n "$ref_fasta" ]]; then
+        log_info "Reference FASTA found: $ref_fasta"
+        log_info "Running 'samtools calmd' to standardize MD tags..."
+        
+        local calmd_sam="${sam_file%.sam}_calmd.sam"
+        # calmd can take BAM input and output SAM
+        samtools calmd "$bam_file" "$ref_fasta" > "$calmd_sam" 2>/dev/null
+        
+        if [[ -s "$calmd_sam" ]]; then
+            work_sam="$calmd_sam"
+            log_info "Using calmd-processed SAM: $calmd_sam"
+        else
+            log_warning "samtools calmd failed or empty. Using native tags."
+            rm -f "$calmd_sam" 2>/dev/null
+        fi
+    else
+        log_info "Reference FASTA not found. Relying on aligner's native MD tags."
+    fi
+
+    # Step 3: Run parseAlignment.pl
+    # Options:
+    #   -v: verbose
+    #   --map-qual 1: Require unique mapping (MAPQ >= 1)
+    #   --min-len 16: Minimum read length
+    #   --mutation-file: Output mutation file for CIMS
+    log_info "Running parseAlignment.pl..."
+    local cmd="parseAlignment.pl -v --map-qual 1 --min-len 16 --mutation-file '$mutation_file' '$work_sam' '$output_bed'"
+    
+    execute_cmd "$cmd"
+    local parse_exit=$?
+    
+    # Step 4: Cleanup temp SAM files
+    rm -f "$sam_file" 2>/dev/null
+    if [[ -f "${sam_file%.sam}_calmd.sam" ]]; then
+        rm -f "${sam_file%.sam}_calmd.sam" 2>/dev/null
+    fi
+    
+    if [[ $parse_exit -ne 0 ]]; then
+        log_error "parseAlignment.pl failed with exit code $parse_exit"
+        return $parse_exit
+    fi
+    
+    # Verify outputs
+    if [[ ! -s "$output_bed" ]]; then
+        log_warning "parseAlignment.pl produced empty BED file: $output_bed"
+    else
+        local bed_count=$(wc -l < "$output_bed")
+        log_info "parseAlignment.pl output: $bed_count tags in $output_bed"
+    fi
+    
+    if [[ ! -s "$mutation_file" ]]; then
+        log_warning "parseAlignment.pl produced empty mutation file: $mutation_file"
+    else
+        local mut_count=$(wc -l < "$mutation_file")
+        log_info "parseAlignment.pl output: $mut_count mutations in $mutation_file"
+    fi
+    
+    log_info "Alignment parsing complete."
+}
+
+# 2b. Mapping with Bowtie2
+run_mapping_bowtie2() {
+    local input_file="$1"
+    local output_prefix="$2"
+    local genome_index="$3"
+    local threads="$4"
+    
+    update_status "Mapping (Bowtie2)"
+    log_info "Starting mapping with Bowtie2..."
+    log_info "Input: $input_file"
+    log_info "Index: $genome_index"
+    
+    # Verify index (look for .1.bt2 or .1.bt2l)
+    local found_idx=$(find "$genome_index" -name "*.1.bt2" 2>/dev/null | head -n 1)
+    if [[ -z "$found_idx" ]]; then
+       found_idx=$(find "$genome_index" -name "*.1.bt2l" 2>/dev/null | head -n 1)
+       if [[ -z "$found_idx" ]]; then
+            log_error "Bowtie2 index files (*.1.bt2) not found in $genome_index"
+            return 1
+       fi
+    fi
+    
+    # Construct base name for index
+    # Standard: /path/hg38.1.bt2 -> Base: /path/hg38
+    # We strip the .1.bt2 suffix
+    local idx_base="${found_idx%.1.bt2}"
+    if [[ "$idx_base" == "$found_idx" ]]; then
+         idx_base="${found_idx%.1.bt2l}"
+    fi
+
+    local sam_file="${output_prefix}.sam"
+    local bam_file="${output_prefix}.Aligned.sortedByCoord.out.bam" # Match STAR naming for compatibility
+    
+    local cmd="bowtie2 -p $threads --sam-opt-config 'md' -x '$idx_base' -U '$input_file' -S '$sam_file' $ADV_ALIGNER_ARGS"
+        
+    log_info "Running Bowtie2..."
+    execute_cmd "$cmd"
+    
+    if [ $? -ne 0 ]; then
+        log_error "Bowtie2 alignment failed."
+        return 1
+    fi
+    
+    # Convert to BAM -> Sort -> Index
+    # Note: "Processing Alignment" status is now in run_parse_alignment
+    
+    local sort_cmd="samtools view -bS '$sam_file' | samtools sort -@ $threads -o '$bam_file' -"
+    execute_cmd "$sort_cmd"
+    
+    if [ -f "$bam_file" ]; then
+        samtools index "$bam_file"
+        rm -f "$sam_file" # Cleanup SAM
+    else
+        log_error "BAM conversion failed."
+        return 1
+    fi
+    log_info "Mapping complete. Output: $bam_file"
+}
+
+# 3. PCR Duplicate Removal
+run_collapse_pcr() {
+    local input_bed="$1"
+    local output_bed="$2"
+
+    update_status "Collapsing"
+    log_info "Collapsing PCR duplicates with CTK tag2collapse.pl..."
+    
+    local cmd="$CONDA_PREFIX/bin/perl $(which tag2collapse.pl) --keep-tag-name --keep-max-score --random-barcode \
+        \"${input_bed}\" \"${output_bed}\""
+
+    execute_cmd "$cmd"
+
+    if [ $? -eq 0 ]; then
+        log_info "Collapsing complete."
+    else
+        log_error "PCR duplicate removal failed."
+        exit 1
+    fi
+}
+
+# 4. Peak Calling (HOMER)
+run_peak_calling() {
+    local input_bed="$1"
+    local out_dir="$2"
+    local peak_dist="$3"
+    local peak_size="$4"
+    local frag_len="$5"
+    local log_file="${out_dir}_homer.log"
+
+    # Only called in aggregation or single sample (non-batch)
+    update_status "Peaks"
+    log_info "Calling peaks with HOMER..."
+    
+    # Capture output to specific log file for extraction later
+    echo "Running HOMER makeTagDirectory..." > "$log_file"
+    makeTagDirectory "${out_dir}" "${input_bed}" -single -format bed >> "$log_file" 2>&1
+    
+    echo "Running HOMER findPeaks..." >> "$log_file"
+    findPeaks "${out_dir}" -o auto -style factor -L 2 -localSize 10000 -strand separate \
+        -minDist "${peak_dist}" -size "${peak_size}" -fragLength "${frag_len}" $ADV_HOMER_ARGS >> "$log_file" 2>&1
+        
+    log_info "Peak calling complete. Log saved to $log_file"
+}
+
+# 5. CIMS Analysis (CTK)
+# Detects crosslinking-induced mutation sites
+# ═══════════════════════════════════════════════════════════════════════════
+# CTK CIMS/CITS ANALYSIS FUNCTIONS
+# Verified workflow based on Zhang Lab CTK documentation (Dec 2024)
+# ═══════════════════════════════════════════════════════════════════════════
+
+# CTK Preprocessing: Filter mutations and extract mutation types
+# Called after tag2collapse.pl, before CIMS/CITS
+run_ctk_preprocessing() {
+    local collapsed_bed="$1"
+    local raw_mutation_file="$2"
+    local output_dir="$3"
+    
+    # Status update removed - preprocessing is already done in main pipeline
+    log_info "Preprocessing mutations for CTK analysis..."
+    
+    mkdir -p "$output_dir"
+    
+    # Step 1: Filter mutations to only those in collapsed tags
+    # selectRow.pl uses zero-based column indexing: column 3 = read name
+    log_info "Filtering mutations to collapsed tags (selectRow.pl -q 3 -f 3)..."
+    local matched_file="${output_dir}/mutations_matched.txt"
+    
+    selectRow.pl -q 3 -f 3 "$raw_mutation_file" "$collapsed_bed" > "$matched_file"
+    
+    if [[ ! -s "$matched_file" ]]; then
+        log_warning "No matching mutations found after filtering."
+        return 1
+    fi
+    
+    local matched_count=$(wc -l < "$matched_file")
+    log_info "Matched mutations: $matched_count"
+    
+    # Step 2: Extract mutation types using getMutationType.pl
+    log_info "Extracting deletion mutations..."
+    local del_file="${output_dir}/deletions.bed"
+    getMutationType.pl -t del "$matched_file" "$del_file"
+    
+    log_info "Extracting substitution mutations..."
+    local sub_file="${output_dir}/substitutions.bed"
+    getMutationType.pl -t sub "$matched_file" "$sub_file"
+    
+    # Report counts
+    if [[ -s "$del_file" ]]; then
+        local del_count=$(wc -l < "$del_file")
+        log_info "Deletions extracted: $del_count"
+    else
+        log_warning "No deletions found."
+    fi
+    
+    if [[ -s "$sub_file" ]]; then
+        local sub_count=$(wc -l < "$sub_file")
+        log_info "Substitutions extracted: $sub_count"
+    else
+        log_warning "No substitutions found."
+    fi
+    
+    log_info "CTK preprocessing complete. Output: $output_dir"
+}
+
+# 5. CIMS Analysis (CTK)
+# Detects crosslinking-induced mutation sites
+# Input: collapsed BED + mutation file (deletions or substitutions)
+# Output: CIMS.txt with significant mutation sites
+run_cims() {
+    local input_collapsed_bed="$1"
+    local mutation_bed="$2"          # Already BED6 from getMutationType.pl
+    local output_file="$3"
+    local cims_iterations="${4:-10}"  # Default: 10 iterations
+    local cims_fdr="${5:-0.001}"      # Default: FDR 0.001
+    
+    # Status update moved to caller (run_ctk_analysis)
+    # update_status "CIMS Analysis"
+    log_info "Running CIMS analysis..."
+    log_info "Input tags: $input_collapsed_bed"
+    log_info "Input mutations: $mutation_bed"
+    log_info "Iterations: $cims_iterations, FDR threshold: $cims_fdr"
+    
+    # Verify inputs exist
+    if [[ ! -s "$input_collapsed_bed" ]]; then
+        log_error "CIMS: Collapsed BED file is empty or missing: $input_collapsed_bed"
+        return 1
+    fi
+    if [[ ! -s "$mutation_bed" ]]; then
+        log_error "CIMS: Mutation BED file is empty or missing: $mutation_bed"
+        return 1
+    fi
+    
+    # Set up CTK environment
+    export PERL5LIB="${CONDA_PREFIX}/lib/czplib:$PERL5LIB"
+    
+    # Run CIMS.pl
+    local cmd="CIMS.pl -v -n $cims_iterations '$input_collapsed_bed' '$mutation_bed' '$output_file'"
+    
+    execute_cmd "$cmd"
+    local cims_exit=$?
+    
+    # CIMS.pl may exit with error on sparse data but still produce valid output
+    if [[ -s "$output_file" ]]; then
+        local raw_count=$(grep -v "^#" "$output_file" | wc -l)
+        log_info "CIMS complete: $raw_count total sites in $output_file"
+        
+        # Filter for significance only if FDR < 1
+        if (( $(echo "$cims_fdr < 1" | bc -l) )); then
+            log_info "Filtering CIMS results by FDR < $cims_fdr..."
+            local temp_file="${output_file}.tmp"
+            awk -F'\t' -v fdr="$cims_fdr" 'NR==1 || $9 < fdr' "$output_file" | \
+                sort -k9,9n -k8,8nr -k7,7n > "$temp_file"
+            mv "$temp_file" "$output_file"
+            
+            local filtered_count=$(grep -v "^#" "$output_file" | wc -l)
+            log_info "CIMS filtered: $filtered_count sites (FDR < $cims_fdr)"
+        fi
+        
+    else
+        log_warning "CIMS produced empty output: $output_file"
+        return 1
+    fi
+    
+    return 0
+}
+
+# 6. CITS Analysis (CTK)
+# Detects crosslinking-induced truncation sites
+# Input: collapsed BED + deletion file (used to EXCLUDE read-through tags)
+# Output: CITS.txt with significant truncation sites (single-nucleotide singletons)
+run_cits() {
+    local input_collapsed_bed="$1"
+    local deletion_bed="$2"           # Used to exclude read-through tags
+    local output_file="$3"            # Should be .txt extension
+    local cits_pvalue="${4:-0.001}"   # Default: p-value 0.001
+    local cits_gap="${5:-25}"         # Default: gap 25 for clustering
+    
+    # Status update moved to caller (run_ctk_analysis)
+    # update_status "CITS Analysis"
+    log_info "Running CITS analysis..."
+    log_info "Input tags: $input_collapsed_bed"
+    log_info "Deletion file (to exclude): $deletion_bed"
+    log_info "P-value: $cits_pvalue, Gap: $cits_gap"
+    
+    # Verify inputs exist
+    if [[ ! -s "$input_collapsed_bed" ]]; then
+        log_error "CITS: Collapsed BED file is empty or missing: $input_collapsed_bed"
+        return 1
+    fi
+    if [[ ! -s "$deletion_bed" ]]; then
+        log_warning "CITS: Deletion file is empty. Running without read-through filtering."
+    fi
+    
+    # Set up CTK environment
+    export PERL5LIB="${CONDA_PREFIX}/lib/czplib:$PERL5LIB"
+    
+    # Run CITS.pl - outputs intermediate file first
+    local cits_raw="${output_file%.txt}_raw.bed"
+    local cmd="CITS.pl -p $cits_pvalue --gap $cits_gap -v '$input_collapsed_bed' '$deletion_bed' '$cits_raw'"
+    
+    execute_cmd "$cmd"
+    local cits_exit=$?
+    
+    if [[ -s "$cits_raw" ]]; then
+        local raw_count=$(wc -l < "$cits_raw")
+        log_info "CITS raw output: $raw_count sites"
+        
+        # Filter to single-nucleotide sites (singleton) - this is the main output
+        awk '{if($3-$2==1) {print $0}}' "$cits_raw" > "$output_file"
+        
+        local singleton_count=$(wc -l < "$output_file")
+        log_info "CITS complete: $singleton_count singleton sites in $output_file"
+        
+        # Remove intermediate raw file
+        rm -f "$cits_raw"
+    else
+        log_warning "CITS produced empty output"
+        return 1
+    fi
+    
+    return 0
+}
+
+# 7. Motif Enrichment Analysis (HOMER)
+# Extracts flanking regions and runs findMotifsGenome.pl
+run_motif_analysis() {
+    local input_bed="$1"
+    local output_dir="$2"
+    local genome_fasta="$3"
+    local flank_nt="${4:-10}"         # Default: ±10 nucleotides
+    local label="${5:-motif}"
+    
+    # Status update removed - motif analysis is part of CIMS/CITS
+    log_info "Running motif enrichment analysis..."
+    log_info "Input: $input_bed"
+    log_info "Flanking region: ±${flank_nt}nt"
+    
+    if [[ ! -s "$input_bed" ]]; then
+        log_warning "Motif analysis: Input BED is empty, skipping."
+        return 1
+    fi
+    
+    mkdir -p "$output_dir"
+    
+    # Extend regions by ±flank_nt
+    local flanked_bed="${output_dir}/${label}_flanked.bed"
+    awk -v n="$flank_nt" 'BEGIN{OFS="\t"} {
+        start = $2 - n
+        if (start < 0) start = 0
+        print $1, start, $3 + n, $4, $5, $6
+    }' "$input_bed" > "$flanked_bed"
+    
+    local site_count=$(wc -l < "$flanked_bed")
+    log_info "Prepared $site_count sites with ±${flank_nt}nt flanks"
+    
+    # Run HOMER findMotifsGenome.pl
+    local homer_output="${output_dir}/${label}_homer"
+    
+    if command -v findMotifsGenome.pl &> /dev/null; then
+        log_info "Running HOMER findMotifsGenome.pl (RNA mode)..."
+        
+        # HOMER requires genome to be in its database or a FASTA path
+        findMotifsGenome.pl "$flanked_bed" "$genome_fasta" "$homer_output" \
+            -size given -rna -p "${THREADS:-1}" 2>> "${LOG_FILE:-/dev/null}"
+        
+        if [[ -d "$homer_output" ]]; then
+            log_info "HOMER complete: $homer_output"
+        else
+            log_warning "HOMER may have failed. Check logs."
+        fi
+    else
+        log_warning "HOMER (findMotifsGenome.pl) not found. Skipping motif analysis."
+        log_info "To install: conda install -c bioconda homer"
+    fi
+    
+    log_info "Motif analysis complete."
+}
+
+# 8. Full CTK Analysis Pipeline
+# Orchestrates the complete CIMS/CITS workflow based on RUN_CIMS and RUN_CITS flags
+run_ctk_full_analysis() {
+    local bam_file="$1"
+    local output_dir="$2"
+    local genome_fasta="$3"
+    local cims_iterations="${4:-10}"
+    local cims_fdr="${5:-1}"
+    local cits_pvalue="${6:-1}"
+    local cits_gap="${7:-25}"
+    local motif_flank="${8:-10}"
+    local run_motif="${9:-yes}"
+    local run_cims="${10:-true}"
+    local run_cits="${11:-true}"
+    
+    log_info "═══════════════════════════════════════════════════════════════"
+    log_info "  CTK CIMS/CITS FULL ANALYSIS"
+    log_info "  CIMS: $run_cims | CITS: $run_cits"
+    log_info "═══════════════════════════════════════════════════════════════"
+    
+    # Create directories based on what's enabled
+    mkdir -p "$output_dir/preprocessing"
+    [[ "$run_cims" == "true" ]] && mkdir -p "$output_dir/CIMS"
+    [[ "$run_cits" == "true" ]] && mkdir -p "$output_dir/CITS"
+    [[ "$run_motif" == "yes" ]] && mkdir -p "$output_dir/motif_analysis"
+    
+    local sample_name=$(basename "${bam_file%.bam}" | sed 's/.Aligned.sortedByCoord.out//')
+    
+    # Phase 1: Preprocessing
+    log_info "Phase 1: Parsing alignment..."
+    local tags_bed="${output_dir}/preprocessing/${sample_name}_tags.bed"
+    local mutation_file="${output_dir}/preprocessing/${sample_name}_mutations.txt"
+    
+    # run_parse_alignment handles calmd + parseAlignment.pl
+    run_parse_alignment "$bam_file" "$tags_bed" "$mutation_file" "$(dirname "$genome_fasta")"
+    
+    if [[ ! -s "$tags_bed" ]]; then
+        log_error "parseAlignment.pl failed to produce tags. Aborting CTK analysis."
+        return 1
+    fi
+    
+    # Phase 1b: Collapse tags
+    log_info "Phase 1b: Collapsing PCR duplicates..."
+    local collapsed_bed="${output_dir}/preprocessing/${sample_name}_collapsed.bed"
+    tag2collapse.pl --keep-tag-name "$tags_bed" "$collapsed_bed"
+    
+    if [[ ! -s "$collapsed_bed" ]]; then
+        log_error "tag2collapse.pl failed. Aborting CTK analysis."
+        return 1
+    fi
+    
+    # Phase 1c: CTK Preprocessing (selectRow + getMutationType)
+    log_info "Phase 1c: Filtering and extracting mutation types..."
+    run_ctk_preprocessing "$collapsed_bed" "$mutation_file" "${output_dir}/preprocessing"
+    
+    local del_bed="${output_dir}/preprocessing/deletions.bed"
+    local sub_bed="${output_dir}/preprocessing/substitutions.bed"
+    
+    # Phase 2: CIMS Analysis (only if enabled)
+    if [[ "$run_cims" == "true" ]]; then
+        log_info "Phase 2: CIMS Analysis..."
+        
+        if [[ -s "$del_bed" ]]; then
+            log_info "Running CIMS on deletions..."
+            run_cims "$collapsed_bed" "$del_bed" \
+                "${output_dir}/CIMS/${sample_name}_CIMS_del.txt" \
+                "$cims_iterations" "$cims_fdr"
+        fi
+        
+        if [[ -s "$sub_bed" ]]; then
+            log_info "Running CIMS on substitutions..."
+            run_cims "$collapsed_bed" "$sub_bed" \
+                "${output_dir}/CIMS/${sample_name}_CIMS_sub.txt" \
+                "$cims_iterations" "$cims_fdr"
+        fi
+    else
+        log_info "Phase 2: CIMS Analysis... SKIPPED (not enabled)"
+    fi
+    
+    # Phase 3: CITS Analysis (only if enabled)
+    if [[ "$run_cits" == "true" ]]; then
+        log_info "Phase 3: CITS Analysis..."
+        
+        if [[ -s "$del_bed" ]]; then
+            run_cits "$collapsed_bed" "$del_bed" \
+                "${output_dir}/CITS/${sample_name}_CITS.bed" \
+                "$cits_pvalue" "$cits_gap"
+        else
+            log_warning "No deletion file for CITS. Skipping."
+        fi
+    else
+        log_info "Phase 3: CITS Analysis... SKIPPED (not enabled)"
+    fi
+    
+    # Phase 4: Motif Analysis
+    if [[ "$run_motif" == "yes" ]]; then
+        log_info "Phase 4: Motif Enrichment Analysis..."
+        
+        if [[ "$run_cims" == "true" ]]; then
+            local cims_del_sig="${output_dir}/CIMS/${sample_name}_CIMS_del_significant.bed"
+            local cims_sub_sig="${output_dir}/CIMS/${sample_name}_CIMS_sub_significant.bed"
+            
+            if [[ -s "$cims_del_sig" ]]; then
+                run_motif_analysis "$cims_del_sig" "${output_dir}/motif_analysis" \
+                    "$genome_fasta" "$motif_flank" "CIMS_del"
+            fi
+            
+            if [[ -s "$cims_sub_sig" ]]; then
+                run_motif_analysis "$cims_sub_sig" "${output_dir}/motif_analysis" \
+                    "$genome_fasta" "$motif_flank" "CIMS_sub"
+            fi
+        fi
+        
+        if [[ "$run_cits" == "true" ]]; then
+            local cits_singleton="${output_dir}/CITS/${sample_name}_CITS_singleton.bed"
+            
+            if [[ -s "$cits_singleton" ]]; then
+                run_motif_analysis "$cits_singleton" "${output_dir}/motif_analysis" \
+                    "$genome_fasta" "$motif_flank" "CITS"
+            fi
+        fi
+    fi
+    
+    log_info "═══════════════════════════════════════════════════════════════"
+    log_info "  CTK ANALYSIS COMPLETE"
+    log_info "  Output: $output_dir"
+    log_info "═══════════════════════════════════════════════════════════════"
+}
+
+# 9. CTK Analysis Pipeline (Streamlined - uses pre-existing collapsed.bed and mutations.txt)
+# This function reuses the standard pipeline's outputs to avoid duplicate preprocessing
+run_ctk_analysis() {
+    local collapsed_bed="$1"          # From standard pipeline
+    local mutation_file="$2"          # From standard pipeline
+    local output_dir="$3"
+    local genome_fasta="$4"
+    local sample_name="$5"
+    local cims_iterations="${6:-10}"
+    local cims_fdr="${7:-1}"
+    local cits_pvalue="${8:-1}"
+    local cits_gap="${9:-25}"
+    local motif_flank="${10:-10}"
+    local run_motif="${11:-yes}"
+    local run_cims="${12:-true}"
+    local run_cits="${13:-true}"
+    
+    log_info "═══════════════════════════════════════════════════════════════"
+    log_info "  CTK CIMS/CITS ANALYSIS"
+    log_info "  Sample: $sample_name"
+    log_info "  CIMS: $run_cims | CITS: $run_cits"
+    log_info "═══════════════════════════════════════════════════════════════"
+    
+    # Create directories based on what's enabled
+    [[ "$run_cims" == "true" ]] && mkdir -p "$output_dir/CIMS"
+    [[ "$run_cits" == "true" ]] && mkdir -p "$output_dir/CITS"
+    
+    # Verify inputs exist
+    if [[ ! -s "$collapsed_bed" ]]; then
+        log_error "CTK: Collapsed BED file is empty or missing: $collapsed_bed"
+        return 1
+    fi
+    if [[ ! -s "$mutation_file" ]]; then
+        log_warning "CTK: Mutation file is empty or missing: $mutation_file"
+        log_warning "CTK: CIMS/CITS requires mutation information. Skipping."
+        return 1
+    fi
+    
+    # Step 1: CTK Preprocessing (selectRow + getMutationType)
+    log_info "Step 1: Filtering and extracting mutation types..."
+    run_ctk_preprocessing "$collapsed_bed" "$mutation_file" "$output_dir"
+    
+    local del_bed="${output_dir}/deletions.bed"
+    local sub_bed="${output_dir}/substitutions.bed"
+    
+    # Step 2: CIMS Analysis (only if enabled)
+    if [[ "$run_cims" == "true" ]]; then
+        update_status "CIMS"
+        
+        local cims_del_file="${output_dir}/CIMS/${sample_name}_CIMS_del.txt"
+        local cims_sub_file="${output_dir}/CIMS/${sample_name}_CIMS_sub.txt"
+        
+        if [[ -s "$del_bed" ]]; then
+            run_cims "$collapsed_bed" "$del_bed" "$cims_del_file" \
+                "$cims_iterations" "$cims_fdr"
+        fi
+        
+        if [[ -s "$sub_bed" ]]; then
+            run_cims "$collapsed_bed" "$sub_bed" "$cims_sub_file" \
+                "$cims_iterations" "$cims_fdr"
+        fi
+        
+        # Run motif on CIMS results (if enabled) - per-sample
+        if [[ "$run_motif" == "yes" ]]; then
+            if [[ -s "$cims_del_file" ]]; then
+                run_motif_analysis "$cims_del_file" "${output_dir}/CIMS/CIMS_del_motif" \
+                    "$genome_fasta" "$motif_flank" "CIMS_del"
+            fi
+            
+            if [[ -s "$cims_sub_file" ]]; then
+                run_motif_analysis "$cims_sub_file" "${output_dir}/CIMS/CIMS_sub_motif" \
+                    "$genome_fasta" "$motif_flank" "CIMS_sub"
+            fi
+        fi
+    fi
+    
+    # Step 3: CITS Analysis (only if enabled)
+    if [[ "$run_cits" == "true" ]]; then
+        update_status "CITS"
+        
+        local cits_file="${output_dir}/CITS/${sample_name}_CITS.txt"
+        
+        if [[ -s "$del_bed" ]]; then
+            run_cits "$collapsed_bed" "$del_bed" "$cits_file" \
+                "$cits_pvalue" "$cits_gap"
+                
+            # Run motif on CITS results (if enabled) - per-sample
+            if [[ "$run_motif" == "yes" ]]; then
+                if [[ -s "$cits_file" ]]; then
+                    run_motif_analysis "$cits_file" "${output_dir}/CITS/CITS_motif" \
+                        "$genome_fasta" "$motif_flank" "CITS"
+                fi
+            fi
+        else
+            log_warning "No deletion file for CITS. Skipping."
+        fi
+    fi
+    
+    log_info "═══════════════════════════════════════════════════════════════"
+    log_info "  CTK ANALYSIS COMPLETE"
+    log_info "  Output: $output_dir"
+    log_info "═══════════════════════════════════════════════════════════════"
+}
+
+# 7. Coverage Analysis (Bedgraph)
+run_coverage() {
+    local input_bed="$1"
+    local output_prefix="$2"
+    local genome_file="$3" # Requires genome file (chrom sizes)
+
+    update_status "Bedgraph"
+    log_info "generating separate strand bedGraphs..."
+    
+    # We need chromosome sizes for genomecov -bg. 
+    # Try to extract from BAM if genome_file is not valid
+    local chrom_sizes="$genome_file"
+    
+    if [[ ! -f "$chrom_sizes" ]]; then
+        # Try to find default chrom.sizes or extract from BAM
+        chrom_sizes="chrom.sizes"
+        if [[ ! -f "$chrom_sizes" ]]; then
+             local bam_file=$(ls *.sortedByCoord.out.bam | head -n 1)
+             if [[ -f "$bam_file" ]]; then
+                  samtools view -H "$bam_file" | grep "@SQ" | sed 's/@SQ\tSN://' | sed 's/\tLN:/\t/' > "$chrom_sizes"
+             else
+                 log_error "Cannot generate bedgraph: genome chrom.sizes missing and no BAM found for extraction."
+                 return 1
+             fi
+        fi
+    fi
+
+    # Positive Strand
+    bedtools genomecov -i "$input_bed" -g "$chrom_sizes" -bg -strand + > "${output_prefix}_pos.bedgraph"
+    
+    # Negative Strand
+    bedtools genomecov -i "$input_bed" -g "$chrom_sizes" -bg -strand - > "${output_prefix}_neg.bedgraph"
+    
+    log_info "Bedgraphs generated: ${output_prefix}_pos.bedgraph, ${output_prefix}_neg.bedgraph"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Group-Based CTK Analysis (Bash 3.x Compatible)
+# Aggregates samples by group before running CIMS/CITS
+# ═══════════════════════════════════════════════════════════════════════════
+
+run_group_ctk_analysis() {
+    local groups_file="$1"
+    local output_root="$2"
+    local genome_index="$3"
+    local cims_iterations="$4"
+    local cims_fdr="$5"
+    local cits_pvalue="$6"
+    local cits_gap="$7"
+    local motif_flank="$8"
+    local run_motif="$9"
+    local run_cims="${10}"
+    local run_cits="${11}"
+    
+    console_msg "\n[GROUP CTK ANALYSIS]"
+    
+    # 1. Parse groups file into temp file (sample<TAB>group format)
+    local groups_map=$(mktemp)
+    parse_groups_file "$groups_file" "$groups_map"
+    
+    # 2. Create temp file for group→samples mapping
+    local group_samples_file=$(mktemp)
+    
+    # 3. Find all sample analysis directories and assign to groups
+    for sample_dir in *_analysis; do
+        [[ ! -d "$sample_dir" ]] && continue
+        
+        local sample_name="${sample_dir%_analysis}"
+        
+        # Look up group for this sample using grep (bash 3.x compatible)
+        local group=$(grep -w "^${sample_name}" "$groups_map" 2>/dev/null | cut -f2)
+        
+        if [[ -z "$group" ]]; then
+            # Sample not in groups file → individual group (use sample name)
+            group="$sample_name"
+            log_info "Sample '$sample_name' not in groups file, treating as individual"
+        fi
+        
+        # Append to group_samples_file: group<TAB>sample
+        echo -e "${group}\t${sample_name}" >> "$group_samples_file"
+    done
+    
+    # 4. Determine CTK output folder name
+    local ctk_folder_name
+    if [[ "$run_cims" == "true" ]] && [[ "$run_cits" == "true" ]]; then
+        ctk_folder_name="5_CTK_Analysis"
+    elif [[ "$run_cims" == "true" ]]; then
+        ctk_folder_name="5_CIMS_Analysis"
+    elif [[ "$run_cits" == "true" ]]; then
+        ctk_folder_name="5_CITS_Analysis"
+    fi
+    
+    # 5. Get unique groups and process alphabetically (skip unknown)
+    local unique_groups=$(cut -f1 "$group_samples_file" | sort -u | grep -v "^unknown$")
+    
+    for group in $unique_groups; do
+        # Get all samples for this group
+        local samples=$(grep -w "^${group}" "$group_samples_file" | cut -f2 | tr '\n' ' ')
+        local sample_count=$(echo $samples | wc -w | tr -d ' ')
+        
+        # Print group header on same line (no newline) so status updates appear after it
+        if [[ "$sample_count" -eq 1 ]]; then
+            printf "  > Processing %s: " "$group"
+        else
+            printf "  > Processing %s (%d samples): " "$group" "$sample_count"
+        fi
+        
+        # 6. Create group CTK directory
+        local group_ctk_dir="$output_root/$ctk_folder_name/$group"
+        mkdir -p "$group_ctk_dir"
+        
+        # 7. Aggregate collapsed.bed files
+        local group_collapsed="$group_ctk_dir/${group}_collapsed.bed"
+        > "$group_collapsed"  # Clear file
+        for sample in $samples; do
+            # Use find to locate collapsed.bed in sample's analysis directory
+            local sample_dir="${sample}_analysis"
+            if [[ -d "$sample_dir" ]]; then
+                local sample_collapsed=$(find "$sample_dir" -name "*_collapsed.bed" 2>/dev/null | head -n 1)
+                if [[ -s "$sample_collapsed" ]]; then
+                    cat "$sample_collapsed" >> "$group_collapsed"
+                    log_info "Added $sample_collapsed to group $group"
+                else
+                    log_warning "Collapsed BED not found for sample: $sample"
+                fi
+            else
+                log_warning "Analysis directory not found: $sample_dir"
+            fi
+        done
+        
+        # 8. Aggregate mutations.txt files
+        local group_mutations="$group_ctk_dir/${group}_mutations.txt"
+        > "$group_mutations"  # Clear file
+        for sample in $samples; do
+            local sample_dir="${sample}_analysis"
+            if [[ -d "$sample_dir" ]]; then
+                local sample_mutations=$(find "$sample_dir" -name "*_mutations.txt" 2>/dev/null | head -n 1)
+                if [[ -s "$sample_mutations" ]]; then
+                    cat "$sample_mutations" >> "$group_mutations"
+                fi
+            fi
+        done
+        
+        # 9. Get genome fasta for motif analysis
+        local genome_fasta=$(find "$genome_index" -name "*.fa" -o -name "*.fasta" 2>/dev/null | head -n 1)
+        
+        # 10. Run CTK analysis on aggregated data
+        if [[ -s "$group_collapsed" ]]; then
+            run_ctk_analysis "$group_collapsed" "$group_mutations" \
+                "$group_ctk_dir" "$genome_fasta" "$group" \
+                "$cims_iterations" "$cims_fdr" "$cits_pvalue" "$cits_gap" \
+                "$motif_flank" "$run_motif" "$run_cims" "$run_cits"
+        else
+            log_error "CTK: Collapsed BED file is empty or missing: $group_collapsed"
+        fi
+        
+        update_status_done
+    done
+    
+    # Cleanup temp files
+    rm -f "$groups_map" "$group_samples_file"
+    
+    console_msg "  > Group CTK analysis complete"
+}

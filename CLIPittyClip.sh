@@ -1,460 +1,1118 @@
-terminal_width=$(tput cols)
-separator_line=$(printf "%${terminal_width}s" | tr ' ' '*')
+#!/bin/bash
 
-## Set Default Values:
-# Starting file:
-EXP_ID=""
-# Type of CLIP experiment for naming:
-EXP_TYPE=""
-# Keep intermeidate files:
-KEEP="no"
-# Quality filter threshod:
-QUALITY=30
-# Perform or skip demultiplexing:
-DEMUX="no"
-# Allowed mismatch for barcode demultiplexing:
-barcodeMis=0
-# Minimum read length after 5 and 3' trimming/clipping:
-minLength=16
-# Default 5'end nucleotide to clip:
-adapter5=10
-# Default 3'end adapter sequence (L32):
-adapter3="GTGTCAGTCACTTCCAGCGG"
-# Path to genome index:
-genome_index=""
-# Allowed mismatch
-alignMis=0
-# Seed length
-seedLength=15
-# Number of threads
-threads=1
-# Peak calling minimum distance for HOMER 
-PeakMinDist=50
-# Peak size for HOMER
-PeakSize=20
-# Fragment size for HOMER
-FragLength=25
+# CLIPittyClip.sh - Modernized CLIP-seq Analysis Pipeline
+# Version 3.0.0
 
-# Function to display information
-function show_info {
-  echo "$separator_line"
-  echo "CLIPittyClip: Single-line CLIP data analysis pipeline"
-  echo "$separator_line"
-  echo "Version 2.0.0"
-  echo "Author: Soon Yi"
-  echo "Last updated: 2024-01-03"
-  echo "$separator_line"
-  echo "CLIPittyClip.sh"
-  echo "$separator_line"
-  echo "This is a standard CLIP analysis pipeline, from fastq.gz to peaks."
-  echo "If demultiplexing is needed, set -d option to 'yes' and provide the proper barcode file."
-  echo "The pipeline utilizes the following programs: "
-  echo " - fastx_toolkit (collapser, barcode_splitter, trimmer, clipper)"
-  echo " - ctk (stripBarcode, tag2collapse)"
-  echo " - bowtie2"
-  echo " - samtools (view, sort, index)"
-  echo " - bedtools (bamtobed, genomecov, coverage)"
-  echo " - Homer (makeTagDirectory, findPeaks)"
-  echo "$separator_line"
-}
+# ------------------------------------------------------------------
+# Initialization & Setup
+# ------------------------------------------------------------------
 
-# Function to display usage information
+# Resolve script directory to source libraries
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/lib/utils.sh"
+source "${SCRIPT_DIR}/lib/modules.sh"
+source "${SCRIPT_DIR}/lib/wizard.sh"
+
+# Default Values
+THREADS=1
+KEEP_INTERMEDIATE="no"
+GENOME_INDEX=""
+INPUT_FILE=""
+EXP_ID=""     # Optional, derived from filename if not provided
+EXP_TYPE=""   # Optional, derived from filename if not provided
+DEMUX="no"    # handled by fastp automatically for UMI, but for sample demux we stick to single sample default per run for now or need bc file
+BARCODE_FILE=""
+INPUT_DIR=""  # Directory mode for pre-demultiplexed FASTQs
+UMI_LEN=0
+ADAPTER_3="GTGTCAGTCACTTCCAGCGG" # L32 default
+PEAK_DIST=50
+PEAK_SIZE=20
+FRAG_LEN=25
+MISMATCH_MAX=2 # STAR default
+# ------------------------------------------------------------------
+# Usage
+# ------------------------------------------------------------------
+
 function show_usage {
-  echo "Usage: CLIPittyClip.sh -i ? -y ? -5 ? -3 ? ... -x ? ..."
-  echo "$separator_line"
-  echo "- Experiment ID (-i), type (-y) and genome index (-x) are required:"
-  echo "  Experiment ID (-i) represents a unique identifier for your experiment."
-  echo "  Experiment type (-y) represents a short descripter for your experiment."
-  echo "  Starting fastq.gz file should have a name convention as: id_type.fastq.gz"
-  echo "  Example: JL1000_Input.fastq.gz"
-  echo "$separator_line"
-  echo "- If demultiplexing is required, make sure to set -d option to 'yes'."
-  echo "  The Barcode file should have the same name convention as fastq.gz file, followed by '_BC.txt'."
-  echo "  Example: JL1000_Input_BC.txt"
-  echo "  Check our GitHub page for sample barcode file."
-  echo "$separator_line"
-  echo "- Path and file name to the index for bowtie2 mapping (-x) should follow bowtie2 convention."
-  echo "  Path/file name will also be used for the .fa.fai file for bedtools genomecov."
-  echo "  Make sure the bowtie2 genome index and bedtools genome files exists in your designated path."
-  echo "$separator_line"
-  echo "- The other options will use default options if not specified."
-  echo "$separator_line"
-  echo "Options:"
-  echo "  -h: print usage information"
-  echo "  -i: experiment ID"
-  echo "  -y: experiment type (e.g., Input, Enrich, or Fraction)"
-  echo "  -k: keep intermediate files                             (default: no)"
-  echo "  -q: quality score threshold                             (default: 30)"
-  echo "  -d: perform demultiplexing                              (default: no)"
-  echo "  -b: number of mismatch allowed in barcode for demux     (default:  0)"
-  echo "  -5: number of nucleotide to clip from the 5'-end        (default: 10)"
-  echo "  -3: sequence of the 3'-end adapter                      (default: L32 sequence)"
-  echo "  -l: minimum read length after 5/3 end trimming/clipping (default: 16)"
-  echo "  -x: path to the genome index for bowtie2 and bedtools"
-  echo "  -m: number of mismatch allowed for mapping              (default:  0)"
-  echo "  -s: seed length for mapping                             (default: 15)"
-  echo "  -t: number of threads to be utilized by bowtie/samtools (default:  1)"
-  echo "  -p: minimum distance between peaks for homer            (default: 50)"
-  echo "  -z: size of peaks for homer                             (default: 20)"
-  echo "  -f: fragment length for homer                           (default: 25)"
-  echo "$separator_line"
+    echo ""
+    echo "Usage: $0 [-i <input.fastq.gz> | -d <input_dir>] -x <index_dir> [options]"
+    echo ""
+    echo "CLIPittyClip v3.0 - Modern CLIP-seq Analysis Pipeline"
+    echo ""
+    echo "REQUIRED INPUT (Choose one):"
+    echo "  -i <path>          Input FASTQ file (gzipped supported)"
+    echo "  -d <dir>           Input directory containing .fastq.gz files (Batch Mode)"
+    echo ""
+    echo "REQUIRED REFERENCE:"
+    echo "  -x <path>          Path to genome index directory (STAR or Bowtie2)"
+    echo ""
+    echo "GENERAL OPTIONS:"
+    echo "  -o <str>           Output ID / prefix (default: derived from filename)"
+    echo "  -t <int>           Number of threads (default: 1)"
+    echo "  --aligner <str>    Aligner: 'star' (default) or 'bowtie2'"
+    echo "  -h, --help         Show this help message"
+    echo "  --verbose          Enable verbose logging"
+    echo ""
+    echo "PREPROCESSING OPTIONS:"
+    echo "  -u <int>           UMI length (e.g., 7 for CoCLIP)"
+    echo "  -a <str>           3' adapter sequence (default: L32)"
+    echo "  --dedup            Enable FASTQ deduplication (default: ON)"
+    echo "  --no-dedup         Disable FASTQ deduplication"
+    echo ""
+    echo "DEMULTIPLEXING OPTIONS (for -i mode):"
+    echo "  -b, --barcode <path>   Barcode file for demultiplexing"
+    echo "  --mismatches <int>     Max barcode mismatches (default: 1)"
+    echo ""
+    echo "ANALYSIS OPTIONS:"
+    echo "  --run-ctk          Enable full CTK CIMS+CITS analysis"
+    echo "  --cims             Enable CIMS analysis (mutation sites only)"
+    echo "  --cits             Enable CITS analysis (truncation sites only)"
+    echo "  --cims-iter <int>  CIMS permutation iterations (default: 10)"
+    echo "  --cims-fdr <float> CIMS FDR threshold (default: 0.001)"
+    echo "  --cits-pval <float> CITS p-value threshold (default: 0.001)"
+    echo "  --cits-gap <int>   CITS clustering gap (default: 25, -1=no cluster)"
+    echo "  --motif-flank <int> Motif flanking nucleotides (default: 10)"
+    echo "  --no-motif         Skip motif enrichment analysis"
+    echo "  -g, --groups <file> Aggregate samples by group for CIMS/CITS"
+    echo "                      Format: sample_name<TAB>group_name"
+    echo "  --sample <int>     Test mode: process only first N reads"
+    echo ""
+    echo "OUTPUT OPTIONS:"
+    echo "  -k                 Keep intermediate files"
+    echo "  --notification     Enable system notifications on completion"
+    echo "  --advanced         Launch interactive configuration wizard"
+    echo ""
+    echo "EXAMPLES:"
+    echo "  # Standard run (Single File)"
+    echo "  $0 -i reads.fastq.gz -x /path/to/star_index -t 8 -u 7"
+    echo ""
+    echo "  # Demultiplexing run"
+    echo "  $0 -i pool.fastq.gz -b barcodes.txt -x /path/to/star_index -t 8"
+    echo ""
+    echo "  # Directory Batch Mode"
+    echo "  $0 -d /path/to/samples/ -x /path/to/star_index -t 8 --cims"
+    echo ""
+    echo "  # Bowtie2 Alignment"
+    echo "  $0 -i reads.fastq.gz -x /path/to/bt2_index -t 8 --aligner bowtie2"
+    echo ""
 }
 
-function on_exit {
-  read -p "Press enter to exit."
-}
+# ------------------------------------------------------------------
+# Argument Parsing
+# ------------------------------------------------------------------
 
-# Check if arguments are provided:
+RUN_CIMS=false
+RUN_CITS=false
+VERBOSE=false
+SAMPLE_SIZE=0 
+CHILD_MODE="false"
+DEDUP_MODE="true" # Always on by default per user request
+NOTIFY_MODE="false"
+ADVANCED_MODE="false"
+ALIGNER="star" # Default match
+
+# CTK CIMS/CITS Parameters (with defaults)
+CIMS_ITERATIONS="10"
+CIMS_FDR="1"
+CITS_PVALUE="1"
+CITS_GAP="25"
+RUN_MOTIF="yes"
+MOTIF_FLANK="10"
+GROUPS_FILE=""  # Optional: group samples for CIMS/CITS aggregation
+
+# Capture Start Time (Seconds) for duration calculation
+PIPELINE_START=$(date +%s)
+
 if [[ $# -eq 0 ]]; then
-  show_info
-  echo "Error: No option arguments have been passed. use '-h' option for usage information."
-  on_exit
-  exit 1
-fi
-
-# Parse command-line options
-while getopts "i:y:k:q:d:b:5:3:l:x:m:s:t:p:z:f:h" opt; do
-  case $opt in
-    i)
-      EXP_ID="$OPTARG"
-      ;;
-    y)
-      EXP_TYPE="$OPTARG"
-      ;;
-    k)
-      KEEP="$OPTARG"
-    ;;
-    q)
-      QUALITY="$OPTARG"
-      ;;
-    d)
-      DEMUX="$OPTARG"
-      ;;
-    b)
-      barcodeMis="$OPTARG"
-      ;;
-    5)
-      adapter5="$OPTARG"
-      ;;
-    3)
-      adapter3="$OPTARG"
-      ;;
-    l)
-      minLength="$OPTARG"
-      ;;
-    x)
-      genome_index="$OPTARG"
-      ;;
-    m)
-      alignMis="$OPTARG"
-      ;;
-    s)
-      seedLength="$OPTARG"
-      ;;
-    t)
-      threads="$OPTARG"
-      ;;
-    p)
-      PeakMinDist="$OPTARG"
-      ;;
-    z)
-      PeakSize="$OPTARG"
-      ;;
-    f)
-      FragLength="$OPTARG"
-      ;;
-    h)
-      show_info
-      show_usage
-      on_exit
-      exit 0
-      ;;
-    \?)
-      echo "$separator_line"
-      echo "Error: Invalid option -$OPTARG" >&2
-      echo "$separator_line"
-      show_usage
-      on_exit
-      exit 1
-      ;;
-    :)
-      echo "$separator_line"
-      echo "Error: Option -$OPTARG requires an argument." >&2
-      echo "$separator_line"
-      show_usage
-      on_exit
-      exit 1
-      ;;
-  esac
-done
-
-# Check if all required options are provided
-if [[ -z "$EXP_ID" || -z "$EXP_TYPE" || -z "$genome_index" ]]; then
-  echo "$separator_line"
-  echo "Error: Options -i, -y, and -x are required."
-  echo "$separator_line"
-  show_usage
-  on_exit
-  exit 1
-fi
-
-## Start of pipeline:
-#####################################################################################
-BASE_NAME="${EXP_ID}_${EXP_TYPE}"
-
-show_info | tee -a ${BASE_NAME}_logs.txt
-echo "# Analysis started: $(date +'%Y/%m/%d %H:%M')" | tee -a ${BASE_NAME}_logs.txt
-echo "# User Input: '$0 $@'\n" | tee -a ${BASE_NAME}_logs.txt
-
-if [ "$KEEP" == "yes" ]; then
-  echo "# All intermediate files will be kept. Note this may use up a lot of disk space." | tee -a ${BASE_NAME}_logs.txt
-else
-  echo "# All intermediate files will be removed as the pipeline proceeds." | tee -a ${BASE_NAME}_logs.txt
-fi
-
-## Check if specified fastq file exists:
-if [ ! -e "${BASE_NAME}.fastq.gz" ]; then
-  echo "# ${BASE_NAME}.fastq.gz file does not exist." | tee -a ${BASE_NAME}_logs.txt
-  on_exit
-  exit 1
-fi
-
-## Check if demultiplexing option is on:
-if [ "$DEMUX" == "yes" ]; then
-  # Check if the BC file exists in the current directory.
-  if [ ! -e "${BASE_NAME}_BC.txt" ]; then
-  # If BC file does not exists, exit.
-    echo "# Barcode information not found! Make sure to provide proper barcode file." | tee -a ${BASE_NAME}_logs.txt
-    echo "# Barcode file should have the same name convention as fastq.gz file, followed by '_BC.txt'.\n" | tee -a ${BASE_NAME}_logs.txt
-    on_exit
+    # Only show header if we are going to exit anyway
+    echo "$separator_line"
+    echo -e "${BLUE}CLIPittyClip: Modern CLIP-seq Analysis Pipeline${NC}"
+    echo "Version 3.0.0"
+    echo "Author: Soon Yi (Updated by Antigravity)"
+    echo "Last updated: $(date +'%Y-%m-%d')"
+    echo "$separator_line"
+    
+    echo "Welcome to CLIPittyClip! No arguments provided."
+    echo "Please provide arguments via command line."
+    show_usage
     exit 1
-  else
-    echo "# Barcode information found! Demultiplexing will be performed based on the barcode information.\n" | tee -a ${BASE_NAME}_logs.txt
-  fi
-else
-  echo "# Demultiplexing will be skipped. Option -d will be ignored.\n" | tee -a ${BASE_NAME}_logs.txt
 fi
 
-## Check if bedtools genome index file exists.
-if [ ! -e "${genome_index}.fa.fai" ]; then
-  # If bedtools index file does not exists, exit.
-  echo "# Genome index for bedtools not found! Make sure to provide proper genome file for bedtools.\n" | tee -a ${BASE_NAME}_logs.txt
-  on_exit
-  exit 1
+while [[ $# -gt 0 ]]; do
+    # Skip empty arguments
+    if [[ -z "$1" ]]; then shift; continue; fi
+    case $1 in
+        -i) INPUT_FILE="$2"; shift 2 ;;
+        -x) GENOME_INDEX="$2"; shift 2 ;;
+        --aligner) ALIGNER=$(echo "$2" | tr '[:upper:]' '[:lower:]'); shift 2 ;;
+        -o) EXP_ID="$2"; shift 2 ;;
+        -t) THREADS="$2"; shift 2 ;;
+        -u) UMI_LEN="$2"; shift 2 ;;
+        -a) ADAPTER_3="$2"; shift 2 ;;
+        -k) KEEP_INTERMEDIATE="yes"; shift ;;
+        --cims) RUN_CIMS=true; RUN_CTK="yes"; shift ;;
+        --cits) RUN_CITS=true; RUN_CTK="yes"; shift ;;
+        --run-ctk) RUN_CTK="yes"; RUN_CIMS=true; RUN_CITS=true; shift ;;
+        --cims-iter) CIMS_ITERATIONS="$2"; shift 2 ;;
+        --cims-fdr) CIMS_FDR="$2"; shift 2 ;;
+        --cits-pval) CITS_PVALUE="$2"; shift 2 ;;
+        --cits-gap) CITS_GAP="$2"; shift 2 ;;
+        --motif-flank) MOTIF_FLANK="$2"; shift 2 ;;
+        --no-motif) RUN_MOTIF="no"; shift ;;
+        -g|--groups) GROUPS_FILE="$2"; shift 2 ;;
+        --sample) SAMPLE_SIZE="$2"; shift 2 ;;
+        -b|--barcode) BARCODE_FILE="$2"; DEMUX="yes"; shift 2 ;;
+        -d|--input-dir) INPUT_DIR="$2"; shift 2 ;;
+        --mismatches) MISMATCHES="$2"; shift 2 ;;
+        --no-dedup) DEDUP_MODE="false"; shift ;;
+        --dedup) DEDUP_MODE="true"; shift ;; # Keep for compat
+        --notification) NOTIFY_MODE="true"; shift ;;
+        --child) CHILD_MODE="true"; shift ;;
+        --advanced)
+            ADVANCED_MODE="true"
+            shift
+            ;;
+        --verbose) VERBOSE="true"; shift ;;
+        -h|--help) show_usage; exit 0 ;;
+        *) echo "[ERROR] Unknown option: $1"; show_usage; exit 1 ;;
+    esac
+done
+
+# ------------------------------------------------------------------
+# Log File Initialization (Post-Parsing)
+# ------------------------------------------------------------------
+# If CHILD_MODE, we suppress main log creation to avoid spamming root dir.
+if [[ "$CHILD_MODE" == "true" ]]; then
+    LOG_FILE="/dev/null"
 else
-  echo "# Genome index for bedtools found!\n" | tee -a ${BASE_NAME}_logs.txt
+    # Use absolute path so redirects work correctly even if we cd later
+# Check for existing config in current directory (e.g. from parent process or previous run)
+if [[ -f "analysis_config.env" ]]; then
+    # We only source if we are NOT running the wizard right now (child process)
+    # OR if we want to load defaults. 
+    # Logic: If --advanced, run wizard (which overwrites config). If not --advanced, try to load config.
+    if [[ "$ADVANCED_MODE" == "false" ]]; then
+        source "analysis_config.env"
+    fi
 fi
 
-## Check if bowtie2 genome index file exists.
-bt2_index=("1.bt2" "2.bt2" "3.bt2" "4.bt2" "rev.1.bt2" "rev.2.bt2")
-for index in "${bt2_index[@]}"; do
-  file_to_check="${genome_index}.${index}"
-  if [ ! -e "${file_to_check}" ]; then
-    # If bowtie2 index files doesn't exists, exit.
-    echo "# ${index} index file not found! Make sure all bowtie2 genome index files are in the provided directory.\n" | tee -a ${BASE_NAME}_logs.txt
-    on_exit
+if [[ "$ADVANCED_MODE" == "true" ]]; then
+    run_wizard
+    # Wizard writes analysis_config.env, so source it now
+    source "analysis_config.env"
+fi
+
+# Log file setup
+LOG_FILE="$(pwd)/CLIPittyClip_$(date +%Y%m%d_%H%M%S).log"
+    touch "${LOG_FILE}"
+fi
+
+# Validation: Need either -i or -d (but not both)
+if [[ -n "$INPUT_DIR" ]] && [[ -n "$INPUT_FILE" ]]; then
+    log_error "Cannot use both -i and -d. Choose one input mode."
+    show_usage
     exit 1
-  else
-    echo "# ${index} index file found!" | tee -a ${BASE_NAME}_logs.txt
-  fi
-done
-
-## Make directories:
-#####################################################################################
-echo "\n# Create necessary directories: " | tee -a ${BASE_NAME}_logs.txt
-
-mkdir ${BASE_NAME}
-mkdir ${BASE_NAME}_groomed_reads
-mkdir ${BASE_NAME}_mapped_reads
-mkdir BAM
-mkdir BED
-mkdir collapsedBED
-mkdir BEDGRAPH
-mkdir peakCoverage
-mkdir ${BASE_NAME}_peaks
-if [ "$KEEP" == "yes" ]; then
-  mkdir intermediate
 fi
 
+if [[ -z "$INPUT_FILE" ]] && [[ -z "$INPUT_DIR" ]]; then
+    log_error "Missing required input (-i or -d). Provide a single file or input directory."
+    show_usage
+    exit 1
+fi
 
-## Actual start of the pipeline: 
-#####################################################################################
-## Unzip fastq.gz:
-echo "\n# Unzip fasta.gz file." | tee -a ${BASE_NAME}_logs.txt
-gunzip -k ${BASE_NAME}.fastq.gz
+if [[ -z "$GENOME_INDEX" ]]; then
+    log_error "Missing required argument (-x genome index)."
+    show_usage
+    exit 1
+fi
 
-## Filter reads based on quality:
-echo "\n# Quality fiilter reads using fastx fastq_quality_filter:" | tee -a ${BASE_NAME}_logs.txt
-echo "\n  ${BASE_NAME}.fastq --> ${BASE_NAME}_filtered.fastq" | tee -a ${BASE_NAME}_logs.txt
-fastq_quality_filter -v -q ${QUALITY} -i ${BASE_NAME}.fastq -o ${BASE_NAME}_filtered.fastq | tee -a ${BASE_NAME}_logs.txt
+# Resolve absolute paths
+if [[ -n "$INPUT_FILE" ]]; then
+    check_file "$INPUT_FILE" || exit 1
+    INPUT_FILE="$(cd "$(dirname "$INPUT_FILE")" && pwd)/$(basename "$INPUT_FILE")"
+fi
 
-## Collapse identical reads:
-echo "\n# Collapse identical reads using fastx_collapser:" | tee -a ${BASE_NAME}_logs.txt
-echo "\n  ${BASE_NAME}_filtered.fastq --> ${BASE_NAME}_collapsed.fa" | tee -a ${BASE_NAME}_logs.txt
-fastx_collapser -v -i ${BASE_NAME}_filtered.fastq -o ${BASE_NAME}_collapsed.fa | tee -a ${BASE_NAME}_logs.txt
-if [ "$KEEP" == "yes" ]; then
-  mv *.fastq intermediate
+if [[ -n "$INPUT_DIR" ]]; then
+    if [[ ! -d "$INPUT_DIR" ]]; then
+        log_error "Input directory not found: $INPUT_DIR"
+        exit 1
+    fi
+    INPUT_DIR="$(cd "$INPUT_DIR" && pwd)"
+    # Check for FASTQ files
+    FASTQ_COUNT=$(ls "$INPUT_DIR"/*.fastq.gz "$INPUT_DIR"/*.fq.gz 2>/dev/null | wc -l)
+    if [[ "$FASTQ_COUNT" -eq 0 ]]; then
+        log_error "No .fastq.gz or .fq.gz files found in: $INPUT_DIR"
+        exit 1
+    fi
+fi
+
+GENOME_INDEX="$(cd "$GENOME_INDEX" && pwd)"
+
+# Validate groups file (requires --cims or --cits)
+if [[ -n "$GROUPS_FILE" ]]; then
+    if [[ "$RUN_CIMS" != "true" ]] && [[ "$RUN_CITS" != "true" ]]; then
+        log_error "-g/--groups requires --cims and/or --cits"
+        show_usage
+        exit 1
+    fi
+    if [[ ! -f "$GROUPS_FILE" ]]; then
+        log_error "Groups file not found: $GROUPS_FILE"
+        exit 1
+    fi
+    GROUPS_FILE="$(cd "$(dirname "$GROUPS_FILE")" && pwd)/$(basename "$GROUPS_FILE")"
+    log_info "Groups file: $GROUPS_FILE"
+fi
+
+# ------------------------------------------------------------------
+# Log Configuration (Standard or Advanced Results)
+# ------------------------------------------------------------------
+log_info "------------------------------------------------------------------"
+log_info "Configuration Summary"
+log_info "------------------------------------------------------------------"
+
+# Define defaults for display (matching lib/modules.sh architecture)
+DEF_FASTP="--length_required 16 --average_qual 30"
+DEF_STAR="--outFilterMultimapNmax 10 --outFilterMismatchNmax ${MISMATCHES:-2} --alignEndsType EndToEnd --outSAMattributes ... MD"
+DEF_BT2="--md --end-to-end (Standard Sensitivity)"
+DEF_HOMER="-style factor -L 2 -localSize 10000 -minDist ${PEAK_DIST:-50}"
+
+if [[ "$ADVANCED_MODE" == "true" ]]; then
+    log_info "Mode:           ADVANCED (Using Overrides)"
+    log_info "Fastp Defaults: $DEF_FASTP"
+    log_info "Fastp Added:    ${ADV_FASTP_ARGS:-(None)}"
+    
+    log_info "Aligner:        $ALIGNER"
+    if [[ "$ALIGNER" == "star" ]]; then log_info "Aligner Def:    $DEF_STAR"; else log_info "Aligner Def:    $DEF_BT2"; fi
+    log_info "Aligner Added:  ${ADV_ALIGNER_ARGS:-(None)}"
+    
+    log_info "Homer Defaults: $DEF_HOMER"
+    log_info "Homer Added:    ${ADV_HOMER_ARGS:-(None)}"
 else
-  rm *.fastq
+    log_info "Mode:           STANDARD"
+    log_info "Fastp Config:   $DEF_FASTP"
+    log_info "Aligner:        $ALIGNER"
+    if [[ "$ALIGNER" == "star" ]]; then log_info "Aligner Config: $DEF_STAR"; else log_info "Aligner Config: $DEF_BT2"; fi
+    log_info "Homer Config:   $DEF_HOMER"
 fi
+log_info "------------------------------------------------------------------"
 
-
-## Strip UMI:
-echo "\n# Strip UMIs from the reads using CTK stripBarcode.pl:" | tee -a ${BASE_NAME}_logs.txt
-echo "\n  ${BASE_NAME}_collapsed.fa --> ${BASE_NAME}_collapsed_rmBC.fa" | tee -a ${BASE_NAME}_logs.txt
-stripBarcode.pl -len 7 -v ${BASE_NAME}_collapsed.fa ${BASE_NAME}_collapsed_rmBC.fa
-if [ "$KEEP" == "yes" ]; then
-  mv *_collapsed.fa intermediate
+# Dependencies Check
+check_dependency fastp
+check_dependency fastp
+if [[ "$ALIGNER" == "bowtie2" ]]; then
+    check_dependency bowtie2
 else
-  rm *_collapsed.fa
+    check_dependency STAR
 fi
+check_dependency bedtools
+check_dependency samtools
+check_dependency tag2collapse.pl
+check_dependency seqkit
 
-
-## Perform demultiplexing if DEMUX option is yes:
-if [ "$DEMUX" == "yes" ]; then
-  ## Demultiplex Samples:
-  echo "\n# Demultiplex samples with barcodes using fastx_barcode_splitter, allowing ${barcodeMis} mismatches:" | tee -a ${BASE_NAME}_logs.txt
-  echo "\n  ${BASE_NAME}_collapsed_rmBC.fa --> demultiplexed .fa files.\n  Unmatched.fa file will be removed at the end." | tee -a ${BASE_NAME}_logs.txt
-  cat ${BASE_NAME}_collapsed_rmBC.fa | fastx_barcode_splitter.pl --bcfile ${BASE_NAME}_BC.txt --bol --mismatches ${barcodeMis} --prefix "${BASE_NAME}_" --suffix ".fa" | tee -a ${BASE_NAME}_logs.txt
-  if [ "$KEEP" == "yes" ]; then
-    mv *_collapsed_rmBC.fa intermediate
-    mv *unmatched.fa intermediate
-  else
-    rm *_collapsed_rmBC.fa
-    rm *unmatched.fa
-  fi
-fi
-
-## Barcode, Spacer and L32 trimming.
-echo "\n# Trim ${adapter5}nt from 5'-end using fastx_trimmer, followed by 3'-end adapter ${adapter3} removal using fastx_clipper, and keeping reads with minimum length of ${minLength}:" | tee -a ${BASE_NAME}_logs.txt
-for input_file in ${BASE_NAME}*.fa; do
-	echo "\n  ${input_file}:" | tee -a ${BASE_NAME}_logs.txt
-  output_file="$(basename "${input_file}" .fa)_groomed.fa"
-  fastx_trimmer -f ${adapter5} -i "${input_file}" | fastx_clipper -l ${minLength} -a ${adapter3} -v -o ${output_file} | tee -a ${BASE_NAME}_logs.txt
-  echo "  Remaining Reads: $(awk "BEGIN { printf \"%.2f\", $(wc -l < $(basename "${input_file}" .fa)_groomed.fa) / $(wc -l < "$input_file") * 100 }")"% | tee -a ${BASE_NAME}_logs.txt
-  if [ "$KEEP" == "yes" ]; then
-    mv ${input_file} intermediate
-  else
-    rm ${input_file}
-  fi
-done
-
-## Map reads and sort/index bam file:
-echo "\n# Map reads using bowtie2 (${alignMis} mismatches with ${seedLength}nt seed length) and create sorted/indexed bam/bed files:" | tee -a ${BASE_NAME}_logs.txt
-for input_fasta in *_groomed.fa; do
-  echo "\n  ${input_fasta}:" | tee -a ${BASE_NAME}_logs.txt
-  bowtie2 -f -N ${alignMis} -L ${seedLength} -p ${threads} -x ${genome_index} -U ${input_fasta} -S $(basename "$input_fasta" _groomed.fa).sam 2>&1 | tee -a ${BASE_NAME}_logs.txt 
-  if [ "$threads" == "1" ]; then
-    samtools view -b -h $(basename "$input_fasta" _groomed.fa).sam -o $(basename "$input_fasta" _groomed.fa).bam
-    samtools sort $(basename "$input_fasta" _groomed.fa).bam -o $(basename "$input_fasta" _groomed.fa).sorted.bam
-    samtools index -b $(basename "$input_fasta" _groomed.fa).sorted.bam $(basename "$input_fasta" _groomed.fa).sorted.bam.bai
-  else
-    samtools view -b -@ ${threads} -h $(basename "$input_fasta" _groomed.fa).sam -o $(basename "$input_fasta" _groomed.fa).bam
-    samtools sort -@ ${threads} $(basename "$input_fasta" _groomed.fa).bam -o $(basename "$input_fasta" _groomed.fa).sorted.bam
-    samtools index -@ ${threads} -b $(basename "$input_fasta" _groomed.fa).sorted.bam $(basename "$input_fasta" _groomed.fa).sorted.bam.bai
-  fi
-  bedtools bamtobed -i $(basename "$input_fasta" _groomed.fa).sorted.bam > $(basename "$input_fasta" _groomed.fa).sorted.bed
-  mv ${input_fasta} ${BASE_NAME}_groomed_reads 
-  if [ "$KEEP" == "yes" ]; then
-    mv $(basename "$input_fasta" _groomed.fa).sam intermediate
-    mv $(basename "$input_fasta" _groomed.fa).bam intermediate
-  else
-    rm $(basename "$input_fasta" _groomed.fa).sam
-    rm $(basename "$input_fasta" _groomed.fa).bam
-  fi
-done
-
-## Move files to corresponding directories:
-mv *sorted.bam BAM
-mv *sorted.bam.bai BAM
-mv BAM ${BASE_NAME}_mapped_reads
-
-## Collapse PCR dups and make bedgraph:
-echo "\n# Collapse PCR duplicates from the mapped reads using CTK tag2collapse.pl." | tee -a ${BASE_NAME}_logs.txt
-echo "# From collapsed bed file, use bedtools genomecov to make bedgraph files." | tee -a ${BASE_NAME}_logs.txt
-for input_bed in *.bed; do
-  tag2collapse.pl --keep-tag-name --keep-max-score --random-barcode -EM -1 --seq-error-model em-local -weight --weight-in-name  ${input_bed} $(basename "$input_bed" .bed).collapsed.bed | tee -a ${BASE_NAME}_logs.txt
-  mv ${input_bed} BED
-  bedtools genomecov -i $(basename "$input_bed" .bed).collapsed.bed -strand + -g ${genome_index}.fa.fai -bg > $(basename "$input_bed" .bed).collapsed.pos.bedgraph
-  bedtools genomecov -i $(basename "$input_bed" .bed).collapsed.bed -strand - -g ${genome_index}.fa.fai -bg > $(basename "$input_bed" .bed).collapsed.rev.bedgraph
-  mv $(basename "$input_bed" .bed).collapsed.bed collapsedBED
-  mv $(basename "$input_bed" .bed).collapsed.pos.bedgraph BEDGRAPH
-  mv $(basename "$input_bed" .bed).collapsed.rev.bedgraph BEDGRAPH
-done
-
-## Move files to corresponding directories:
-mv BED ${BASE_NAME}_mapped_reads
-mv collapsedBED ${BASE_NAME}_mapped_reads
-mv BEDGRAPH ${BASE_NAME}_mapped_reads
-
-if [ "$DEMUX" == "yes" ]; then
-  HOMER_INPUT_NAME=${BASE_NAME}_combined
+# Validate STAR Index
+# Validate Index
+if [[ "$ALIGNER" == "bowtie2" ]]; then
+    check_bowtie_index "$GENOME_INDEX" || exit 1
 else
-  HOMER_INPUT_NAME=${BASE_NAME}
+    check_star_index "$GENOME_INDEX" || exit 1
 fi
 
-## Combine all bed files for demultiplexed files:
-if [ "$DEMUX" == "yes" ]; then
-  echo "\n# Combine collapsed BED files to make global BED file for the experiment." | tee -a ${BASE_NAME}_logs.txt
-  cat ${BASE_NAME}_mapped_reads/collapsedBED/*.bed > ${HOMER_INPUT_NAME}.bed
+# Increase file limit for STAR sorting
+ulimit -n 2048 2>/dev/null || true
+
+# ------------------------------------------------------------------
+# Display Clean Banner (If not Child)
+# ------------------------------------------------------------------
+if [[ "$CHILD_MODE" != "true" ]]; then
+    # Print Clean Banner to Console
+    console_msg "********************************************************************************"
+    console_msg "CLIPittyClip Standard Pipeline v3.0"
+    console_msg "Started: $(date '+%Y-%m-%d %H:%M:%S')"
+    if [[ -n "$INPUT_DIR" ]]; then
+        console_msg "Input Directory: $INPUT_DIR"
+    else
+        console_msg "Input File: $(basename "$INPUT_FILE")"
+    fi
+    console_msg "Index: $GENOME_INDEX"
+    console_msg "Threads: $THREADS | UMI: ${UMI_LEN}bp | Adapter: L32"
+    console_msg "********************************************************************************"
+    
+    # Log Start (File Only)
+    {
+        echo "================================================================================"
+        echo "CLIPittyClip Analysis Run Started: $(date)"
+        if [[ -n "$INPUT_DIR" ]]; then
+            echo "Input Directory: $INPUT_DIR"
+        else
+            echo "Input File: $INPUT_FILE"
+        fi
+        echo "Command Line: $0 $@"
+        echo "--------------------------------------------------------------------------------"
+    } >> "$LOG_FILE"
+fi
+
+
+# ------------------------------------------------------------------
+if [[ "$SAMPLE_SIZE" -gt 0 ]] && [[ -n "$INPUT_FILE" ]]; then
+    if [[ "$CHILD_MODE" != "true" ]]; then
+        console_msg "\n[TEST DRIVE] Sampling first $SAMPLE_SIZE reads..."
+    fi
+    log_info "Test Drive Mode: Sampling first $SAMPLE_SIZE reads from input..."
+    
+    # Define sampled filename
+    SAMPLED_INPUT="${INPUT_FILE%.fastq.gz}_sampled_${SAMPLE_SIZE}.fastq.gz"
+    if [[ "$INPUT_FILE" == *.fq.gz ]]; then
+        SAMPLED_INPUT="${INPUT_FILE%.fq.gz}_sampled_${SAMPLE_SIZE}.fastq.gz"
+    fi
+    SAMPLED_INPUT="$(basename "$SAMPLED_INPUT")" # Keep in CWD
+    
+    # Calculate lines: 4 lines per read
+    LINES=$((SAMPLE_SIZE * 4))
+    
+    # Stream process: gunzip -> head -> gzip
+    # This is efficient and avoids unzipping the whole file
+    gzip -cd "$INPUT_FILE" | head -n "$LINES" | gzip > "$SAMPLED_INPUT"
+    
+    if [[ $? -eq 0 && -s "$SAMPLED_INPUT" ]]; then
+        if [[ "$CHILD_MODE" != "true" ]]; then
+            console_msg "  > Done. Created: $SAMPLED_INPUT"
+        fi
+        log_info "Sampling complete. Created: $SAMPLED_INPUT"
+        # SWITCH INPUT to the small file for the rest of the pipeline
+        INPUT_FILE="$(pwd)/$SAMPLED_INPUT"
+        # Reset SAMPLE_SIZE to 0 so we don't try to resample inside child processes (redundant)
+        SAMPLE_SIZE=0 
+    else
+        log_error "Sampling failed."
+        exit 1
+    fi
+fi
+
+# ------------------------------------------------------------------
+# Main Pipeline
+# ------------------------------------------------------------------
+
+# 0a. Directory Input Mode (Pre-demultiplexed FASTQs)
+if [[ -n "$INPUT_DIR" ]]; then
+    console_msg "\n[DIRECTORY INPUT MODE]"
+    console_msg "  > Input Directory: $INPUT_DIR"
+    
+    # Count files
+    SAMPLE_FILES=("$INPUT_DIR"/*.fastq.gz "$INPUT_DIR"/*.fq.gz)
+    # Filter to only existing files
+    SAMPLE_FILES=($(ls "$INPUT_DIR"/*.fastq.gz "$INPUT_DIR"/*.fq.gz 2>/dev/null))
+    total_samples=${#SAMPLE_FILES[@]}
+    
+    console_msg "  > Found $total_samples sample files"
+    
+    # Build extra flags for child processes
+    EXTRA_FLAGS=""
+    # Only pass CIMS/CITS to children if NOT using groups file (group CTK runs after batch)
+    if [[ -z "$GROUPS_FILE" ]]; then
+        if [[ "$RUN_CIMS" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --cims"; fi
+        if [[ "$RUN_CITS" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --cits"; fi
+    fi
+    if [[ "$VERBOSE" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --verbose"; fi
+    if [[ "$KEEP_INTERMEDIATE" == "yes" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS -k"; fi
+    if [[ "$SAMPLE_SIZE" -gt 0 ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --sample $SAMPLE_SIZE"; fi
+    EXTRA_FLAGS="$EXTRA_FLAGS --aligner $ALIGNER"
+    EXTRA_FLAGS="$EXTRA_FLAGS --no-dedup"  # Assume pre-processed, skip dedup
+    EXTRA_FLAGS="$EXTRA_FLAGS --child"
+    
+    console_msg "\n[BATCH ANALYSIS]"
+    
+    current_sample=0
+    for sample in "${SAMPLE_FILES[@]}"; do
+        if [ -f "$sample" ]; then
+            ((current_sample++))
+            sample_name=$(basename "$sample")
+            sample_name="${sample_name%.fastq.gz}"
+            sample_name="${sample_name%.fq.gz}"
+            
+            printf "  %2d/%-2d %-20s : " "$current_sample" "$total_samples" "$sample_name"
+            
+            echo "[BATCH] Launching analysis for sample: $sample_name" >> "$LOG_FILE"
+            
+            self_script="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+            
+            cmd="bash $self_script \
+                -i $sample \
+                -x $GENOME_INDEX \
+                -t $THREADS \
+                -u $UMI_LEN \
+                -a $ADAPTER_3 \
+                -o ${sample_name} \
+                $EXTRA_FLAGS"
+            
+            $cmd
+            
+            if [ $? -eq 0 ]; then
+                update_status_done
+                echo "[BATCH] Sample $sample_name analysis complete." >> "$LOG_FILE"
+            else
+                echo -e "${RED}FAILED${NC}"
+                log_error ">>> Sample $sample_name analysis FAILED."
+            fi
+        fi
+    done
+    
+    # Aggregation - same as demux path
+    INPUT_BASENAME=$(basename "$INPUT_DIR")
+    OUTPUT_ROOT="${INPUT_BASENAME}_output"
+    
+    DIR_BAM="1_BAM"
+    DIR_BED="2_COLLAPSED_BED"
+    DIR_BG="3_BEDGRAPH"
+    DIR_PEAKS="4_PEAKS"
+    # OTHERS folder number depends on whether CTK analysis is enabled
+    if [[ "$RUN_CIMS" == "true" ]] || [[ "$RUN_CITS" == "true" ]]; then
+        DIR_OTHERS="6_OTHERS"
+    else
+        DIR_OTHERS="5_OTHERS"
+    fi
+    DIR_REPORTS="REPORTS"
+    DIR_PEAK_LOGS="REPORTS/PEAK"
+    DIR_IND_PEAK_LOGS="REPORTS/PEAK/INDIVIDUAL_SAMPLES"
+    
+    # Create base directories (CTK folders created conditionally during aggregation)
+    mkdir -p "$OUTPUT_ROOT/$DIR_BAM" \
+             "$OUTPUT_ROOT/$DIR_BED" \
+             "$OUTPUT_ROOT/$DIR_BG" \
+             "$OUTPUT_ROOT/$DIR_PEAKS/SAMPLE_PEAKS" \
+             "$OUTPUT_ROOT/$DIR_PEAKS/Combined_peaks" \
+             "$OUTPUT_ROOT/$DIR_OTHERS/STAR_OUTPUT" \
+             "$OUTPUT_ROOT/$DIR_REPORTS/FASTP_REPORT" \
+             "$OUTPUT_ROOT/$DIR_REPORTS/STAR_LOGS/DETAILED_LOGS_CAN_BE_DELETED" \
+             "$OUTPUT_ROOT/$DIR_PEAK_LOGS" \
+             "$OUTPUT_ROOT/$DIR_IND_PEAK_LOGS"
+    
+    # Run Group-based CTK Analysis (if groups file provided)
+    if [[ -n "$GROUPS_FILE" ]]; then
+        run_group_ctk_analysis "$GROUPS_FILE" "$OUTPUT_ROOT" "$GENOME_INDEX" \
+            "$CIMS_ITERATIONS" "$CIMS_FDR" "$CITS_PVALUE" "$CITS_GAP" \
+            "$MOTIF_FLANK" "$RUN_MOTIF" "$RUN_CIMS" "$RUN_CITS"
+    fi
+    
+    console_msg "\n[AGGREGATION]"
+    
+    # Collect outputs from each sample's output directory
+    for sample in "${SAMPLE_FILES[@]}"; do
+        sample_name=$(basename "$sample")
+        sample_name="${sample_name%.fastq.gz}"
+        sample_name="${sample_name%.fq.gz}"
+        sample_out="${sample_name}_analysis"
+        
+        if [[ -d "$sample_out" ]]; then
+            console_msg "  > Collecting: $sample_name"
+            
+            # Move BAMs
+            mv "$sample_out"/1_BAM/*.bam* "$OUTPUT_ROOT/$DIR_BAM/" 2>/dev/null
+            
+            # Move CIMS/CITS (if they exist)
+            if [[ -d "$sample_out/5_CIMS" ]]; then
+                 mv "$sample_out"/5_CIMS/* "$OUTPUT_ROOT/$DIR_CIMS/" 2>/dev/null
+            else
+                 # If child process produced flat files (likely)
+                 mv "$sample_out"/*_CIMS.txt "$OUTPUT_ROOT/$DIR_CIMS/" 2>/dev/null
+            fi
+            
+            if [[ -d "$sample_out/6_CITS" ]]; then
+                 mv "$sample_out"/6_CITS/* "$OUTPUT_ROOT/$DIR_CITS/" 2>/dev/null
+            else
+                 mv "$sample_out"/*_CITS.bed "$OUTPUT_ROOT/$DIR_CITS/" 2>/dev/null
+            fi
+            # Move BEDs
+            mv "$sample_out"/2_COLLAPSED_BED/*.bed "$OUTPUT_ROOT/$DIR_BED/" 2>/dev/null
+            # Move Bedgraphs
+            mv "$sample_out"/3_BEDGRAPH/*.bedgraph "$OUTPUT_ROOT/$DIR_BG/" 2>/dev/null
+            cp "$sample_out"/3_BEDGRAPH/chrom.sizes "$OUTPUT_ROOT/$DIR_BG/" 2>/dev/null
+            # Move Peak folders
+            mv "$sample_out"/4_PEAKS/* "$OUTPUT_ROOT/$DIR_PEAKS/SAMPLE_PEAKS/${sample_name}_peaks/" 2>/dev/null || true
+            # Move Reports
+            mv "$sample_out"/REPORTS/FASTP_REPORT/* "$OUTPUT_ROOT/$DIR_REPORTS/FASTP_REPORT/" 2>/dev/null
+            mv "$sample_out"/REPORTS/*_pipeline.log "$OUTPUT_ROOT/$DIR_REPORTS/" 2>/dev/null
+            
+            # Cleanup sample dir (keep if -k)
+            if [[ "$KEEP_INTERMEDIATE" != "yes" ]]; then
+                rm -rf "$sample_out"
+            fi
+        fi
+    done
+    
+    # Combined Peak Calling
+    console_msg "\n[COMBINED PEAK CALLING]"
+    BED_DIR="$OUTPUT_ROOT/$DIR_BED"
+    BED_SYMLINK="BED"
+    
+    if [[ -d "$BED_SYMLINK" ]]; then rm -rf "$BED_SYMLINK"; fi
+    ln -s "$BED_DIR" "$BED_SYMLINK"
+    
+    PEAK_LOG="$OUTPUT_ROOT/$DIR_PEAK_LOGS/${INPUT_BASENAME}_PeakCalling.log"
+    "$SCRIPT_DIR/PEAKittyPeak.sh" -n "Combined" -p "$PEAK_DIST" > "$PEAK_LOG" 2>&1
+    
+    rm -f "$BED_SYMLINK"
+    
+    # Move combined results
+    if [[ -d "PEAKS" ]]; then
+        mv PEAKS/* "$OUTPUT_ROOT/$DIR_PEAKS/Combined_peaks/" 2>/dev/null
+        rm -rf PEAKS
+    fi
+    
+    console_msg "  > Combined peaks: $OUTPUT_ROOT/$DIR_PEAKS/Combined_peaks/"
+    
+    # Final Summary
+    PIPELINE_END=$(date +%s)
+    DURATION=$((PIPELINE_END - PIPELINE_START))
+    
+    console_msg "\n[COMPLETE]"
+    console_msg "  > Duration: $((DURATION / 60))m $((DURATION % 60))s"
+    console_msg "  > Output: $OUTPUT_ROOT/"
+    
+    send_notification "CLIPittyClip" "Directory batch analysis complete: $total_samples samples"
+    
+    exit 0
+fi
+
+# 0b. Demultiplexing (Recursive Branch)
+if [[ "$DEMUX" == "yes" ]]; then
+    
+    # 1a. Deduplication (if enabled)
+    if [[ "$DEDUP_MODE" == "true" ]]; then
+        console_msg "\n[DEDUPLICATING]"
+        print_section_item "Deduplicating Pooled Reads (SeqKit)"
+        
+        dedup_temp="pooled_dedup.fastq.gz"
+        seqkit rmdup -s -o "$dedup_temp" "$INPUT_FILE" 2>> "${LOG_FILE}"
+        
+        if [[ $? -eq 0 && -s "$dedup_temp" ]]; then
+            WORK_INPUT="$dedup_temp"
+            print_section_item "Deduplicating Complete"
+        else
+            log_warning "Deduplication failed. Using original file."
+            rm -f "$dedup_temp"
+            WORK_INPUT="$INPUT_FILE"
+        fi
+    else
+        WORK_INPUT="$INPUT_FILE"
+    fi
+    
+    # 1b. Demultiplexing
+    console_msg "\n[DEMULTIPLEXING]"
+    print_section_item "Barcodes: $(basename "$BARCODE_FILE")"
+    print_section_item "Mismatches Allowed: $MISMATCHES"
+    
+    # Run demultiplexing (with dedup disabled since we already did it)
+    run_demultiplexing "$WORK_INPUT" "$BARCODE_FILE" "$SAMPLE_SIZE" "false"
+    
+    print_section_item "Demultiplexing Complete"
+    
+    # Cleanup dedup temp file
+    if [[ -f "pooled_dedup.fastq.gz" ]]; then
+        rm -f "pooled_dedup.fastq.gz"
+        log_info "Cleaned up pooled dedup temp file."
+    fi
+    
+    send_notification "CLIPittyClip" "Demultiplexing complete for $(basename "$INPUT_FILE")"
+    
+    echo "" # Newline after progress
+
+    # 1.5. Demux Summary Table
+    console_msg "\n[DEMUX SUMMARY]"
+    printf "  %-20s %-12s %s\n" "Sample" "Reads" "% of Total"
+    console_msg "  ------------------------------------------------"
+    
+    total_reads=0
+    # Calculate totals first
+    for sample in demux_fastq/*.fastq.gz; do
+        if [ -f "$sample" ]; then
+            # Fast counting using zcat/wc is slow for huge files.
+            # But fastp json output from demux might be better?
+            # Cutadapt demux doesn't give easy per-sample JSON unless parsed.
+            # We will use wc -l / 4. 
+            # Ideally this should be optimized but for now is robust.
+            # Actually, `fastq` is 4 lines per read.
+            lines=$(gzip -dc "$sample" | wc -l)
+            count=$((lines / 4))
+            total_reads=$((total_reads + count))
+        fi
+    done
+
+    # Print table
+    for sample in demux_fastq/*.fastq.gz; do
+        if [ -f "$sample" ]; then
+            sample_name=$(basename "$sample" .fastq.gz)
+            lines=$(gzip -dc "$sample" | wc -l)
+            count=$((lines / 4))
+            
+            if [ "$total_reads" -gt 0 ]; then
+                pct=$(awk "BEGIN {printf \"%.1f\", ($count / $total_reads) * 100}")
+            else
+                pct="0.0"
+            fi
+            
+            printf "  %-20s %-12s %s%%\n" "$sample_name" "$count" "$pct"
+            # Log the stats too
+            echo "[STATS] $sample_name: $count reads ($pct%)" >> "$LOG_FILE"
+        fi
+    done
+    console_msg "  ------------------------------------------------"
+    console_msg "  Total Processed: $total_reads reads"
+    
+    # Check for unknown samples and notify
+    if [[ -f "demux_fastq/unknown.fastq.gz" ]]; then
+        console_msg "  ${YELLOW}Note: 'unknown' samples will not be included in batch analysis.${NC}"
+    fi
+
+    # 2. Iterate and Recurse
+    console_msg "\n[BATCH ANALYSIS]"
+    
+    # Check if we need to pass CIMS/CITS flags
+    EXTRA_FLAGS=""
+    # Only pass CIMS/CITS to children if NOT using groups file (group CTK runs after batch)
+    if [[ -z "$GROUPS_FILE" ]]; then
+        if [[ "$RUN_CIMS" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --cims"; fi
+        if [[ "$RUN_CITS" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --cits"; fi
+    fi
+    if [[ "$VERBOSE" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --verbose"; fi
+    if [[ "$SAMPLE_SIZE" -gt 0 ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --sample $SAMPLE_SIZE"; fi
+    if [[ "$KEEP_INTERMEDIATE" == "yes" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS -k"; fi
+    
+    # Pass Aligner choice
+    EXTRA_FLAGS="$EXTRA_FLAGS --aligner $ALIGNER"
+    
+    # We already deduped the pooled file before demux (if DEDUP_MODE was true).
+    # So we explicitly tell child processes NOT to dedup again to save time.
+    # Note: If user passed --no-dedup, DEDUP_MODE is false, so we don't care (default child is true though).
+    # Wait, default child is true. So we MUST pass --no-dedup regardless of parent mode?
+    # Yes, because the split files are coming from a potentially deduped source.
+    # Even if they weren't deduped (parent --no-dedup), deduping individual split files is less efficient 
+    # than pool dedup, but maybe user wants it? 
+    # Logic: Parent DEDUP_MODE controls the whole workflow.
+    # If Parent DEDUP=true -> Pool Dedup -> Split -> Child (should not dedup).
+    # If Parent DEDUP=false -> No Pool Dedup -> Split -> Child (should not dedup? or follow parent?)
+    # Generally, pass --no-dedup to child to avoid double-dedup.
+    
+    EXTRA_FLAGS="$EXTRA_FLAGS --no-dedup"
+    
+    # Pass --child to suppress header in sub-calls
+    EXTRA_FLAGS="$EXTRA_FLAGS --child"
+
+    # Get sample count for progress (excluding unknown)
+    total_samples=$(ls demux_fastq/*.fastq.gz 2>/dev/null | grep -v "/unknown.fastq.gz" | wc -l | tr -d ' ')
+    current_sample=0
+
+    # Loop through all generated files (skip unknown)
+    for sample in demux_fastq/*.fastq.gz; do
+        if [ -f "$sample" ]; then
+            sample_name=$(basename "$sample" .fastq.gz)
+            
+            # Skip unknown samples
+            if [[ "$sample_name" == "unknown" ]]; then
+                continue
+            fi
+            
+            ((current_sample++))
+            
+            # Print the leader for this sample. 
+            # We use printf without newline, or just let update_status handle the rest?
+            # The Child process will overwrite the same line.
+            # So we print the static prefix here:
+            printf "  %2d/%-2d %-20s : " "$current_sample" "$total_samples" "$sample_name"
+            
+            # Log launch
+            echo "[BATCH] Launching analysis for sample: $sample_name" >> "$LOG_FILE"
+            
+            # Construct command for recursive call
+            self_script="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+            
+            # We must NOT pass -b again
+            cmd="bash $self_script \
+                -i $sample \
+                -x $GENOME_INDEX \
+                -t $THREADS \
+                -u $UMI_LEN \
+                -a $ADAPTER_3 \
+                -o ${sample_name} \
+                $EXTRA_FLAGS"
+            
+            # Run the command. 
+            # In CHILD_MODE, the script will produce `update_status` outputs (echo -ne ... \r).
+            # This should appear on the console right after our printf above.
+            $cmd
+            
+            # When child finishes, we need to print "Done." and a newline to finalize the line.
+            if [ $? -eq 0 ]; then
+                update_status_done
+                echo "[BATCH] Sample $sample_name analysis complete." >> "$LOG_FILE"
+            else
+                echo -e "${RED}FAILED${NC}"
+                log_error ">>> Sample $sample_name analysis FAILED."
+            fi
+        fi
+    done
+    
+    # 3. Aggregation and Filing
+    # Define Final Output Structure
+    INPUT_BASENAME=$(basename "$INPUT_FILE" .fastq.gz) 
+    if [[ "$INPUT_BASENAME" == *"_sampled_"* ]]; then
+        # If sampled was used, try to get original name or keep it
+        # Actually safer to use the original argument input name if possible, 
+        # but here we rely on what we have.
+        # Let's just use a clean name.
+        INPUT_BASENAME="${INPUT_BASENAME%_sampled_*}"
+    fi
+    OUTPUT_ROOT="${INPUT_BASENAME}_output"
+    
+    DIR_DEMUX="0_DEMUX_FASTQ"
+    DIR_BAM="1_BAM"
+    DIR_BED="2_COLLAPSED_BED"
+    DIR_BG="3_BEDGRAPH"
+    DIR_PEAKS="4_PEAKS"
+    # OTHERS folder number depends on whether CTK analysis is enabled
+    if [[ "$RUN_CIMS" == "true" ]] || [[ "$RUN_CITS" == "true" ]]; then
+        DIR_OTHERS="6_OTHERS"
+    else
+        DIR_OTHERS="5_OTHERS"
+    fi
+    DIR_REPORTS="REPORTS"
+    DIR_PEAK_LOGS="REPORTS/PEAK"
+    DIR_IND_PEAK_LOGS="REPORTS/PEAK/INDIVIDUAL_SAMPLES"
+    
+    # Create Central Output Directories (CTK folders created conditionally during aggregation)
+    mkdir -p "$OUTPUT_ROOT/$DIR_DEMUX" \
+             "$OUTPUT_ROOT/$DIR_BAM" \
+             "$OUTPUT_ROOT/$DIR_BED" \
+             "$OUTPUT_ROOT/$DIR_BG" \
+             "$OUTPUT_ROOT/$DIR_PEAKS/SAMPLE_PEAKS" \
+             "$OUTPUT_ROOT/$DIR_PEAKS/Combined_peaks" \
+             "$OUTPUT_ROOT/$DIR_OTHERS/STAR_OUTPUT" \
+             "$OUTPUT_ROOT/$DIR_REPORTS/FASTP_REPORT" \
+             "$OUTPUT_ROOT/$DIR_REPORTS/STAR_LOGS/DETAILED_LOGS_CAN_BE_DELETED" \
+             "$OUTPUT_ROOT/$DIR_PEAK_LOGS" \
+             "$OUTPUT_ROOT/$DIR_IND_PEAK_LOGS"
+    
+    # Run Group-based CTK Analysis (if groups file provided)
+    if [[ -n "$GROUPS_FILE" ]]; then
+        run_group_ctk_analysis "$GROUPS_FILE" "$OUTPUT_ROOT" "$GENOME_INDEX" \
+            "$CIMS_ITERATIONS" "$CIMS_FDR" "$CITS_PVALUE" "$CITS_GAP" \
+            "$MOTIF_FLANK" "$RUN_MOTIF" "$RUN_CIMS" "$RUN_CITS"
+    fi
+             
+    console_msg "\n[AGGREGATION]"
+    console_msg "  > Collecting files into $OUTPUT_ROOT/..."
+    
+    # Move Barcode file if exists? Users usually keep input.
+    # We leave inputs alone.
+    
+    # Collect files from analysis directories
+    count=0
+    for sample in demux_fastq/*.fastq.gz; do
+        if [ -f "$sample" ]; then
+            sample_name=$(basename "$sample" .fastq.gz)
+            
+            # Skip unknown samples
+            [[ "$sample_name" == "unknown" ]] && continue
+            
+            analysis_dir="${sample_name}_analysis"
+            
+            if [[ -d "$analysis_dir" ]]; then
+                # log_info "Organizing output for $sample_name..."
+                
+                # 0. DEMUX FASTQ (Original is in demux_fastq, we can move it)
+                 # Wait, we loop over demux_fastq files.
+                 # Let's move them separately at the end.
+                
+                # 1. BAM
+                bam_file=$(find "$analysis_dir" -name "*mapped.Aligned.sortedByCoord.out.bam")
+                if [[ -n "$bam_file" ]]; then
+                    cp "$bam_file" "$OUTPUT_ROOT/$DIR_BAM/${sample_name}.bam"
+                    cp "${bam_file}.bai" "$OUTPUT_ROOT/$DIR_BAM/${sample_name}.bam.bai" 2>/dev/null
+                fi
+                
+                # 2. BED (Collapsed)
+                bed_file=$(find "$analysis_dir" -name "*_collapsed.bed")
+                if [[ -n "$bed_file" ]]; then
+                    cp "$bed_file" "$OUTPUT_ROOT/$DIR_BED/${sample_name}.bed"
+                    ((count++))
+                fi
+                
+                # 3. Bedgraph & Chrom Sizes
+                bg_pos=$(find "$analysis_dir" -name "*_pos.bedgraph")
+                bg_neg=$(find "$analysis_dir" -name "*_neg.bedgraph")
+                if [[ -n "$bg_pos" ]]; then cp "$bg_pos" "$OUTPUT_ROOT/$DIR_BG/${sample_name}_pos.bedgraph"; fi
+                if [[ -n "$bg_neg" ]]; then cp "$bg_neg" "$OUTPUT_ROOT/$DIR_BG/${sample_name}_neg.bedgraph"; fi
+                
+                # Grab chrom.sizes from ONE sample (overwrite is fine)
+                 # It might be in analysis dir if we extracted it, or just use user provided if needed
+                 # modules.sh extracts it to 'chrom.sizes' in CWD if not provided?
+                 # Actually modules.sh:246 writes to "$chrom_sizes".
+                 extracted_chroms="$analysis_dir/chrom.sizes"
+                 if [[ -f "$extracted_chroms" ]]; then
+                    cp "$extracted_chroms" "$OUTPUT_ROOT/$DIR_BG/chrom.sizes"
+                 fi
+
+                # 4. Peaks (Folder)
+                peak_dir="${analysis_dir}/${sample_name}_peaks"
+                if [[ -d "$peak_dir" ]]; then
+                    cp -r "$peak_dir" "$OUTPUT_ROOT/$DIR_PEAKS/SAMPLE_PEAKS/"
+                fi
+
+                # 5. CTK Analysis (CIMS/CITS) - check for new folder names
+                for ctk_folder in "CTK_Analysis" "CIMS_Analysis" "CITS_Analysis"; do
+                    if [[ -d "$analysis_dir/$ctk_folder" ]]; then
+                        mkdir -p "$OUTPUT_ROOT/5_${ctk_folder}"
+                        cp -r "$analysis_dir/$ctk_folder/"* "$OUTPUT_ROOT/5_${ctk_folder}/" 2>/dev/null
+                        break
+                    fi
+                done
+                    
+                # 4.1. Individual Peak Log (Created by updated modules.sh)
+                # It was created as ${peak_dir}_homer.log
+                peak_log="${peak_dir}_homer.log"
+                if [[ -f "$peak_log" ]]; then
+                    cp "$peak_log" "$OUTPUT_ROOT/$DIR_IND_PEAK_LOGS/${sample_name}_PeakCalling.log"
+                fi
+
+                # 5. Reports & Logs
+                # FASTP
+                cp "$analysis_dir"/*_fastp.html "$OUTPUT_ROOT/$DIR_REPORTS/FASTP_REPORT/" 2>/dev/null
+                cp "$analysis_dir"/*_fastp.json "$OUTPUT_ROOT/$DIR_REPORTS/FASTP_REPORT/" 2>/dev/null
+                
+                # STAR
+                cp "$analysis_dir"/*Log.final.out "$OUTPUT_ROOT/$DIR_REPORTS/STAR_LOGS/" 2>/dev/null
+                cp "$analysis_dir"/*Log.out "$OUTPUT_ROOT/$DIR_REPORTS/STAR_LOGS/DETAILED_LOGS_CAN_BE_DELETED/" 2>/dev/null
+                cp "$analysis_dir"/*Log.progress.out "$OUTPUT_ROOT/$DIR_REPORTS/STAR_LOGS/DETAILED_LOGS_CAN_BE_DELETED/" 2>/dev/null
+                cp "$analysis_dir"/*SJ.out.tab "$OUTPUT_ROOT/$DIR_OTHERS/STAR_OUTPUT/" 2>/dev/null
+                
+                # Pipeline Log (The child specific one)
+                # It's named ${sample_name}_analysis.log inside the dir
+                cp "$analysis_dir"/*.log "$OUTPUT_ROOT/$DIR_REPORTS/${sample_name}_detailed.log" 2>/dev/null
+                
+            else
+                log_warning "Analysis directory not found for $sample_name"
+            fi
+        fi
+    done
+    
+    # Move Demux Fastqs
+    mv demux_fastq/*.fastq.gz "$OUTPUT_ROOT/$DIR_DEMUX/" 2>/dev/null
+    rmdir demux_fastq 2>/dev/null
+    
+    if [[ "$count" -eq 0 ]]; then
+        log_error "No collapsed BED files collected. Skipping Peak Calling."
+        exit 1
+    fi
+    console_msg "  > Found $count BED files."
+    log_info "Collected $count BED files."
+    
+    # Run PEAKittyPeak.sh on Aggregated Data
+    # PEAK_SCRIPT requires BED/ directory. We named it 2_COLLAPSED_BED...
+    # We should update PEAKittyPeak or symlink.
+    # Updating PEAKittyPeak is cleaner, but let's just make a temporary symlink?
+    # Or just tell PEAKittyPeak where to look?
+    # PEAKittyPeak.sh is simple. Let's just create the "Combined Input" manually here?
+    # No, keep modularity. 
+    # Let's symlink:
+    ln -s "2_COLLAPSED_BED" "$OUTPUT_ROOT/BED"
+    
+    PEAK_SCRIPT="$(dirname "$0")/PEAKittyPeak.sh"
+    
+    if [[ -x "$PEAK_SCRIPT" ]]; then
+        console_msg "  > Running HOMER Peak Calling (Aggregated)..."
+        
+        # Run it inside the output root so it sees "BED" symlink and writes "Combined_peaks" there
+        curr_dir=$(pwd)
+        cd "$OUTPUT_ROOT" || exit 1
+        
+        # Define separate log for peak calling details (Specific Name)
+        PEAK_LOG="$(pwd)/$DIR_PEAK_LOGS/${INPUT_BASENAME}_PeakCalling.log"
+        console_msg "  > Detailed Peak Log: $DIR_PEAK_LOGS/$(basename "$PEAK_LOG")"
+
+        # Call script (using absolute path or relative to old pwd)
+        "$PEAK_SCRIPT" > "$PEAK_LOG" 2>&1
+        
+        # Remove symlink
+        rm BED
+        
+        # Move generated `Combined_peaks` to strictly correct place if needed
+        # It creates "Combined_peaks" in CWD ($OUTPUT_ROOT).
+        # We wanted it in "$DIR_PEAKS/Combined_peaks".
+        if [[ -d "Combined_peaks" ]]; then
+            mv "Combined_peaks"/* "$DIR_PEAKS/Combined_peaks/" 2>/dev/null
+            rmdir "Combined_peaks"
+        fi
+        
+        cd "$curr_dir"
+
+        if [ $? -eq 0 ]; then
+             console_msg "  > Peak Calling Complete."
+        else
+             console_msg "  > ${RED}Peak Calling Failed (Check Log)${NC}"
+        fi
+        
+    else
+        log_error "PEAKittyPeak.sh not found."
+    fi
+    
+    # Cleanup Analysis Folders and Temp Files
+    console_msg "  > Cleaning up temporary analysis directories and files..."
+    rm -rf *_analysis barcodes.fasta
+    
+    # Remove sampled input if it exists (pattern match)
+    rm -f *_sampled_*.fastq.gz
+
+    # Also remove the main log if it was created in this dir (CLIPittyClip_*.log)
+    # We want to MOVE it to REPORTS and rename it.
+    if [[ -f "$LOG_FILE" ]]; then
+         mv "$LOG_FILE" "$OUTPUT_ROOT/$DIR_REPORTS/${INPUT_BASENAME}_CLIPittyClip.log"
+         LOG_FILE="$OUTPUT_ROOT/$DIR_REPORTS/${INPUT_BASENAME}_CLIPittyClip.log"
+    fi
+    
+    # Output Summary
+    console_msg "\n[OUTPUT]"
+    console_msg "  All results saved to: $OUTPUT_ROOT/"
+    console_msg "  ├── 0_DEMUX_FASTQ/"
+    console_msg "  ├── 1_BAM/"
+    console_msg "  ├── 2_COLLAPSED_BED/"
+    console_msg "  ├── 3_BEDGRAPH/"
+    console_msg "  ├── 4_PEAKS/"
+    console_msg "  ├── 5_OTHERS/"
+    console_msg "  └── REPORTS/"
+
+    console_msg "\n[SUCCESS] Pipeline finished."
+    
+    # Calculate Duration
+    PIPELINE_END=$(date +%s)
+    DURATION=$((PIPELINE_END - PIPELINE_START))
+    # Format HH:MM:SS
+    H=$((DURATION/3600))
+    M=$(( (DURATION%3600)/60 ))
+    S=$((DURATION%60))
+    
+    console_msg "End Time: $(date '+%Y-%m-%d %H:%M:%S')"
+    console_msg "Total Duration: ${H}h ${M}m ${S}s"
+    
+    send_notification "CLIPittyClip" "Pipeline execution finished successfully. Duration: ${H}h ${M}m ${S}s"
+    exit 0
+fi
+
+# Standard Pipeline (Single Sample)
+# If CHILD_MODE, header is suppressed.
+# Main Banner logic is now handled at the top of the script.
+# We just log the start here for file consistency.
+log_info "Analysis Started."
+
+log_info "Input: $INPUT_FILE"
+log_info "Genome Index: $GENOME_INDEX"
+log_info "Threads: $THREADS"
+
+# Set Basename
+BASENAME=$(basename "$INPUT_FILE" .fastq.gz)
+if [[ "$BASENAME" == "$INPUT_FILE" ]]; then
+    BASENAME=$(basename "$INPUT_FILE" .fq.gz)
+fi
+if [[ -n "$EXP_ID" ]]; then
+    BASENAME="$EXP_ID"
+fi
+
+# Directory Setup
+mkdir -p "${BASENAME}_analysis"
+cd "${BASENAME}_analysis" || exit 1
+LOG_FILE="${BASENAME}_analysis.log" # redirect log to inside analysis dir
+log_info "Working directory: $(pwd)"
+
+# 1. Preprocessing
+run_preprocessing "$INPUT_FILE" "$BASENAME" "$UMI_LEN" "$ADAPTER_3" "$THREADS" "$SAMPLE_SIZE" "$DEDUP_MODE"
+
+# 2. Mapping
+MAPPED_PREFIX="${BASENAME}_mapped"
+if [[ "$ALIGNER" == "bowtie2" ]]; then
+    run_mapping_bowtie2 "${BASENAME}_cleaned.fastq.gz" "$MAPPED_PREFIX" "$GENOME_INDEX" "$THREADS"
 else
-  cat ${BASE_NAME}_mapped_reads/collapsedBED/*.bed > ${BASE_NAME}.bed
+    # Default: STAR
+    run_mapping_star "${BASENAME}_cleaned.fastq.gz" "$MAPPED_PREFIX" "$GENOME_INDEX" "$THREADS" "$MISMATCH_MAX"
+fi
+# 3. PCR Collapse
+# BAM is "${MAPPED_PREFIX}.Aligned.sortedByCoord.out.bam"
+BAM_FILE="${MAPPED_PREFIX}.Aligned.sortedByCoord.out.bam"
+COLLAPSED_BED="${BASENAME}_collapsed.bed"
+MUTATION_FILE="${BASENAME}_mutations.txt"
+
+# Unified preprocessing: Always use parseAlignment.pl for consistent output
+# This generates both tags.bed and mutations.txt (future-proofing for CIMS/CITS)
+log_info "Unified preprocessing: samtools calmd → parseAlignment.pl → tag2collapse.pl"
+check_dependency parseAlignment.pl
+
+run_parse_alignment "${BAM_FILE}" "${BASENAME}_parsed.bed" "${MUTATION_FILE}" "$GENOME_INDEX"
+
+run_collapse_pcr "${BASENAME}_parsed.bed" "${COLLAPSED_BED}"
+
+# 4. Coverage Analysis (Bedgraph)
+run_coverage "${COLLAPSED_BED}" "${BASENAME}" "$GENOME_INDEX/chrom.sizes" # Pass genome file if available
+
+# 5. Peak Calling (Per-Sample - Optional if using Aggregation, but good for QC)
+# 5. Peak Calling (Per-Sample - Optional if using Aggregation, but good for QC)
+PEAK_DIR="${BASENAME}_peaks"
+run_peak_calling "${COLLAPSED_BED}" "${PEAK_DIR}" "$PEAK_DIST" "$PEAK_SIZE" "$FRAG_LEN"
+
+# 6. CIMS / CITS (CTK Analysis)
+if [[ "$RUN_CIMS" == "true" ]] || [[ "$RUN_CITS" == "true" ]]; then
+    log_info "Running CTK CIMS/CITS Analysis..."
+    
+    # Determine output folder name based on flags
+    if [[ "$RUN_CIMS" == "true" && "$RUN_CITS" == "true" ]]; then
+        CTK_OUTPUT="CTK_Analysis"
+    elif [[ "$RUN_CIMS" == "true" ]]; then
+        CTK_OUTPUT="CIMS_Analysis"
+    else
+        CTK_OUTPUT="CITS_Analysis"
+    fi
+    
+    # Find reference FASTA for motif analysis
+    ref_fasta=$(find "$GENOME_INDEX" -name "*.fa" -o -name "*.fasta" 2>/dev/null | head -n 1)
+    if [[ -z "$ref_fasta" ]]; then
+        log_warning "Reference FASTA not found. Motif analysis may be skipped."
+        ref_fasta=""
+    fi
+    
+    mkdir -p "$CTK_OUTPUT"
+    
+    # Run CTK analysis using the STANDARD pipeline outputs (no duplicate preprocessing)
+    run_ctk_analysis \
+        "${COLLAPSED_BED}" \
+        "${MUTATION_FILE}" \
+        "$CTK_OUTPUT" \
+        "$ref_fasta" \
+        "${BASENAME}" \
+        "$CIMS_ITERATIONS" \
+        "$CIMS_FDR" \
+        "$CITS_PVALUE" \
+        "$CITS_GAP" \
+        "$MOTIF_FLANK" \
+        "$RUN_MOTIF" \
+        "$RUN_CIMS" \
+        "$RUN_CITS"
+    
+    log_info "CTK Analysis complete. Output: $CTK_OUTPUT"
 fi
 
-mv ${BASE_NAME}_groomed_reads ${BASE_NAME}
-mv ${BASE_NAME}_mapped_reads ${BASE_NAME}
-
-## Make Tag Directory and call peaks:
-echo "\n# Use HOMER to call peaks, with minimum distance of ${PeakMinDist}, peak size of ${PeakSize}, and fragment length of ${FragLength}" | tee -a ${BASE_NAME}_logs.txt
-makeTagDirectory ${HOMER_INPUT_NAME}_TagDir/ ${HOMER_INPUT_NAME}.bed -single -format bed 2>&1 | tee -a ${BASE_NAME}_logs.txt 
-findPeaks ${HOMER_INPUT_NAME}_TagDir/ -o auto -style factor -L 2 -localSize 10000 -strand separate -minDist ${PeakMinDist} -size ${PeakSize} -fragLength ${FragLength} 2>&1 | tee -a ${BASE_NAME}_logs.txt 
-
-## Process output peaks file to create peaks bed file:
-echo "\n# Process peaks.txt to generate peaks BED file." | tee -a ${BASE_NAME}_logs.txt
-sed '/^[[:blank:]]*#/d;s/#.*//' ${HOMER_INPUT_NAME}_TagDir/peaks.txt > peaksTemp.bed
-awk 'OFS="\t" {print $2, $3, $4, $1, $6, $5}' peaksTemp.bed > peaks.bed
-rm peaksTemp.bed 
-sort -k 1,1 -k2,2n peaks.bed > peaks_Sorted.bed
-
-mv ${HOMER_INPUT_NAME}.bed ${BASE_NAME}_peaks
-mv ${HOMER_INPUT_NAME}_TagDir ${BASE_NAME}_peaks
-mv peaks.bed ${BASE_NAME}_peaks
-
-## 
-echo "\n# Calculate coverages for the peaks for each sample using bedtools coverage." | tee -a ${BASE_NAME}_logs.txt
-for id in ${BASE_NAME}/${BASE_NAME}_mapped_reads/collapsedBED/*.bed; do
-  bedtools coverage -s -a peaks_Sorted.bed -b "${id}" > "coverage_$(basename "$id")"
-done
-
-## move columns to peaks_sorted.bed and make new file.
-echo "\n# Make coverage table for the peaks spanning all samples." | tee -a ${BASE_NAME}_logs.txt
-cp peaks_Sorted.bed ${BASE_NAME}_peakCoverage.txt
-echo "chr\tstart\tend\tname\tscore\tstrand" > colnames.txt
-cat ${BASE_NAME}_peakCoverage.txt >> colnames.txt
-mv colnames.txt ${BASE_NAME}_peakCoverage.txt
-
-for cov_file in coverage_*; do
-  echo $(echo $(basename "${cov_file}" .sorted.collapsed.bed) | cut -d '_' -f 2-) > temp1.txt
-  awk 'FNR>0 {print $7}' ${cov_file} > temp2.txt && cat temp1.txt temp2.txt > temp3.txt
-  paste ${BASE_NAME}_peakCoverage.txt temp3.txt > temp4.txt && mv temp4.txt ${BASE_NAME}_peakCoverage.txt
-  rm temp*.txt
-done
-
-echo "\n# Final output: ${BASE_NAME}_peakCoverage.txt" | tee -a ${BASE_NAME}_logs.txt
-
-mv peaks_Sorted.bed ${BASE_NAME}_peaks
-mv coverage_* peakCoverage
-mv peakCoverage ${BASE_NAME}_peaks
-mv ${BASE_NAME}_peakCoverage.txt ${BASE_NAME}_peaks
-mv ${BASE_NAME}_peaks ${BASE_NAME}
-if [ "$KEEP" == "yes" ]; then
-  mv intermediate ${BASE_NAME}
+# Cleanup
+if [[ "$KEEP_INTERMEDIATE" != "yes" ]]; then
+    log_info "Cleaning up intermediate files..."
+    rm -f "${BASENAME}_cleaned.fastq.gz" "${BASENAME}_raw.bed" "${BASENAME}_parsed.bed"
 fi
 
+log_info "Analysis Finished Successfully!"
+log_info "Results in: $(pwd)"
 
-echo "\n# Analysis Finished: $(date +'%Y/%m/%d %H:%M')" | tee -a ${BASE_NAME}_logs.txt
-echo "\n# All outputs are in ${BASE_NAME} folder." | tee -a ${BASE_NAME}_logs.txt
-if [ "$KEEP" == "yes" ]; then
-  echo "\n# All intermediate files are in ${BASE_NAME}/intermediate folder." | tee -a ${BASE_NAME}_logs.txt
-fi
-mv ${BASE_NAME}_logs.txt ${BASE_NAME}
+# Calculate Duration
+PIPELINE_END=$(date +%s)
+DURATION=$((PIPELINE_END - PIPELINE_START))
+H=$((DURATION/3600))
+M=$(( (DURATION%3600)/60 ))
+S=$((DURATION%60))
+
+log_info "End Time: $(date '+%Y-%m-%d %H:%M:%S')"
+log_info "Total Duration: ${H}h ${M}m ${S}s"
+
+send_notification "CLIPittyClip" "Analysis finished for $BASENAME. Duration: ${H}h ${M}m ${S}s"

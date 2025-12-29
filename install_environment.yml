@@ -8,14 +8,13 @@ dependencies:
   - python
   - trim-galore
   - bedtools
-  - samtools=1.15
+  - samtools
   - pandas
   - numpy
   - scipy
   - seaborn
   - matplotlib
-  - perl=5.32.1
-  - fastx_toolkit
+  - perl
   - bowtie2
   - ca-certificates
   - openssl
@@ -24,6 +23,11 @@ dependencies:
   - perl-bioperl
   - perl-math-cdf
   - bwa
-  - htslib=1.15
+  - htslib
   - certifi
   - ctk
+  - star
+  - cutadapt
+  - fastp
+  - seqkit
+  - homer

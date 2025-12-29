@@ -1,199 +1,244 @@
-# CLIPittyClip: Single-line CLIP data analysis pipeline
-- Version 2.0
-- Author: Soon Yi
-- Last updated: 2024-01-05
--------------------------------------------------------------------------------------------------------------------
-CLIPittyClip is a single command line CLIP analysis pipeline, from fastq.gz to peaks.
+<p align="center">
+  <img src="logo.png" alt="CLIPittyClip Logo" width="400">
+</p>
 
-The pipeline utilizes following programs: 
- - fastx_toolkit (fastq_quality_filter, collapser, barcode_splitter, trimmer, clipper)
- - ctk (stripBarcode, tag2collapse)
- - bowtie2
- - samtools (view, sort, index)
- - bedtools (bamtobed, genomecov, coverage)
- - Homer (makeTagDirectory, findPeaks)
--------------------------------------------------------------------------------------------------------------------
- ![alt text](https://github.com/S00NYI/CLIPittyClip/blob/main/Analysis_Outline.png?raw=true)
--------------------------------------------------------------------------------------------------------------------
-CLIPittyClip has been tested in:
-- Apple MacBook Pro (2016) Intel Core i7 Montery 12.6
-- Apple MacBook Pro M2 Montery 12.6
-- Apple MacBook Air M2 Ventura 13.5
-- Ubuntu 20.04.6 LTS 64bit
--------------------------------------------------------------------------------------------------------------------
-## Installation:
+# CLIPittyClip: Modern CLIP-seq Analysis Pipeline
+**Version 3.0.0**
 
-Using terminal, traverse to the CLIPittyClip folder.
+A comprehensive, single-command CLIP-seq data analysis pipeline from FASTQ to peaks and crosslink sites.
 
-Use the install_environment.yml to install necessary packages:
+## Overview
+
+CLIPittyClip v3.0 provides a complete, modernized workflow for CLIP-seq analysis:
+
+- **Dual Aligner Support**: STAR (default) or Bowtie2
+- **Unified Preprocessing**: `samtools calmd` → `parseAlignment.pl` → `tag2collapse.pl`
+- **Integrated QC**: `fastp` for quality filtering, trimming, and UMI extraction
+- **Demultiplexing**: Native barcode-based sample splitting with `cutadapt`
+- **CIMS/CITS Analysis**: Zhang lab's CTK toolkit integration for crosslink site detection
+- **Interactive Wizard**: `--advanced` mode for parameter tuning
+- **Flexible Output**: Conditional folder naming based on analysis type
+
+## Pipeline Flow
+
+```mermaid
+flowchart TD
+    subgraph INPUT["1. Input & Preprocessing"]
+        A["Pooled FASTQ"] --> B["SeqKit Dedup"]
+        B --> C["Cutadapt Demux"]
+        C --> D["Per-Sample FASTQs"]
+    end
+    
+    subgraph ALIGN["2. Per-Sample Processing"]
+        D --> E["fastp QC"]
+        E --> F{"Aligner"}
+        F -->|STAR| G["STAR"]
+        F -->|Bowtie2| H["Bowtie2"]
+        G --> I["Sorted BAM"]
+        H --> I
+    end
+    
+    subgraph UNIFIED["3. Unified Preprocessing"]
+        I --> J["samtools calmd"]
+        J --> K["parseAlignment.pl"]
+        K --> L["tags.bed + mutations.txt"]
+        L --> M["tag2collapse.pl"]
+        M --> N["Collapsed BED"]
+    end
+    
+    subgraph ANALYSIS["4. Analysis"]
+        N --> O["Bedgraph Coverage"]
+        N --> P["HOMER Peaks"]
+        N --> Q{"CIMS/CITS?"}
+        Q -->|Yes| R["CIMS.pl"]
+        Q -->|Yes| S["CITS.pl"]
+        R --> T["CIMS Results"]
+        S --> U["CITS Results"]
+    end
 ```
-conda env create -n CLIPittyClip_env -f install_environment.yml
-```
-For MacBook with Apple silicon, you may want to try the following if above conda call does not work:
-```
-CONDA_SUBDIR=osx-64 conda env create -n CLIPittyClip_env -f install_environment.yml
-```
-***Note***: Using mamba instead of conda will be much faster.
 
-Restart terminal and activate the CLIPittyClip_env: 
-```
-conda activate CLIPittyClip_env
+> **Note**: Unified preprocessing always runs, generating `mutations.txt` for CIMS/CITS compatibility.
+
+## Installation
+
+### 1. Clone Repository
+```bash
+git clone https://github.com/S00NYI/CLIPittyClip.git
+cd CLIPittyClip
 ```
 
-Install Homer by following instructions on Homer website: http://homer.ucsd.edu/homer/introduction/install.html 
-
-CLIPittyClip_env environment have all the necessary prerequisites to install Homer.
-
-Also, make sure to add Homer to PATH variable.  
-
-Lastly, add directory in which CLIPittyClip.sh is located in to PATH variable by running install_zshrc.sh (or install_bashrc.sh) file.  
+### 2. Create Conda Environment
+```bash
+conda env create -f install_environment.yml
+# OR with mamba (faster)
+mamba env create -f install_environment.yml
 ```
-bash install_bashrc.sh
+
+**Apple Silicon (M1/M2/M3)**: If issues arise, force x64 architecture:
+```bash
+conda env create -f install_environment.yml --platform osx-64
 ```
-OR
+
+### 3. Activate & Setup
+```bash
+conda activate clipittyclip_env
+bash install_zshrc.sh  # Add scripts to PATH
 ```
-bash install_zshrc.sh
+
+## Quick Start
+
+```bash
+# Basic analysis with STAR (single file)
+CLIPittyClip.sh -i reads.fastq.gz -x /path/to/star_index -t 8 -u 7
+
+# With demultiplexing
+CLIPittyClip.sh -i pool.fastq.gz -b barcodes.txt -x /path/to/star_index -t 8
+
+# Pre-demultiplexed samples in a folder
+CLIPittyClip.sh -d /path/to/samples_folder/ -x /path/to/star_index -t 8
+
+# Using Bowtie2 instead
+CLIPittyClip.sh -i reads.fastq.gz -x /path/to/bt2_index -t 8 --aligner bowtie2
+
+# With CIMS/CITS analysis
+CLIPittyClip.sh -i reads.fastq.gz -x /path/to/star_index --cims --cits
 ```
-Restart terminal and activate the CLIPittyClip_env. You are now ready to use CLIPittyClip programs.  
+
+## Input Modes
+
+| Mode | Flag | Use Case |
+|------|------|----------|
+| Single file | `-i sample.fastq.gz` | One FASTQ, direct analysis |
+| Pooled + barcodes | `-i pool.fastq.gz -b barcodes.txt` | Demultiplex then analyze |
+| Pre-demuxed folder | `-d /path/to/folder/` | Batch analyze existing FASTQs |
+
+## Command-Line Options
+
+Run `CLIPittyClip.sh --help` for full usage. Key options:
+
+| Option | Description |
+|--------|-------------|
+| `-i <path>` | Input FASTQ file (required unless using `-d`) |
+| `-d <dir>` | Input directory with pre-demultiplexed FASTQs |
+| `-x <path>` | Genome index directory (required) |
+| `-t <int>` | Number of threads |
+| `-u <int>` | UMI length (e.g., 7) |
+| `--aligner` | `star` (default) or `bowtie2` |
+| `-b <path>` | Barcode file for demultiplexing |
+| `--mismatches` | Max barcode mismatches (default: 1) |
+| `--cims` | Enable CIMS analysis |
+| `--cits` | Enable CITS analysis |
+| `--cims-fdr` | CIMS FDR threshold (default: 1) |
+| `--cits-pval` | CITS p-value threshold (default: 1) |
+| `-g, --groups` | Aggregate samples by group for CIMS/CITS |
+| `--no-dedup` | Disable pooled read deduplication |
+| `--sample <int>` | Test mode (first N reads) |
+| `--advanced` | Interactive configuration wizard |
+
+## Group-Based CIMS/CITS Analysis
+
+Use `-g groups.txt` to aggregate replicates/samples before running CIMS/CITS:
+
+```bash
+CLIPittyClip.sh -i pool.fq.gz -b barcodes.txt -x index --cims --cits -g groups.txt
 ```
-conda activate CLIPittyClip_env
+
+**groups.txt format** (tab-separated):
 ```
- 
--------------------------------------------------------------------------------------------------------------------
-## CLIPittyClip.sh 
-### Options:
-
-Options in **bold** are required.
-
-| Options  |Descriptions                                                |Default|
-| :-------:|------------------------------------------------------------|:-----:|
-| h        | print usage information                                    |       |
-| **i**    | **experiment ID**                                          |       |
-| **y**    | **experiment type (e.g., Input, Enrich, or Fraction)**     |       |
-| k        | keep intermediate files (yes/no)                           |no     |
-| q        | quality score threshold (for fastx_quality_filter)         |30     |
-| d        | perform demultiplexing (yes/no)                            |no     |
-| b        | allowed number of mismatches in barcode for demultiplexing |0      |
-| 5        | number of nucleotide to clip from the 5'-end               |10     |
-| 3        | sequence of the 3'-end adapter                             |L32: GTGTCAGTCACTTCCAGCGG|
-| l        | minimum read length after 5/3 end trimming/clipping        |16     |
-| **x**    | **path to genome index**                                   |       |
-| m        | allowed mismatch for mapping                               |0      |
-| s        | seed length for mapping                                    |15     |
-| t        | number of threads to be utilized by bowtie/samtools        |1      |
-| p        | minimum distance between peaks for homer                   |50     |
-| z        | size of peaks for homer                                    |20     |
-| f        | fragment length for homer                                  |25     |
-
--------------------------------------------------------------------------------------------------------------------
-### Usage:
-On terminal, traverse to directory containing your fastq.gz file.
-
-CLIPittyClip.sh can be ran as following:
+G3BP_E_Ars_R1    G3BP_Ars
+G3BP_E_Ars_R2    G3BP_Ars
+NES_E_Ars_R1     NES_Ars
+NES_E_Ars_R2     NES_Ars
 ```
-CLIPittyClip.sh -i ID -y TYPE -x /PATH/TO/GENOME/ANNOTATION/ANNOTATION_FILE_NAME
+
+Samples not listed are treated as individual groups.
+
+## Output Structure
+
 ```
-Options **-i**, **-y**, and **-x** are required.  
-
--i and -y is used to define the input fasta.gz name.
-- ID (*i*) is your experimental ID (e.g. SY1004).
-- Type (*y*) is your short handle describing the experiemnt (e.g. HuR_CLIP).
-- Then, input fastq.gz should have filename as: id_type.fastq.gz
- - For the examples above, input fastq.gz file should have file name as <ins>*SY1004_HuR_CLIP.fastq.gz*</ins>.
-
--x specifies path to index files for bowtie2 mapping and genome file for bedGraph generation:  
-- Bowtie2 index files can be made by using bowtie2-build and supplying genome fasta files.
-- Here are example Bowtie2 index files made using GRCh38.primary_assembly.genome.fa downloaded from GENCODE.
-  - GRCh38.primary_assembly.genome.1.bt2
-  - GRCh38.primary_assembly.genome.2.bt2
-  - GRCh38.primary_assembly.genome.3.bt2
-  - GRCh38.primary_assembly.genome.4.bt2
-  - GRCh38.primary_assembly.genome.rev.1.bt2
-  - GRCh38.primary_assembly.genome.rev.2.bt2
-- For this example, -x option should be specified as:
-  - /PATH/TO/GENOME/ANNOTATION/GRCh38.primary_assembly.genome
-
-- Genome file for bedtools genomecov should also have same path and name scheme as bowtie2 index:
-  - /PATH/TO/GENOME/ANNOTATION/GRCh38.primary_assembly.genome.fa.fai
-  - This .fa.fai file can be easily made by:
-    - samtools faidx /PATH/TO/GENOME/ANNOTATION/GRCh38.primary_assembly.genome.fa
-
--d option is used to turn on/off sample demultiplexing:
-- If demultiplexing is required, make sure to set -d option to yes (default is no).
-  - If -d option is set to 'yes', barcode file should be provided.
-  - Barcode file format information: http://hannonlab.cshl.edu/fastx_toolkit/commandline.html#fastx_barcode_splitter_usage
-  - Barcode file should have the same name convention as fastq.gz file, followed by '_BC.txt'.
-   - For the example fastq.gz above, barcode file should have filename as <ins>*SY1004_HuR_CLIP_BC.txt*</ins>
-
--------------------------------------------------------------------------------------------------------------------
-## MAPittyMap.sh 
-### Options:
-
-Options in **bold** are required.
-
-| Options  |Descriptions                                                |Default|
-| :-------:|------------------------------------------------------------|:-----:|
-| h        | print usage information                                    |       |
-| **i**    | **experiment ID**                                          |       |
-| **y**    | **experiment type (e.g., Input, Enrich, or Fraction)**     |       |
-| k        | keep intermediate files (yes/no)                           |no     |
-| **x**    | **path to genome index**                                   |       |
-| m        | allowed mismatch for mapping                               |0      |
-| s        | seed length for mapping                                    |15     |
-| t        | number of threads to be utilized by bowtie/samtools        |1      |
-| p        | minimum distance between peaks for homer                   |50     |
-| z        | size of peaks for homer                                    |20     |
-| f        | fragment length for homer                                  |25     |
-
--------------------------------------------------------------------------------------------------------------------
-### Usage:
-Similar to CLIPittyClip.sh, but uses processed fasta files.
-
-MAPittyMap.sh can be ran as following:
+{INPUT}_output/
+├── 0_DEMUX_FASTQ/           # Demultiplexed reads
+├── 1_BAM/                   # Aligned BAM files
+├── 2_COLLAPSED_BED/         # PCR-deduplicated BED
+├── 3_BEDGRAPH/              # Coverage tracks
+├── 4_PEAKS/                 # HOMER peak results
+│   ├── Combined_peaks/
+│   └── SAMPLE_PEAKS/
+│
+├── 5_CTK_Analysis/          # When --cims --cits (both)
+│   ├── CIMS/
+│   ├── CITS/
+│   └── motif_analysis/
+│ OR
+├── 5_CIMS_Analysis/         # When --cims only
+│ OR
+├── 5_CITS_Analysis/         # When --cits only
+│
+├── 6_OTHERS/                # When CTK analysis enabled
+│   └── STAR_OUTPUT/
+│ OR
+├── 5_OTHERS/                # When no CTK analysis
+│   └── STAR_OUTPUT/
+│
+└── REPORTS/                 # Logs and QC reports
 ```
-MAPittyMap.sh -i ID -y TYPE -x /PATH/TO/GENOME/ANNOTATION/ANNOTATION_FILE_NAME
+
+## Console Output
+
 ```
-Options **-i**, **-y**, and **-x** are required. 
+[DEDUPLICATING]
+  > Deduplicating Pooled Reads (SeqKit)
+  > Deduplicating Complete
 
-See CLIPittyClip.sh usage section for more information.
+[DEMULTIPLEXING]
+  > Barcodes: barcodes.txt
+  > Mismatches Allowed: 2
+  > Checking barcodes...
+  > All barcodes are unique with 2 mismatches.
+  > Demultiplexing Complete
 
-- If using groomed.fasta output from CLIPittyClip.sh:
-  - Copy *groomed.fasta to a separate location (not required, but good for organization.)
-  - In the directory containing the *groomed.fasta, run MapittyMap.sh.
-  - For option -i, use the same input as the original CLIPittyClip.sh run.
-  - For option -y, add '_collapsed_rmBC_groomed' at the end of the original input.
-  - For example: 
-    - CLIPittyClip.sh -i JL100 -y Input -x path-to-genome-index
-    - MapittyMap.sh -i JL100 -y Input_collapsed_rmBC_groomed -x path-to-diff-genome-index
+[BATCH ANALYSIS]
+   1/3 Sample1 : Preprocessing > Mapping (STAR) > Processing Alignment > Collapsing > Bedgraph > Peaks > CIMS > CITS > Done!
+```
 
--------------------------------------------------------------------------------------------------------------------
-## PEAKittyPeak.sh 
-### Options:
+## Standalone Tools
 
-Options in **bold** are required.
+### MAPittyMap.sh
+Standalone mapping module.
+```bash
+MAPittyMap.sh -i reads.fastq.gz -x /path/to/index -t 8 --aligner star
+```
 
-| Options  |Descriptions                                                |Default|
-| :-------:|------------------------------------------------------------|:-----:|
-| h        | print usage information                                    |       |
-| p        | minimum distance between peaks for homer                   |50     |
-| z        | size of peaks for homer                                    |20     |
-| f        | fragment length for homer                                  |25     |
+### PEAKittyPeak.sh
+Standalone peak calling (requires BED folder).
+```bash
+PEAKittyPeak.sh -p 50 -z 20 -n Combined
+```
 
--------------------------------------------------------------------------------------------------------------------
-### Usage:
-- Make a folder named \"BED\" that contains all bed files that you want to call peaks on.
-  - Run this program inside the directory that contains \"BED\" folder (**not** inside the \"BED\" folder)
-  - The program will then make a bed file that combines all the provided bed files.
-  - Peak calling will be performed using the combined bed file.
--------------------------------------------------------------------------------------------------------------------
-## Note on read architecture in CoCLIP Experiment:
-The read architecture is as following:
+## Generating Genome Indices
 
-5' - **UMI** | **Barcode** | **CCC** | **Reads** | **L32** - 3'
+### STAR Index
+```bash
+STAR --runMode genomeGenerate \
+     --runThreadN 8 \
+     --genomeDir /path/to/star_index \
+     --genomeFastaFiles genome.fa \
+     --sjdbGTFfile annotation.gtf \
+     --sjdbOverhang 100
+```
 
-- 7nt long unique molecular identifier (UMI) used to collapse duplicate reads.
-- 6nt long barcode used for library multiplexing.
-- CCC Spacer
-- Reads
-- L32 RNA Linker
+### Bowtie2 Index
+```bash
+bowtie2-build genome.fa /path/to/bt2_index/GRCh38
+```
 
+## Notes
+
+- **Deduplication**: Enabled by default via `seqkit rmdup`. Disable with `--no-dedup`.
+- **Unified Preprocessing**: All runs use `samtools calmd` → `parseAlignment.pl` → `tag2collapse.pl`, generating `mutations.txt` for future CIMS/CITS compatibility.
+- **Default Thresholds**: CIMS FDR and CITS p-value default to 1 (report all sites).
+- **Apple Silicon**: CTK scripts use Conda's Perl to avoid library issues.
+
+## License
+
+GPL-3.0 License - See [LICENSE](LICENSE) for details.

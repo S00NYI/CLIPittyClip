@@ -1,161 +1,177 @@
-terminal_width=$(tput cols)
-separator_line=$(printf "%${terminal_width}s" | tr ' ' '*')
+#!/bin/bash
 
-# Peak calling minimum distance for HOMER 
-PeakMinDist=50
-# Peak size for HOMER
-PeakSize=20
-# Fragment size for HOMER
-FragLength=25
-# Base name for file
-BASE_NAME=Combined
+# PEAKittyPeak.sh - Peak Calling Module for CLIPittyClip (v3.0)
+# Uses the unified lib/utils.sh for logging
 
-# Function to display information
-function show_info {
-  echo "$separator_line"
-  echo "CLIPittyClip: Single-line CLIP data analysis pipeline"
-  echo "$separator_line"
-  echo "Version 2.0.0"
-  echo "Author: Soon Yi"
-  echo "Last updated: 2024-01-05"
-  echo "$separator_line"
-  echo "PEAKittyPeak.sh"
-  echo "$separator_line"
-  echo "This is the combined peak calling part of CLIPittyClip."
-  echo "Use this sub-pipeline to call peaks on a combined bed file (e.g., from demultiplexed samples)."
-  echo "The pipeline utilizes the following programs: "
-  echo " - bedtools (coverage)"
-  echo " - Homer (makeTagDirectory, findPeaks)"
-  echo "$separator_line"
-}
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Source utils and WIZARD (just in case)
+source "${SCRIPT_DIR}/lib/utils.sh"
+source "${SCRIPT_DIR}/lib/wizard.sh"
+
+# Default Values
+PEAK_DIST=50
+PEAK_SIZE=20
+FRAG_LEN=25
+BASE_NAME="Combined"
+ADV_HOMER_ARGS="" # Additional arguments for findPeaks
+ADVANCED_MODE="false"
 
 function show_usage {
-  echo "Usage: PEAKittyPeak.sh -p ? -z ? -f ?"
-  echo "$separator_line"
-  echo "- If no option is selected, the program will run with default values (see below)."
-  echo "- Make a folder named \"BED\" that contains all bed files that you want to call peaks on."
-  echo "  Run this program inside the directory that contains \"BED\" folder."
-  echo "  The program will then make a bed file that combines all the provided bed files."
-  echo "  Peak calling will be performed using the combined bed file."
-  echo "$separator_line"
-  echo "Options:"
-  echo "  -h: print usage information"
-  echo "  -p: minimum distance between peaks for homer            (default: 50)"
-  echo "  -z: size of peaks for homer                             (default: 20)"
-  echo "  -f: fragment length for homer                           (default: 25)"
-  echo "$separator_line"
+    echo ""
+    echo "Usage: PEAKittyPeak.sh [options]"
+    echo ""
+    echo "PEAKittyPeak v3.0 - Peak Calling Module for CLIPittyClip"
+    echo ""
+    echo "CONTEXT:"
+    echo "  Run this in a directory containing a 'BED' folder with collapsed .bed files."
+    echo "  Typically called automatically by CLIPittyClip.sh after sample processing."
+    echo ""
+    echo "OPTIONS:"
+    echo "  -p <int>       Min distance between peaks (default: 50)"
+    echo "  -z <int>       Peak size (default: 20)"
+    echo "  -f <int>       Fragment length (default: 25)"
+    echo "  -n <str>       Base name for output (default: 'Combined')"
+    echo "  -a <str>       Additional HOMER findPeaks arguments (quoted string)"
+    echo "  --advanced     Launch interactive HOMER configuration wizard"
+    echo "  -h, --help     Show this help message"
+    echo ""
+    echo "EXAMPLES:"
+    echo "  # Basic peak calling"
+    echo "  PEAKittyPeak.sh -p 50 -z 20 -n MyExperiment"
+    echo ""
+    echo "  # With custom HOMER args"
+    echo "  PEAKittyPeak.sh -n Combined -a '-style factor -L 2'"
+    echo ""
 }
 
-function on_exit {
-  read -p "Press enter to exit."
-}
+if [[ "$1" == "-h" ]] || [[ "$1" == "--help" ]]; then
+    show_usage
+    exit 0
+fi
 
-while getopts "p:z:f:h" opt; do
+# Parse Options
+while getopts "p:z:f:n:a:h-:" opt; do
+  # Handle long options manually
+  if [[ "$opt" == "-" ]]; then
+      case "${OPTARG}" in
+          advanced) ADVANCED_MODE="true" ;;
+          *) log_error "Invalid option --${OPTARG}"; show_usage; exit 1 ;;
+      esac
+      continue
+  fi
+
   case $opt in
-    p)
-      PeakMinDist="$OPTARG"
-      ;;
-    z)
-      PeakSize="$OPTARG"
-      ;;
-    f)
-      FragLength="$OPTARG"
-      ;;
-    h)
-      show_info
-      show_usage
-      on_exit
-      exit 0
-      ;;
-    \?)
-      echo "Error: Invalid option -$OPTARG" >&2
-      show_usage
-      on_exit
-      exit 1
-      ;;
-    :)
-      echo "Error: Option -$OPTARG requires an argument." >&2
-      show_usage
-      on_exit
-      exit 1
-      ;;
+    p) PEAK_DIST="$OPTARG" ;;
+    z) PEAK_SIZE="$OPTARG" ;;
+    f) FRAG_LEN="$OPTARG" ;;
+    n) BASE_NAME="$OPTARG" ;;
+    a) ADV_HOMER_ARGS="$OPTARG" ;;
+    h) show_usage; exit 0 ;;
+    \?) log_error "Invalid option -$OPTARG"; show_usage; exit 1 ;;
   esac
 done
 
-# Count the number of .bed files in the current directory
-bedFileCount=$(ls BED |wc -l)
-
-# If no .bed files are found, print a message and exit
-if [[ $bedFileCount -eq 0 ]]; then
-  echo "No .bed files found in the BED folder. Exiting."
-  on_exit
-  exit 1
+# Run Wizard if requested
+if [[ "$ADVANCED_MODE" == "true" ]]; then
+    print_wiz_header
+    # Export PEAK_DIST so wizard sees the default user might have passed via -p
+    export PEAK_DIST
+    run_wizard_homer
+    # Wizard output: ADV_HOMER_ARGS is set globally
 fi
 
-# Start Pipeline
-show_info | tee -a ${BASE_NAME}_peaks_logs.txt
-echo "# Analysis started: $(date +'%Y/%m/%d %H:%M')" | tee -a ${BASE_NAME}_peaks_logs.txt
-echo "# User Input: '$0 $@'\n" | tee -a ${BASE_NAME}_peaks_logs.txt
-
-# Check if arguments are provided:
-if [[ $# -eq 0 ]]; then
-  echo "# No option arguments have been passed. Default options will be used."
+# Check Requirements
+if [[ ! -d "BED" ]]; then
+    log_error "Directory 'BED' not found. Please run this script in the parent folder of your BED files."
+    exit 1
 fi
 
-## Combine all bed files:
-echo "\n# Combine BED files to make global BED file for the experiment." | tee -a ${BASE_NAME}_peaks_logs.txt
-echo "  Combining $(ls BED |wc -l) files to a single bed file..." | tee -a ${BASE_NAME}_peaks_logs.txt
-ls BED | tee -a ${BASE_NAME}_peaks_logs.txt > /dev/null
-cat BED/*.bed > ${BASE_NAME}.bed 
+BED_COUNT=$(ls BED/*.bed 2>/dev/null | wc -l)
+if [[ $BED_COUNT -eq 0 ]]; then
+    log_error "No .bed files found in BED/ folder."
+    exit 1
+fi
 
-## Make Tag Directory and call peaks:
-echo "\n# Use HOMER to call peaks, with minimum distance of ${PeakMinDist}, peak size of ${PeakSize}, and fragment length of ${FragLength}" | tee -a ${BASE_NAME}_peaks_logs.txt
-makeTagDirectory ${BASE_NAME}_TagDir/ ${BASE_NAME}.bed -single -format bed 2>&1 | tee -a ${BASE_NAME}_peaks_logs.txt 
-findPeaks ${BASE_NAME}_TagDir/ -o auto -style factor -L 2 -localSize 10000 -strand separate -minDist ${PeakMinDist} -size ${PeakSize} -fragLength ${FragLength} 2>&1 | tee -a ${BASE_NAME}_peaks_logs.txt 
+log_info "PEAKittyPeak: Peak Calling Module"
+log_info "Mode:        $(if [[ "$ADVANCED_MODE" == "true" ]]; then echo "ADVANCED"; else echo "STANDARD"; fi)"
+log_info "Input Files: $BED_COUNT"
+log_info "Parameters:  Dist=$PEAK_DIST, Size=$PEAK_SIZE, Frag=$FRAG_LEN"
+if [[ -n "$ADV_HOMER_ARGS" ]]; then
+    log_info "Advanced Args: $ADV_HOMER_ARGS"
+fi
 
-## Process output peaks file to create peaks bed file:
-echo "# Process peaks.txt to generate peaks BED file." | tee -a ${BASE_NAME}_peaks_logs.txt 
-sed '/^[[:blank:]]*#/d;s/#.*//' ${BASE_NAME}_TagDir/peaks.txt > peaksTemp.bed
-awk 'OFS="\t" {print $2, $3, $4, $1, $6, $5}' peaksTemp.bed > peaks.bed
-rm peaksTemp.bed 
-sort -k 1,1 -k2,2n peaks.bed > peaks_Sorted.bed
-# grep -E '^chr([1-9]|1[0-9]|2[0-2]|X|Y|M)\s' < peaks_Sorted.bed > peaks_Sorted_Filtered.bed
+# 1. Combine BED Files
+log_info "Combining BED files..."
+cat BED/*.bed > "${BASE_NAME}.bed"
 
-mkdir ${BASE_NAME}_peaks
-mkdir peakCoverage
-mv ${BASE_NAME}.bed ${BASE_NAME}_peaks
-mv ${BASE_NAME}_TagDir ${BASE_NAME}_peaks
-mv peaks.bed ${BASE_NAME}_peaks
-# mv peaks_Sorted.bed ${BASE_NAME}_peaks
+# 2. Call Peaks (HOMER)
+log_info "Calling peaks with HOMER..."
+makeTagDirectory "${BASE_NAME}_TagDir/" "${BASE_NAME}.bed" -single -format bed > /dev/null 2>&1
 
-## 
-echo "\n# Calculate coverages for the peaks for each sample using bedtools coverage." | tee -a ${BASE_NAME}_peaks_logs.txt 
-for id in BED/*.bed; do
-    bedtools coverage -s -a peaks_Sorted.bed -b "${id}" > "coverage_$(basename "$id")"
-done
+CMD="findPeaks ${BASE_NAME}_TagDir/ -o auto -style factor -L 2 -localSize 10000 -strand separate \
+    -minDist ${PEAK_DIST} -size ${PEAK_SIZE} -fragLength ${FRAG_LEN} ${ADV_HOMER_ARGS}"
 
-## move columns to peaks_sorted.bed and make new file.
-echo "\n# Make coverage table for the peaks spanning all samples." | tee -a ${BASE_NAME}_peaks_logs.txt 
-cp peaks_Sorted.bed ${BASE_NAME}_peakCoverage.txt
-echo "chr\tstart\tend\tname\tscore\tstrand" > colnames.txt
-cat ${BASE_NAME}_peakCoverage.txt >> colnames.txt
-mv colnames.txt ${BASE_NAME}_peakCoverage.txt
+log_info "Running: $CMD"
+eval "$CMD" 2>&1 | grep -v "Job finished" # Reduce noise
 
-for cov_file in coverage_*; do
-    echo $(echo $(basename "${cov_file}" .sorted.collapsed.bed) | cut -d '_' -f 2-) > temp1.txt
-    awk 'FNR>0 {print $7}' ${cov_file} > temp2.txt && cat temp1.txt temp2.txt > temp3.txt
-    paste ${BASE_NAME}_peakCoverage.txt temp3.txt > temp4.txt && mv temp4.txt ${BASE_NAME}_peakCoverage.txt
-    rm temp*.txt
-done
-
-echo "\n# Final output: ${BASE_NAME}_peakCoverage.txt" | tee -a ${BASE_NAME}_peaks_logs.txt 
-
-mv peaks_Sorted.bed ${BASE_NAME}_peaks
-mv coverage_* peakCoverage
-mv peakCoverage ${BASE_NAME}_peaks
-mv ${BASE_NAME}_peakCoverage.txt ${BASE_NAME}_peaks
-mv BED ${BASE_NAME}_peaks
-
-echo "\n# Analysis Finished: $(date +'%Y/%m/%d %H:%M')" | tee -a ${BASE_NAME}_peaks_logs.txt
-echo "\n# All outputs are in ${BASE_NAME}_peaks folder." | tee -a ${BASE_NAME}_peaks_logs.txt
-mv ${BASE_NAME}_peaks_logs.txt ${BASE_NAME}_peaks
+# 3. Process Peaks
+log_info "Processing peaks output..."
+if [[ -f "${BASE_NAME}_TagDir/peaks.txt" ]]; then
+    # Convert peaks.txt to BED format
+    sed '/^[[:blank:]]*#/d;s/#.*//' "${BASE_NAME}_TagDir/peaks.txt" > peaksTemp.bed
+    awk 'OFS="\t" {print $2, $3, $4, $1, $6, $5}' peaksTemp.bed > peaks.bed
+    rm peaksTemp.bed
+    
+    # Sort
+    sort -k 1,1 -k2,2n peaks.bed > peaks_Sorted.bed
+    
+    # Organize Output
+    OUT_DIR="${BASE_NAME}_peaks"
+    mkdir -p "$OUT_DIR"
+    mkdir -p "${OUT_DIR}/peakCoverage"
+    
+    mv "${BASE_NAME}_TagDir" "$OUT_DIR"
+    mv "${BASE_NAME}.bed" "$OUT_DIR"
+    mv peaks.bed "$OUT_DIR"
+    mv peaks_Sorted.bed "$OUT_DIR" # Keep sorted version in root
+    
+    # 4. Coverage Analysis
+    log_info "Calculating coverage..."
+    # Copy sorted bed to serve as base table
+    cp "${OUT_DIR}/peaks_Sorted.bed" "${OUT_DIR}/${BASE_NAME}_peakCoverage.txt"
+    
+    # Header
+    echo -e "chr\tstart\tend\tname\tscore\tstrand" > colnames.txt
+    cat "${OUT_DIR}/${BASE_NAME}_peakCoverage.txt" >> colnames.txt
+    mv colnames.txt "${OUT_DIR}/${BASE_NAME}_peakCoverage.txt"
+    
+    for bed_file in BED/*.bed; do
+        s_name=$(basename "$bed_file" .bed)
+        s_name=$(basename "$s_name" .collapsed) # Strip .collapsed if present
+        
+        bedtools coverage -s -a "${OUT_DIR}/peaks_Sorted.bed" -b "$bed_file" > "coverage_${s_name}.txt"
+        
+        # Extract coverage column (7th column in bedtools coverage default output)
+        awk 'FNR>0 {print $7}' "coverage_${s_name}.txt" > temp_cov.txt
+        
+        # Append name to temp header
+        echo "$s_name" > temp_col.txt
+        cat temp_cov.txt >> temp_col.txt
+        
+        # Paste to main table
+        paste "${OUT_DIR}/${BASE_NAME}_peakCoverage.txt" temp_col.txt > temp_table.txt
+        mv temp_table.txt "${OUT_DIR}/${BASE_NAME}_peakCoverage.txt"
+        
+        # Cleanup temp
+        rm temp_cov.txt temp_col.txt
+        
+        # Move raw coverage file
+        mv "coverage_${s_name}.txt" "${OUT_DIR}/peakCoverage/"
+    done
+    
+    log_info "Analysis Finished."
+    log_info "Outputs stored in: $OUT_DIR"
+else
+    log_error "Peak calling failed (peaks.txt not found)."
+    exit 1
+fi
