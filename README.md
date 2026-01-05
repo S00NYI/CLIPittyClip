@@ -146,6 +146,22 @@ conda activate [ENV_NAME]
 # conda activate clipittyclip
 ```
 
+### 5. Add CLIPittyClip to PATH (Optional)
+
+To run CLIPittyClip commands from any directory:
+
+```bash
+# For zsh (macOS default)
+bash install_zshrc.sh
+
+# For bash (Linux default)
+bash install_bashrc.sh
+```
+
+This adds the CLIPittyClip directory to your PATH and sets execute permissions on all scripts.
+
+> **Note:** Restart your terminal or run `source ~/.zshrc` (or `source ~/.bashrc`) for the changes to take effect.
+
 ## Quick Start
 
 ```bash

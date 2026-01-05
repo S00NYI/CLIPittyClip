@@ -16,6 +16,7 @@ else
   chmod +x "$SCRIPT_DIR/CLIPittyClip.sh"
   chmod +x "$SCRIPT_DIR/MAPittyMap.sh"
   chmod +x "$SCRIPT_DIR/PEAKittyPeak.sh"
+  chmod +x "$SCRIPT_DIR/check_barcodes.sh"
   echo "Done!"
   echo "Make sure to restart your terminal or run 'source ~/.bashrc'."
 fi
