@@ -283,6 +283,7 @@ Standalone mapping module for aligning FASTQ files to a reference genome.
 - `-t <int>`: Number of threads (default: 1)
 - `--aligner <star|bowtie2>`: Alignment tool (default: star)
 - `-o <path>`: Output directory
+- `--advanced`: Launch interactive configuration wizard
 
 ```bash
 # Using STAR
@@ -290,6 +291,9 @@ MAPittyMap.sh -i reads.fastq.gz -x /path/to/star_index -t 8 --aligner star
 
 # Using Bowtie2
 MAPittyMap.sh -i reads.fastq.gz -x /path/to/bt2_index -t 8 --aligner bowtie2
+
+# Interactive wizard mode for custom aligner settings
+MAPittyMap.sh -i reads.fastq.gz -x /path/to/star_index -t 8 --advanced
 ```
 
 ---
@@ -298,17 +302,25 @@ MAPittyMap.sh -i reads.fastq.gz -x /path/to/bt2_index -t 8 --aligner bowtie2
 Standalone peak calling using HOMER. Requires a directory containing collapsed BED files.
 
 **Required inputs:**
-- Input directory containing `.bed` files (current directory by default)
+- Run from a directory containing a `BED/` folder with `.bed` files
 
 **Key options:**
-- `-p <int>`: Peak size (default: 50)
-- `-z <int>`: Fragment size (default: 20)
+- `-p <int>`: Min distance between peaks (default: 50)
+- `-z <int>`: Peak size (default: 20)
+- `-f <int>`: Fragment length (default: 25)
 - `-n <string>`: Output name prefix
-- `-s <path>`: Path to chrom.sizes file
+- `-a <string>`: Additional HOMER findPeaks arguments
+- `--advanced`: Launch interactive HOMER configuration wizard
 
 ```bash
-# Run from directory containing BED files
-PEAKittyPeak.sh -p 50 -z 20 -n Combined -s /path/to/chrom.sizes
+# Basic peak calling
+PEAKittyPeak.sh -p 50 -z 20 -n Combined
+
+# With custom HOMER arguments
+PEAKittyPeak.sh -n Combined -a '-style factor -L 2'
+
+# Interactive wizard mode for HOMER settings
+PEAKittyPeak.sh --advanced
 ```
 
 ## Generating Genome Indices
