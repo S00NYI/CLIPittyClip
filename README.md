@@ -71,29 +71,53 @@ cd CLIPittyClip
 
 ### 2. Create Conda Environment
 
-#### Linux (Recommended)
+> **Note:** Replace `[ENV_NAME]` with your preferred environment name (e.g., `clipittyclip`, `clip_env`, etc.)
+
+#### Linux
 ```bash
-mamba env create -f install_linux.yml
+mamba env create -n [ENV_NAME] -f install_linux.yml
 ```
 
 #### macOS (Intel or Apple Silicon)
+
+> [!IMPORTANT]
+> **Why macOS requires special installation:**
+> 
+> The CTK (CLIP Tool Kit) and HOMER packages have incompatible Perl version requirements:
+> - **CTK** requires `perl >=5.32.1`
+> - **HOMER** requires `perl 5.22.0` or `perl 5.26.x`
+> 
+> Additionally, some CTK dependencies (like `xopen` via `cutadapt`) have broken builds for macOS on conda channels. These conflicts make it impossible to install both packages via conda on macOS.
+> 
+> The workaround is to:
+> 1. Install core dependencies via conda (using x86 emulation via Rosetta 2)
+> 2. Install CTK and HOMER manually from source
+
 ```bash
-# Force x86 architecture (required for compatibility)
-CONDA_SUBDIR=osx-64 mamba create -n CLIPittyClip_env
-conda activate CLIPittyClip_env
+# Step 1: Create environment with x86 architecture (required for Rosetta compatibility)
+CONDA_SUBDIR=osx-64 mamba create -n [ENV_NAME]
+conda activate [ENV_NAME]
 conda config --env --set subdir osx-64
+
+# Step 2: Install core packages
 mamba env update -f install_macos.yml
 
-# Then install CTK and HOMER manually (see below)
+# Step 3: Install CTK and HOMER manually (see Section 3 below)
 ```
 
 ### 3. macOS: Manual CTK & HOMER Installation
 
-Due to dependency conflicts, CTK and HOMER must be installed manually on macOS:
+> **Note:** The commands below install to `~/Tools/`. If this directory doesn't exist, it will be created automatically. You can change the installation path to any location you prefer.
 
-**CTK:**
+**CTK (CLIP Tool Kit):**
 ```bash
+# Create Tools directory if it doesn't exist
+mkdir -p ~/Tools
+
+# Clone CTK repository
 git clone https://github.com/chaolinzhanglab/ctk.git ~/Tools/ctk
+
+# Add CTK to your PATH and PERL5LIB
 echo 'export PATH=$PATH:~/Tools/ctk' >> ~/.zshrc
 echo 'export PERL5LIB=$PERL5LIB:~/Tools/ctk/czplib' >> ~/.zshrc
 source ~/.zshrc
@@ -101,16 +125,25 @@ source ~/.zshrc
 
 **HOMER:**
 ```bash
+# Create HOMER directory and download installer
 mkdir -p ~/Tools/homer && cd ~/Tools/homer
 wget http://homer.ucsd.edu/homer/configureHomer.pl
+
+# Install HOMER (this will download required data files)
 perl configureHomer.pl -install
+
+# Add HOMER to your PATH
 echo 'export PATH=$PATH:~/Tools/homer/bin' >> ~/.zshrc
 source ~/.zshrc
 ```
 
 ### 4. Activate Environment
 ```bash
-conda activate CLIPittyClip_env
+# Replace [ENV_NAME] with the name you chose in Step 2
+conda activate [ENV_NAME]
+
+# Example:
+# conda activate clipittyclip
 ```
 
 ## Quick Start
