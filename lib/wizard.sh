@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# wizard.sh - Interactive configuration for CLIPittyClip
+# wizard.sh - Interactive configuration wizard for CLIPittyClip Suite
 # Part of CLIPittyClip v3.0
 
 # Colors for Wizard
@@ -8,452 +8,594 @@ WIZ_CYAN='\033[1;36m'
 WIZ_GREEN='\033[1;32m'
 WIZ_YELLOW='\033[1;33m'
 WIZ_RED='\033[0;31m'
+WIZ_BOLD='\033[1m'
 WIZ_NC='\033[0m'
 
-print_wiz_header() {
+# ═══════════════════════════════════════════════════════════════════════════════
+# HELPER FUNCTIONS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+print_wizard_header() {
+    local title="$1"
     clear
-    echo -e "${WIZ_CYAN}==================================================================${WIZ_NC}"
-    echo -e "${WIZ_CYAN}        CLIPittyClip: Advanced Configuration Wizard${WIZ_NC}"
-    echo -e "${WIZ_CYAN}==================================================================${WIZ_NC}"
-    echo "You have enabled advanced mode. You can override default parameters"
-    echo "for each tool in the pipeline."
-    echo ""
-    echo -e "${WIZ_YELLOW}[INSTRUCTIONS]${WIZ_NC}"
-    echo "- Press [ENTER] to keep the default settings."
-    echo "- Format: --option1 value --option2 value --flag"
-    echo "- Note: Not all options require values."
+    echo -e "${WIZ_CYAN}╔════════════════════════════════════════════════════════════════╗${WIZ_NC}"
+    echo -e "${WIZ_CYAN}║${WIZ_NC}                    ${WIZ_BOLD}${title}${WIZ_NC}"
+    echo -e "${WIZ_CYAN}╚════════════════════════════════════════════════════════════════╝${WIZ_NC}"
     echo ""
 }
 
-validate_option() {
-    local tool="$1"
-    local arg_string="$2"
-    local valid=true
+print_section() {
+    local title="$1"
+    echo ""
+    echo -e "${WIZ_CYAN}═══════════════════════════════════════════════════════════════${WIZ_NC}"
+    echo -e "${WIZ_BOLD}${title}${WIZ_NC}"
+    echo -e "${WIZ_CYAN}═══════════════════════════════════════════════════════════════${WIZ_NC}"
+}
+
+print_doc_box() {
+    local program="$1"
+    shift
+    local docs=("$@")
     
-    if [[ -z "$arg_string" ]]; then return 0; fi
+    echo ""
+    echo -e "${WIZ_YELLOW}┌────────────────────────────────────────────────────────────────┐${WIZ_NC}"
+    echo -e "${WIZ_YELLOW}│${WIZ_NC}                         ${WIZ_BOLD}DOCUMENTATION${WIZ_NC}                         ${WIZ_YELLOW}│${WIZ_NC}"
+    echo -e "${WIZ_YELLOW}├────────────────────────────────────────────────────────────────┤${WIZ_NC}"
+    echo -e "${WIZ_YELLOW}│${WIZ_NC} The prompts below show commonly modified options.              ${WIZ_YELLOW}│${WIZ_NC}"
+    echo -e "${WIZ_YELLOW}│${WIZ_NC} Additional options can be passed via command line.             ${WIZ_YELLOW}│${WIZ_NC}"
+    echo -e "${WIZ_YELLOW}│${WIZ_NC}                                                                ${WIZ_YELLOW}│${WIZ_NC}"
+    echo -e "${WIZ_YELLOW}│${WIZ_NC} For full documentation, see:                                   ${WIZ_YELLOW}│${WIZ_NC}"
+    for doc in "${docs[@]}"; do
+        printf "${WIZ_YELLOW}│${WIZ_NC}  • %-60s ${WIZ_YELLOW}│${WIZ_NC}\n" "$doc"
+    done
+    echo -e "${WIZ_YELLOW}└────────────────────────────────────────────────────────────────┘${WIZ_NC}"
+    echo ""
+}
+
+# Prompt for file path with validation
+prompt_file_path() {
+    local prompt_msg="$1"
+    local var_name="$2"
+    local result=""
     
-    # NEW CHECK: Input must look like flags (start with -)
-    if [[ "$arg_string" != -* ]]; then
-          echo -ne "\n"
-          echo -e "  ${WIZ_RED}[ERROR] Invalid input. Options must start with '-' (e.g., -F or --option).${WIZ_NC}"
-          return 1
-    fi
+    while true; do
+        read -p "$prompt_msg" result
+        if [[ -z "$result" ]]; then
+            echo -e "${WIZ_RED}  ✗ Path cannot be empty. Please try again.${WIZ_NC}"
+            continue
+        fi
+        
+        # Expand ~ to home directory
+        result="${result/#\~/$HOME}"
+        
+        if [[ -f "$result" ]]; then
+            echo -e "${WIZ_GREEN}  ✓ File found: $result${WIZ_NC}"
+            eval "$var_name=\"$result\""
+            break
+        else
+            echo -e "${WIZ_RED}  ✗ File not found: $result${WIZ_NC}"
+            read -p "  Try again? [Y/n]: " retry
+            if [[ "$retry" =~ ^[Nn]$ ]]; then
+                return 1
+            fi
+        fi
+    done
+    return 0
+}
+
+# Prompt for directory path with validation
+prompt_dir_path() {
+    local prompt_msg="$1"
+    local var_name="$2"
+    local check_type="${3:-any}"  # "star", "bowtie2", "bed", or "any"
+    local result=""
     
-    echo -ne "  ${WIZ_YELLOW}[VALIDATION] Checking options...${WIZ_NC}"
+    while true; do
+        read -p "$prompt_msg" result
+        if [[ -z "$result" ]]; then
+            echo -e "${WIZ_RED}  ✗ Path cannot be empty. Please try again.${WIZ_NC}"
+            continue
+        fi
+        
+        # Expand ~ to home directory
+        result="${result/#\~/$HOME}"
+        
+        if [[ -d "$result" ]]; then
+            echo -e "${WIZ_GREEN}  ✓ Directory found: $result${WIZ_NC}"
+            
+            # Additional checks based on type
+            if [[ "$check_type" == "bed" ]]; then
+                local bed_count=$(ls "$result"/BED/*.bed 2>/dev/null | wc -l | tr -d ' ')
+                if [[ "$bed_count" -eq 0 ]]; then
+                    echo -e "${WIZ_RED}  ✗ No BED/ folder or .bed files found.${WIZ_NC}"
+                    read -p "  Try again? [Y/n]: " retry
+                    if [[ "$retry" =~ ^[Nn]$ ]]; then return 1; fi
+                    continue
+                fi
+                echo -e "${WIZ_GREEN}  ✓ Found $bed_count .bed files in BED/ folder${WIZ_NC}"
+            fi
+            
+            eval "$var_name=\"$result\""
+            break
+        else
+            echo -e "${WIZ_RED}  ✗ Directory not found: $result${WIZ_NC}"
+            read -p "  Try again? [Y/n]: " retry
+            if [[ "$retry" =~ ^[Nn]$ ]]; then
+                return 1
+            fi
+        fi
+    done
+    return 0
+}
+
+# Prompt for a value with default
+prompt_value() {
+    local prompt_msg="$1"
+    local default="$2"
+    local var_name="$3"
+    local validation="${4:-any}"  # "int", "float", or "any"
+    local result=""
     
-    # Get help text once
-    local help_text=""
-    if [[ "$tool" == "fastp" ]]; then help_text=$(fastp --help 2>&1); fi
-    if [[ "$tool" == "STAR" ]]; then help_text=$(STAR --help 2>&1); fi
-    if [[ "$tool" == "bowtie2" ]]; then help_text=$(bowtie2 --help 2>&1); fi
-    if [[ "$tool" == "findPeaks" ]]; then help_text=$(findPeaks 2>&1); fi # findPeaks prints help on stderr
-    
-    # Parse args
-    for word in $arg_string; do
-        if [[ "$word" == -* ]]; then
-             # It's a flag
-             if [[ "$help_text" != *"$word"* ]]; then
-                 echo ""
-                 echo -e "  ${WIZ_RED}[ERROR] Option '$word' not found in $tool help text.${WIZ_NC}"
-                 valid=false
-             fi
+    while true; do
+        read -p "$prompt_msg (default: $default): " result
+        if [[ -z "$result" ]]; then
+            result="$default"
+            break
+        fi
+        
+        if [[ "$validation" == "int" ]]; then
+            if [[ "$result" =~ ^[0-9]+$ ]]; then break; fi
+            echo -e "${WIZ_RED}  Must be a positive integer.${WIZ_NC}"
+        elif [[ "$validation" == "float" ]]; then
+            if [[ "$result" =~ ^[0-9]*\.?[0-9]+$ ]]; then break; fi
+            echo -e "${WIZ_RED}  Must be a number.${WIZ_NC}"
+        else
+            break
         fi
     done
     
-    if [[ "$valid" == "true" ]]; then
-        echo -e "${WIZ_GREEN} OK.${WIZ_NC}"
-        return 0
-    else
-        return 1
-    fi
+    eval "$var_name=\"$result\""
 }
 
-run_wizard_fastp() {
-    local def_fastp="--length_required 16 --average_qual 30"
+# Prompt for yes/no with default
+prompt_yesno() {
+    local prompt_msg="$1"
+    local default="$2"  # "y" or "n"
+    local var_name="$3"
+    local result=""
     
-    echo -e "${WIZ_CYAN}------------------------------------------------------------------${WIZ_NC}"
-    echo -e "${WIZ_CYAN}1. Preprocessing (fastp)${WIZ_NC}"
-    echo -e "${WIZ_CYAN}------------------------------------------------------------------${WIZ_NC}"
-    echo "Description: Adapters, Quality Trimming, UMI extraction."
-    echo "Current Default: $def_fastp"
-    echo ""
-    echo -e "${WIZ_GREEN}[COMMON OPTIONS]${WIZ_NC}"
-    echo "  -q, --qualified_quality_phred <int>   Quality threshold (Default: 15)"
-    echo "  -l, --length_required <int>           Min read length (Default: 15)"
-    echo "  --average_qual <int>                  Mean quality requirement (Default: 0)"
-    echo "  --trim_front1 <int>                   Trim bases from front of read 1"
-    echo "  --trim_tail1 <int>                    Trim bases from tail of read 1"
-    echo "  --detect_adapter_for_pe               Auto-detect PE adapters"
-    echo "  --adapter_sequence <str>              Manually specify adapter"
-    echo -e "  --dedup                               ${WIZ_RED}[DISABLED] handled by seqkit${WIZ_NC}"
-    echo ""
+    local prompt_suffix="[y/N]"
+    if [[ "$default" == "y" ]]; then prompt_suffix="[Y/n]"; fi
     
     while true; do
-        read -p "Do you want to modify fastp parameters? [y/N]: " mod_fastp
-        if [[ -z "$mod_fastp" ]]; then mod_fastp="n"; fi
-        if [[ "$mod_fastp" =~ ^[YyNn]$ ]]; then break; fi
-        echo -e "${WIZ_RED}[ERROR] Invalid input. Please enter 'y' or 'n'.${WIZ_NC}"
+        read -p "$prompt_msg $prompt_suffix: " result
+        if [[ -z "$result" ]]; then result="$default"; fi
+        result=$(echo "$result" | tr '[:upper:]' '[:lower:]')
+        if [[ "$result" =~ ^[yn]$ ]]; then
+            eval "$var_name=\"$result\""
+            break
+        fi
+        echo -e "${WIZ_RED}  Please enter 'y' or 'n'.${WIZ_NC}"
+    done
+}
+
+# Prompt for selection from options
+prompt_select() {
+    local prompt_msg="$1"
+    local var_name="$2"
+    shift 2
+    local options=("$@")
+    local result=""
+    
+    echo "$prompt_msg"
+    local i=1
+    for opt in "${options[@]}"; do
+        echo "  [$i] $opt"
+        ((i++))
     done
     
-    if [[ "$mod_fastp" =~ ^[Yy]$ ]]; then
-        while true; do
-            read -p "Enter additional fastp arguments: " ADV_FASTP_ARGS
-            if validate_option "fastp" "$ADV_FASTP_ARGS"; then
-                break
-            else
-                read -p "Retry? (Press Enter to skip, or y to retry): " retry
-                if [[ "$retry" != "y" ]]; then ADV_FASTP_ARGS=""; break; fi
-            fi
-        done
-        echo -e "${WIZ_GREEN}[UPDATED]${WIZ_NC} fastp will run with: $def_fastp $ADV_FASTP_ARGS"
+    while true; do
+        read -p "Selection: " result
+        if [[ "$result" =~ ^[0-9]+$ ]] && [[ "$result" -ge 1 ]] && [[ "$result" -le "${#options[@]}" ]]; then
+            eval "$var_name=\"$result\""
+            break
+        fi
+        echo -e "${WIZ_RED}  Invalid selection. Please enter a number 1-${#options[@]}.${WIZ_NC}"
+    done
+}
+
+# Print configuration summary
+print_summary_box() {
+    echo ""
+    echo -e "${WIZ_CYAN}═══════════════════════════════════════════════════════════════${WIZ_NC}"
+    echo -e "${WIZ_BOLD}CONFIGURATION SUMMARY${WIZ_NC}"
+    echo -e "${WIZ_CYAN}═══════════════════════════════════════════════════════════════${WIZ_NC}"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# CLIPittyClip WIZARD
+# ═══════════════════════════════════════════════════════════════════════════════
+
+run_wizard_clipittyclip() {
+    print_wizard_header "CLIPittyClip Wizard"
+    
+    # ─────────────────────────────────────────────────────────────────────────
+    # STEP 1: Input Type
+    # ─────────────────────────────────────────────────────────────────────────
+    print_section "STEP 1: Input Type"
+    echo ""
+    prompt_select "Is your sample pooled/multiplexed or already demultiplexed?" WIZ_INPUT_TYPE \
+        "Pooled/Multiplexed (requires demultiplexing)" \
+        "Already demultiplexed"
+    
+    if [[ "$WIZ_INPUT_TYPE" == "1" ]]; then
+        # Pooled sample
+        echo ""
+        prompt_file_path "  Enter path to pooled FASTQ file: " WIZ_INPUT_FILE || return 1
+        prompt_file_path "  Enter path to barcode file: " WIZ_BARCODE_FILE || return 1
+        WIZ_MODE="pooled"
+    else
+        # Demultiplexed
+        echo ""
+        prompt_select "Do you have a single file or multiple files?" WIZ_FILE_COUNT \
+            "Single FASTQ file" \
+            "Multiple files in a directory"
+        
+        if [[ "$WIZ_FILE_COUNT" == "1" ]]; then
+            prompt_file_path "  Enter path to FASTQ file: " WIZ_INPUT_FILE || return 1
+            WIZ_MODE="single"
+        else
+            prompt_dir_path "  Enter path to directory containing FASTQ files: " WIZ_INPUT_DIR || return 1
+            WIZ_MODE="directory"
+        fi
     fi
+    
+    # ─────────────────────────────────────────────────────────────────────────
+    # STEP 2: Genome Index
+    # ─────────────────────────────────────────────────────────────────────────
+    print_section "STEP 2: Genome Index"
+    echo ""
+    prompt_dir_path "  Enter path to genome index directory: " WIZ_GENOME_INDEX || return 1
+    
+    echo ""
+    echo -e "${WIZ_GREEN}✓ Required inputs are ready!${WIZ_NC}"
+    
+    # ─────────────────────────────────────────────────────────────────────────
+    # STEP 3: Default or Advanced
+    # ─────────────────────────────────────────────────────────────────────────
+    print_section "STEP 3: Settings"
+    echo ""
+    prompt_select "How would you like to proceed?" WIZ_SETTINGS_MODE \
+        "Use default settings" \
+        "Modify program settings (advanced)"
+    
+    # Initialize defaults
+    WIZ_ALIGNER="star"
+    WIZ_THREADS="1"
+    WIZ_UMI_LEN="7"
+    WIZ_ADAPTER="L32"
+    WIZ_CIMS="n"
+    WIZ_CITS="n"
+    WIZ_PEAK_DIST="50"
+    WIZ_PEAK_SIZE="20"
+    WIZ_FRAG_LEN="25"
+    WIZ_HOMER_ARGS=""
+    
+    if [[ "$WIZ_SETTINGS_MODE" == "2" ]]; then
+        # ─────────────────────────────────────────────────────────────────────
+        # ADVANCED MODE
+        # ─────────────────────────────────────────────────────────────────────
+        print_doc_box "CLIPittyClip" \
+            "CLIPittyClip.sh --help" \
+            "STAR: https://github.com/alexdobin/STAR" \
+            "Bowtie2: https://bowtie-bio.sourceforge.net/bowtie2" \
+            "CTK: https://zhanglab.c2b2.columbia.edu/" \
+            "HOMER: http://homer.ucsd.edu/homer/"
+        
+        # Alignment Settings
+        print_section "ALIGNMENT SETTINGS"
+        echo ""
+        prompt_select "Select aligner:" WIZ_ALIGNER_SEL "STAR (default)" "Bowtie2"
+        if [[ "$WIZ_ALIGNER_SEL" == "2" ]]; then WIZ_ALIGNER="bowtie2"; fi
+        
+        prompt_value "  Enter number of threads" "1" WIZ_THREADS "int"
+        
+        # Preprocessing Settings
+        print_section "PREPROCESSING SETTINGS"
+        echo ""
+        prompt_value "  Enter UMI length" "7" WIZ_UMI_LEN "int"
+        echo "  Adapter options: L32 (default), L19, or custom sequence"
+        prompt_value "  Enter 3' adapter" "L32" WIZ_ADAPTER
+        
+        # CIMS/CITS Settings
+        print_section "CIMS/CITS SETTINGS (CTK)"
+        echo ""
+        prompt_yesno "  Enable CIMS analysis?" "n" WIZ_CIMS
+        prompt_yesno "  Enable CITS analysis?" "n" WIZ_CITS
+        
+        # Peak Calling Settings
+        print_section "PEAK CALLING SETTINGS (HOMER)"
+        echo ""
+        prompt_value "  Enter min distance between peaks" "50" WIZ_PEAK_DIST "int"
+        prompt_value "  Enter peak size" "20" WIZ_PEAK_SIZE "int"
+        prompt_value "  Enter fragment length" "25" WIZ_FRAG_LEN "int"
+        echo "  Enter additional HOMER findPeaks arguments (optional):"
+        echo "  (Example: -style factor -L 2 -localSize 10000)"
+        read -p "  > " WIZ_HOMER_ARGS
+    fi
+    
+    # ─────────────────────────────────────────────────────────────────────────
+    # CONFIGURATION SUMMARY
+    # ─────────────────────────────────────────────────────────────────────────
+    print_summary_box
+    echo ""
+    echo "  ┌─────────────────────────────────────────────────────────────┐"
+    if [[ "$WIZ_MODE" == "pooled" ]]; then
+        printf "  │ %-20s %-38s │\n" "Input:" "$(basename "$WIZ_INPUT_FILE")"
+        printf "  │ %-20s %-38s │\n" "Barcodes:" "$(basename "$WIZ_BARCODE_FILE")"
+    elif [[ "$WIZ_MODE" == "single" ]]; then
+        printf "  │ %-20s %-38s │\n" "Input:" "$(basename "$WIZ_INPUT_FILE")"
+    else
+        printf "  │ %-20s %-38s │\n" "Input Dir:" "$WIZ_INPUT_DIR"
+    fi
+    printf "  │ %-20s %-38s │\n" "Genome Index:" "$(basename "$WIZ_GENOME_INDEX")"
+    echo "  ├─────────────────────────────────────────────────────────────┤"
+    printf "  │ %-20s %-38s │\n" "Aligner:" "$(echo "$WIZ_ALIGNER" | tr '[:lower:]' '[:upper:]')"
+    printf "  │ %-20s %-38s │\n" "Threads:" "$WIZ_THREADS"
+    printf "  │ %-20s %-38s │\n" "UMI Length:" "$WIZ_UMI_LEN"
+    printf "  │ %-20s %-38s │\n" "Adapter:" "$WIZ_ADAPTER"
+    echo "  ├─────────────────────────────────────────────────────────────┤"
+    local cims_status="Disabled"; [[ "$WIZ_CIMS" == "y" ]] && cims_status="Enabled"
+    local cits_status="Disabled"; [[ "$WIZ_CITS" == "y" ]] && cits_status="Enabled"
+    printf "  │ %-20s %-38s │\n" "CIMS:" "$cims_status"
+    printf "  │ %-20s %-38s │\n" "CITS:" "$cits_status"
+    echo "  ├─────────────────────────────────────────────────────────────┤"
+    printf "  │ %-20s %-38s │\n" "Peak Distance:" "$WIZ_PEAK_DIST"
+    printf "  │ %-20s %-38s │\n" "Peak Size:" "$WIZ_PEAK_SIZE"
+    printf "  │ %-20s %-38s │\n" "Fragment Length:" "$WIZ_FRAG_LEN"
+    if [[ -n "$WIZ_HOMER_ARGS" ]]; then
+        printf "  │ %-20s %-38s │\n" "HOMER Args:" "$WIZ_HOMER_ARGS"
+    fi
+    echo "  └─────────────────────────────────────────────────────────────┘"
+    echo ""
+    
+    prompt_yesno "  Start analysis with these settings?" "y" WIZ_CONFIRM
+    
+    if [[ "$WIZ_CONFIRM" == "n" ]]; then
+        echo "Configuration aborted."
+        return 1
+    fi
+    
+    # Export variables for main script
+    export WIZ_MODE WIZ_INPUT_FILE WIZ_INPUT_DIR WIZ_BARCODE_FILE WIZ_GENOME_INDEX
+    export WIZ_ALIGNER WIZ_THREADS WIZ_UMI_LEN WIZ_ADAPTER
+    export WIZ_CIMS WIZ_CITS
+    export WIZ_PEAK_DIST WIZ_PEAK_SIZE WIZ_FRAG_LEN WIZ_HOMER_ARGS
+    
+    echo -e "${WIZ_GREEN}Starting analysis...${WIZ_NC}"
+    return 0
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# MAPittyMap WIZARD
+# ═══════════════════════════════════════════════════════════════════════════════
+
+run_wizard_mapittymap() {
+    print_wizard_header "MAPittyMap Wizard"
+    
+    # ─────────────────────────────────────────────────────────────────────────
+    # STEP 1: Input File
+    # ─────────────────────────────────────────────────────────────────────────
+    print_section "STEP 1: Input File"
+    echo ""
+    prompt_file_path "  Enter path to input FASTQ file: " WIZ_INPUT_FILE || return 1
+    
+    # ─────────────────────────────────────────────────────────────────────────
+    # STEP 2: Genome Index
+    # ─────────────────────────────────────────────────────────────────────────
+    print_section "STEP 2: Genome Index"
+    echo ""
+    prompt_dir_path "  Enter path to genome index directory: " WIZ_GENOME_INDEX || return 1
+    
+    echo ""
+    echo -e "${WIZ_GREEN}✓ Required inputs are ready!${WIZ_NC}"
+    
+    # ─────────────────────────────────────────────────────────────────────────
+    # STEP 3: Default or Advanced
+    # ─────────────────────────────────────────────────────────────────────────
+    print_section "STEP 3: Settings"
+    echo ""
+    prompt_select "How would you like to proceed?" WIZ_SETTINGS_MODE \
+        "Use default settings" \
+        "Modify program settings (advanced)"
+    
+    # Initialize defaults
+    WIZ_ALIGNER="star"
+    WIZ_THREADS="1"
+    WIZ_MISMATCHES="2"
+    WIZ_OUTPUT_NAME=""
+    
+    if [[ "$WIZ_SETTINGS_MODE" == "2" ]]; then
+        # ─────────────────────────────────────────────────────────────────────
+        # ADVANCED MODE
+        # ─────────────────────────────────────────────────────────────────────
+        print_doc_box "MAPittyMap" \
+            "MAPittyMap.sh --help" \
+            "STAR: https://github.com/alexdobin/STAR" \
+            "Bowtie2: https://bowtie-bio.sourceforge.net/bowtie2"
+        
+        print_section "ALIGNER SETTINGS"
+        echo ""
+        prompt_select "Select aligner:" WIZ_ALIGNER_SEL "STAR (default)" "Bowtie2"
+        if [[ "$WIZ_ALIGNER_SEL" == "2" ]]; then WIZ_ALIGNER="bowtie2"; fi
+        
+        prompt_value "  Enter number of threads" "1" WIZ_THREADS "int"
+        prompt_value "  Enter max mismatches" "2" WIZ_MISMATCHES "int"
+        
+        local default_name=$(basename "$WIZ_INPUT_FILE" .fastq.gz)
+        prompt_value "  Enter output name" "$default_name" WIZ_OUTPUT_NAME
+    fi
+    
+    # ─────────────────────────────────────────────────────────────────────────
+    # CONFIGURATION SUMMARY
+    # ─────────────────────────────────────────────────────────────────────────
+    print_summary_box
+    echo ""
+    echo "  ┌─────────────────────────────────────────────────────────────┐"
+    printf "  │ %-20s %-38s │\n" "Input:" "$(basename "$WIZ_INPUT_FILE")"
+    printf "  │ %-20s %-38s │\n" "Genome Index:" "$(basename "$WIZ_GENOME_INDEX")"
+    echo "  ├─────────────────────────────────────────────────────────────┤"
+    printf "  │ %-20s %-38s │\n" "Aligner:" "$(echo "$WIZ_ALIGNER" | tr '[:lower:]' '[:upper:]')"
+    printf "  │ %-20s %-38s │\n" "Threads:" "$WIZ_THREADS"
+    printf "  │ %-20s %-38s │\n" "Max Mismatches:" "$WIZ_MISMATCHES"
+    if [[ -n "$WIZ_OUTPUT_NAME" ]]; then
+        printf "  │ %-20s %-38s │\n" "Output Name:" "$WIZ_OUTPUT_NAME"
+    fi
+    echo "  └─────────────────────────────────────────────────────────────┘"
+    echo ""
+    
+    prompt_yesno "  Start mapping with these settings?" "y" WIZ_CONFIRM
+    
+    if [[ "$WIZ_CONFIRM" == "n" ]]; then
+        echo "Configuration aborted."
+        return 1
+    fi
+    
+    # Export variables for main script
+    export WIZ_INPUT_FILE WIZ_GENOME_INDEX
+    export WIZ_ALIGNER WIZ_THREADS WIZ_MISMATCHES WIZ_OUTPUT_NAME
+    
+    echo -e "${WIZ_GREEN}Starting mapping...${WIZ_NC}"
+    return 0
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PEAKittyPeak WIZARD
+# ═══════════════════════════════════════════════════════════════════════════════
+
+run_wizard_peakittypeak() {
+    print_wizard_header "PEAKittyPeak Wizard"
+    
+    # ─────────────────────────────────────────────────────────────────────────
+    # STEP 1: Working Directory
+    # ─────────────────────────────────────────────────────────────────────────
+    print_section "STEP 1: Input Directory"
+    echo ""
+    echo "  This tool requires a BED/ folder containing collapsed BED files."
+    echo ""
+    read -p "  Enter path to working directory (or press Enter for current): " WIZ_WORK_DIR
+    if [[ -z "$WIZ_WORK_DIR" ]]; then WIZ_WORK_DIR="."; fi
+    
+    # Expand ~ and validate
+    WIZ_WORK_DIR="${WIZ_WORK_DIR/#\~/$HOME}"
+    
+    if [[ ! -d "$WIZ_WORK_DIR" ]]; then
+        echo -e "${WIZ_RED}  ✗ Directory not found: $WIZ_WORK_DIR${WIZ_NC}"
+        return 1
+    fi
+    
+    # Check for BED folder
+    WIZ_BED_COUNT=$(ls "$WIZ_WORK_DIR"/BED/*.bed 2>/dev/null | wc -l | tr -d ' ')
+    if [[ "$WIZ_BED_COUNT" -eq 0 ]]; then
+        echo -e "${WIZ_RED}  ✗ No BED/ folder or .bed files found in $WIZ_WORK_DIR${WIZ_NC}"
+        return 1
+    fi
+    
+    echo -e "${WIZ_GREEN}  ✓ Found $WIZ_BED_COUNT .bed files in BED/ folder${WIZ_NC}"
+    echo ""
+    echo -e "${WIZ_GREEN}✓ Required inputs are ready!${WIZ_NC}"
+    
+    # ─────────────────────────────────────────────────────────────────────────
+    # STEP 2: Default or Advanced
+    # ─────────────────────────────────────────────────────────────────────────
+    print_section "STEP 2: Settings"
+    echo ""
+    prompt_select "How would you like to proceed?" WIZ_SETTINGS_MODE \
+        "Use default settings" \
+        "Modify program settings (advanced)"
+    
+    # Initialize defaults
+    WIZ_PEAK_DIST="50"
+    WIZ_PEAK_SIZE="20"
+    WIZ_FRAG_LEN="25"
+    WIZ_OUTPUT_NAME="Combined"
+    WIZ_HOMER_ARGS=""
+    
+    if [[ "$WIZ_SETTINGS_MODE" == "2" ]]; then
+        # ─────────────────────────────────────────────────────────────────────
+        # ADVANCED MODE
+        # ─────────────────────────────────────────────────────────────────────
+        print_doc_box "PEAKittyPeak" \
+            "PEAKittyPeak.sh --help" \
+            "HOMER findPeaks: http://homer.ucsd.edu/homer/ngs/peaks.html" \
+            "HOMER Manual: http://homer.ucsd.edu/homer/"
+        
+        print_section "PEAK PARAMETERS"
+        echo ""
+        prompt_value "  Enter min distance between peaks" "50" WIZ_PEAK_DIST "int"
+        prompt_value "  Enter peak size" "20" WIZ_PEAK_SIZE "int"
+        prompt_value "  Enter fragment length" "25" WIZ_FRAG_LEN "int"
+        prompt_value "  Enter output name" "Combined" WIZ_OUTPUT_NAME
+        
+        print_section "ADDITIONAL HOMER OPTIONS"
+        echo ""
+        echo "  Enter additional HOMER findPeaks arguments (optional):"
+        echo "  (Example: -style factor -L 2 -localSize 10000)"
+        read -p "  > " WIZ_HOMER_ARGS
+    fi
+    
+    # ─────────────────────────────────────────────────────────────────────────
+    # CONFIGURATION SUMMARY
+    # ─────────────────────────────────────────────────────────────────────────
+    print_summary_box
+    echo ""
+    echo "  ┌─────────────────────────────────────────────────────────────┐"
+    printf "  │ %-20s %-38s │\n" "Working Dir:" "$WIZ_WORK_DIR"
+    printf "  │ %-20s %-38s │\n" "BED Files:" "$WIZ_BED_COUNT files found"
+    echo "  ├─────────────────────────────────────────────────────────────┤"
+    printf "  │ %-20s %-38s │\n" "Peak Distance:" "$WIZ_PEAK_DIST"
+    printf "  │ %-20s %-38s │\n" "Peak Size:" "$WIZ_PEAK_SIZE"
+    printf "  │ %-20s %-38s │\n" "Fragment Length:" "$WIZ_FRAG_LEN"
+    printf "  │ %-20s %-38s │\n" "Output Name:" "$WIZ_OUTPUT_NAME"
+    if [[ -n "$WIZ_HOMER_ARGS" ]]; then
+        printf "  │ %-20s %-38s │\n" "HOMER Args:" "$WIZ_HOMER_ARGS"
+    fi
+    echo "  └─────────────────────────────────────────────────────────────┘"
+    echo ""
+    
+    prompt_yesno "  Start peak calling with these settings?" "y" WIZ_CONFIRM
+    
+    if [[ "$WIZ_CONFIRM" == "n" ]]; then
+        echo "Configuration aborted."
+        return 1
+    fi
+    
+    # Export variables for main script
+    export WIZ_WORK_DIR WIZ_BED_COUNT
+    export WIZ_PEAK_DIST WIZ_PEAK_SIZE WIZ_FRAG_LEN WIZ_OUTPUT_NAME WIZ_HOMER_ARGS
+    
+    echo -e "${WIZ_GREEN}Starting peak calling...${WIZ_NC}"
+    return 0
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# LEGACY WIZARD FUNCTIONS (for backward compatibility)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Keep old function names for backward compatibility
+print_wiz_header() {
+    print_wizard_header "$1"
 }
 
 run_wizard_mapping() {
-    echo ""
-    echo -e "${WIZ_CYAN}------------------------------------------------------------------${WIZ_NC}"
-    echo -e "${WIZ_CYAN}2. Mapping (Select Strategy)${WIZ_NC}"
-    echo -e "${WIZ_CYAN}------------------------------------------------------------------${WIZ_NC}"
-    
-    local chosen_aligner="star"
-    
-    while true; do
-        echo "Which aligner do you want to use?"
-        echo "  1) STAR (Default)"
-        echo "  2) Bowtie2"
-        read -p "Selection [1]: " align_sel
-        
-        # Default to 1
-        if [[ -z "$align_sel" ]]; then align_sel="1"; fi
-        
-        if [[ "$align_sel" == "1" ]]; then
-            chosen_aligner="star"
-            break
-        elif [[ "$align_sel" == "2" ]]; then
-            chosen_aligner="bowtie2"
-            break
-        else
-             echo -e "${WIZ_RED}[ERROR] Invalid selection. Please enter 1 or 2.${WIZ_NC}"
-        fi
-    done
-    
-    export ALIGNER="$chosen_aligner" # Export for main script
-    
-    # Defaults for Aligners
-    local def_star="--outFilterMultimapNmax 10 --outFilterMismatchNmax ${MISMATCHES:-2} --alignEndsType EndToEnd --outSAMattributes ... MD"
-    local def_bt2="--md --end-to-end (Standard Sensitivity)"
-    
-    echo ""
-    # Capitalize for display
-    local display_aligner="STAR"
-    if [[ "$chosen_aligner" == "bowtie2" ]]; then display_aligner="Bowtie2"; fi
-    
-    echo -e "${WIZ_CYAN}2a. Mapping ($display_aligner)${WIZ_NC}"
-    echo "Description: Genome Alignment."
-    
-    if [[ "$chosen_aligner" == "star" ]]; then
-        echo "Current Default: $def_star"
-        echo ""
-        echo -e "${WIZ_GREEN}[STAR OPTIONS]${WIZ_NC}"
-        echo "  --outFilterMultimapNmax <int>         Max mapped places allowed (Default: 10)"
-        echo "  --outFilterMismatchNmax <int>         Max mismatches allowed (Default: 10)"
-        echo "  --alignEndsType <str>                 EndToEnd (Default) or Local"
-        echo "  --outFilterScoreMinOverLread <float>  Normalized score overhead (0.66)"
-        echo "  --chimSegmentMin <int>                Min chimeric segment length (0 to disable)"
-        
-        while true; do
-            read -p "Do you want to modify STAR parameters? [y/N]: " mod_star
-            if [[ -z "$mod_star" ]]; then mod_star="n"; fi
-            if [[ "$mod_star" =~ ^[YyNn]$ ]]; then break; fi
-            echo -e "${WIZ_RED}[ERROR] Invalid input. Please enter 'y' or 'n'.${WIZ_NC}"
-        done
-        
-        if [[ "$mod_star" =~ ^[Yy]$ ]]; then
-             while true; do
-                read -p "Enter additional STAR arguments: " ADV_ALIGNER_ARGS
-                if validate_option "STAR" "$ADV_ALIGNER_ARGS"; then break; else
-                    read -p "Retry? (Press Enter to skip, or y to retry): " retry
-                    if [[ "$retry" != "y" ]]; then ADV_ALIGNER_ARGS=""; break; fi
-                fi
-             done
-        fi
-    else
-        # Bowtie2
-        echo "Current Default: $def_bt2"
-        echo ""
-        echo -e "${WIZ_GREEN}[BOWTIE2 OPTIONS]${WIZ_NC}"
-        echo "  --local                               Local alignment"
-        echo "  --end-to-end                          End-to-End alignment (Default)"
-        echo "  -N <int>                              Max mismatches in seed (0 or 1)"
-        echo "  -L <int>                              Seed length"
-        
-        while true; do
-            read -p "Do you want to modify Bowtie2 parameters? [y/N]: " mod_bt2
-            if [[ -z "$mod_bt2" ]]; then mod_bt2="n"; fi
-            if [[ "$mod_bt2" =~ ^[YyNn]$ ]]; then break; fi
-            echo -e "${WIZ_RED}[ERROR] Invalid input. Please enter 'y' or 'n'.${WIZ_NC}"
-        done
-        
-        if [[ "$mod_bt2" =~ ^[Yy]$ ]]; then
-             while true; do
-                read -p "Enter additional Bowtie2 arguments: " ADV_ALIGNER_ARGS
-                if validate_option "bowtie2" "$ADV_ALIGNER_ARGS"; then break; else
-                    read -p "Retry? (Press Enter to skip, or y to retry): " retry
-                    if [[ "$retry" != "y" ]]; then ADV_ALIGNER_ARGS=""; break; fi
-                fi
-             done
-        fi
-    fi
+    # Legacy function - redirect to new wizard
+    run_wizard_mapittymap
 }
 
 run_wizard_homer() {
-    local def_homer="-style factor -L 2 -localSize 10000 -minDist ${PEAK_DIST:-50}"
-    
-    echo ""
-    echo -e "${WIZ_CYAN}------------------------------------------------------------------${WIZ_NC}"
-    echo -e "${WIZ_CYAN}3. Peak Calling (HOMER)${WIZ_NC}"
-    echo -e "${WIZ_CYAN}------------------------------------------------------------------${WIZ_NC}"
-    echo "Description: Peak Identification."
-    echo "Current Default: $def_homer"
-    echo ""
-    echo -e "${WIZ_GREEN}[HOMER OPTIONS]${WIZ_NC}"
-    echo "  -style <str>                          factor (TF), histone (Broad), groseq, tss"
-    echo "  -F <float>                            Fold enrichment over control (Default: 4.0)"
-    echo "  -L <float>                            Local filtering enrichment (Default: 4.0)"
-    echo "  -localSize <int>                      Region size for local background (Default: 10000)"
-    echo "  -size <int>                           Peak size (Default: auto/varies)"
-    echo "  -minDist <int>                        Min distance between peaks"
-    
-    while true; do
-        read -p "Do you want to modify HOMER parameters? [y/N]: " mod_homer
-        if [[ -z "$mod_homer" ]]; then mod_homer="n"; fi
-        if [[ "$mod_homer" =~ ^[YyNn]$ ]]; then break; fi
-        echo -e "${WIZ_RED}[ERROR] Invalid input. Please enter 'y' or 'n'.${WIZ_NC}"
-    done
-    
-    if [[ "$mod_homer" =~ ^[Yy]$ ]]; then
-         while true; do
-            read -p "Enter additional HOMER arguments: " ADV_HOMER_ARGS
-            if validate_option "findPeaks" "$ADV_HOMER_ARGS"; then break; else
-                read -p "Retry? (Press Enter to skip, or y to retry): " retry
-                if [[ "$retry" != "y" ]]; then ADV_HOMER_ARGS=""; break; fi
-            fi
-         done
-    fi
+    # Legacy function - minimal implementation for standalone HOMER config
+    prompt_value "Peak distance" "50" PEAK_DIST "int"
+    prompt_value "Peak size" "20" PEAK_SIZE "int"
+    prompt_value "Fragment length" "25" FRAG_LEN "int"
+    read -p "Additional HOMER arguments: " ADV_HOMER_ARGS
 }
-
-# CTK CIMS/CITS Analysis Configuration
-run_wizard_ctk() {
-    echo ""
-    echo -e "${WIZ_CYAN}══════════════════════════════════════════════════════════════${WIZ_NC}"
-    echo -e "${WIZ_CYAN}  CTK CIMS/CITS ANALYSIS${WIZ_NC}"
-    echo -e "${WIZ_CYAN}══════════════════════════════════════════════════════════════${WIZ_NC}"
-    echo ""
-    echo "CIMS/CITS analysis identifies crosslink sites at single-nucleotide resolution."
-    echo "  - CIMS: Detects crosslink-induced mutations (deletions/substitutions)"
-    echo "  - CITS: Detects crosslink-induced truncations"
-    echo ""
-    
-    # Enable CTK Analysis?
-    while true; do
-        read -p "Run CIMS/CITS analysis? [cims/cits/both/no] (default: no): " ctk_choice
-        if [[ -z "$ctk_choice" ]]; then ctk_choice="no"; fi
-        ctk_choice=$(echo "$ctk_choice" | tr '[:upper:]' '[:lower:]')
-        if [[ "$ctk_choice" =~ ^(cims|cits|both|no)$ ]]; then break; fi
-        echo -e "${WIZ_RED}[ERROR] Invalid input. Enter 'cims', 'cits', 'both', or 'no'.${WIZ_NC}"
-    done
-    
-    # Set flags based on choice
-    case "$ctk_choice" in
-        cims)
-            RUN_CIMS="true"
-            RUN_CITS="false"
-            ;;
-        cits)
-            RUN_CIMS="false"
-            RUN_CITS="true"
-            ;;
-        both)
-            RUN_CIMS="true"
-            RUN_CITS="true"
-            ;;
-        no)
-            RUN_CIMS="false"
-            RUN_CITS="false"
-            CIMS_ITERATIONS="10"
-            CIMS_FDR="1"
-            CITS_PVALUE="1"
-            CITS_GAP="25"
-            RUN_MOTIF="no"
-            MOTIF_FLANK="10"
-            return
-            ;;
-    esac
-    
-    # CIMS Parameters (only if CIMS enabled)
-    if [[ "$RUN_CIMS" == "true" ]]; then
-        echo ""
-        echo -e "${WIZ_YELLOW}CIMS Parameters:${WIZ_NC}"
-        
-        # CIMS Iterations
-        while true; do
-            read -p "  Permutation iterations [default: 10]: " cims_iter
-            if [[ -z "$cims_iter" ]]; then cims_iter="10"; break; fi
-            if [[ "$cims_iter" =~ ^[0-9]+$ ]] && [[ "$cims_iter" -gt 0 ]]; then break; fi
-            echo -e "${WIZ_RED}[ERROR] Must be a positive integer.${WIZ_NC}"
-        done
-        CIMS_ITERATIONS="$cims_iter"
-        
-        # CIMS FDR
-        while true; do
-            read -p "  FDR threshold [default: 1 (all sites)]: " cims_fdr
-            if [[ -z "$cims_fdr" ]]; then cims_fdr="1"; break; fi
-            if [[ "$cims_fdr" =~ ^[0-9]*\.?[0-9]+$ ]]; then break; fi
-            echo -e "${WIZ_RED}[ERROR] Must be a decimal number (e.g., 1 or 0.001).${WIZ_NC}"
-        done
-        CIMS_FDR="$cims_fdr"
-    fi
-    
-    # CITS Parameters (only if CITS enabled)
-    if [[ "$RUN_CITS" == "true" ]]; then
-        echo ""
-        echo -e "${WIZ_YELLOW}CITS Parameters:${WIZ_NC}"
-        
-        # CITS P-value
-        while true; do
-            read -p "  P-value threshold [default: 1 (all sites)]: " cits_pval
-            if [[ -z "$cits_pval" ]]; then cits_pval="1"; break; fi
-            if [[ "$cits_pval" =~ ^[0-9]*\.?[0-9]+$ ]]; then break; fi
-            echo -e "${WIZ_RED}[ERROR] Must be a decimal number (e.g., 1 or 0.001).${WIZ_NC}"
-        done
-        CITS_PVALUE="$cits_pval"
-        
-        # CITS Gap
-        while true; do
-            read -p "  Clustering gap (-1 = no cluster) [default: 25]: " cits_gap
-            if [[ -z "$cits_gap" ]]; then cits_gap="25"; break; fi
-            if [[ "$cits_gap" =~ ^-?[0-9]+$ ]]; then break; fi
-            echo -e "${WIZ_RED}[ERROR] Must be an integer.${WIZ_NC}"
-        done
-        CITS_GAP="$cits_gap"
-    fi
-    
-    echo ""
-    echo -e "${WIZ_YELLOW}Motif Enrichment:${WIZ_NC}"
-    
-    # Run Motif Analysis?
-    while true; do
-        read -p "  Run HOMER motif enrichment? [Y/n]: " run_motif
-        if [[ -z "$run_motif" ]]; then run_motif="y"; fi
-        if [[ "$run_motif" =~ ^[YyNn]$ ]]; then break; fi
-        echo -e "${WIZ_RED}[ERROR] Invalid input. Please enter 'y' or 'n'.${WIZ_NC}"
-    done
-    
-    if [[ "$run_motif" =~ ^[Yy]$ ]]; then
-        RUN_MOTIF="yes"
-        
-        # Motif Flank
-        while true; do
-            read -p "  Flanking nucleotides (±) [default: 10]: " motif_flank
-            if [[ -z "$motif_flank" ]]; then motif_flank="10"; break; fi
-            if [[ "$motif_flank" =~ ^[0-9]+$ ]] && [[ "$motif_flank" -gt 0 ]]; then break; fi
-            echo -e "${WIZ_RED}[ERROR] Must be a positive integer.${WIZ_NC}"
-        done
-        MOTIF_FLANK="$motif_flank"
-    else
-        RUN_MOTIF="no"
-        MOTIF_FLANK="10"
-    fi
-    
-    echo ""
-    echo -e "${WIZ_GREEN}CTK configuration complete.${WIZ_NC}"
-}
-
-# The main wizard entry point (sequential)
-run_wizard() {
-    print_wiz_header
-    run_wizard_fastp
-    run_wizard_mapping
-    run_wizard_homer
-    run_wizard_ctk
-    
-    # Summary
-    echo ""
-    echo -e "${WIZ_CYAN}------------------------------------------------------------------${WIZ_NC}"
-    echo -e "${WIZ_CYAN}[SUMMARY]${WIZ_NC}"
-    
-    echo "1. Preprocessing (Fastp)"
-    echo -e "   Default:        --length_required 16 --average_qual 30"
-    echo -e "   Added/Modified: ${ADV_FASTP_ARGS:-(None)}"
-    
-    local display_aligner="STAR"
-    if [[ "$ALIGNER" == "bowtie2" ]]; then display_aligner="Bowtie2"; fi
-    
-    echo "2. Aligner ($display_aligner)"
-    if [[ "$ALIGNER" == "star" ]]; then
-        echo -e "   Default:        --outFilterMultimapNmax 10 --outFilterMismatchNmax ${MISMATCHES:-2} --alignEndsType EndToEnd --outSAMattributes ... MD"
-    else
-        echo -e "   Default:        --md --end-to-end (Standard Sensitivity)"
-    fi
-    echo -e "   Added/Modified: ${ADV_ALIGNER_ARGS:-(None)}"
-    
-    echo "3. Peak Calling (HOMER)"
-    echo -e "   Default:        -style factor -L 2 -localSize 10000 -minDist ${PEAK_DIST:-50}"
-    echo -e "   Added/Modified: ${ADV_HOMER_ARGS:-(None)}"
-    
-    echo "4. CTK CIMS/CITS Analysis"
-    if [[ "$RUN_CIMS" == "true" && "$RUN_CITS" == "true" ]]; then
-        echo -e "   Mode:           Both (CTK_Analysis)"
-        echo -e "   CIMS:           iterations=${CIMS_ITERATIONS}, FDR=${CIMS_FDR}"
-        echo -e "   CITS:           p-value=${CITS_PVALUE}, gap=${CITS_GAP}"
-    elif [[ "$RUN_CIMS" == "true" ]]; then
-        echo -e "   Mode:           CIMS only (CIMS_Analysis)"
-        echo -e "   CIMS:           iterations=${CIMS_ITERATIONS}, FDR=${CIMS_FDR}"
-    elif [[ "$RUN_CITS" == "true" ]]; then
-        echo -e "   Mode:           CITS only (CITS_Analysis)"
-        echo -e "   CITS:           p-value=${CITS_PVALUE}, gap=${CITS_GAP}"
-    else
-        echo -e "   Enabled:        No"
-    fi
-    if [[ "$RUN_CIMS" == "true" || "$RUN_CITS" == "true" ]]; then
-        if [[ "$RUN_MOTIF" == "yes" ]]; then
-            echo -e "   Motif:          HOMER (±${MOTIF_FLANK}nt flanks)"
-        else
-            echo -e "   Motif:          Disabled"
-        fi
-    fi
-
-    echo -e "${WIZ_CYAN}------------------------------------------------------------------${WIZ_NC}"
-    
-    while true; do
-        read -p "Proceed with these settings? [Y/n]: " confirm
-        if [[ -z "$confirm" ]]; then confirm="y"; fi
-        if [[ "$confirm" =~ ^[YyNn]$ ]]; then break; fi
-        echo -e "${WIZ_RED}[ERROR] Invalid input. Please enter 'y' or 'n'.${WIZ_NC}"
-    done
-    
-    if [[ "$confirm" =~ ^[Nn]$ ]]; then
-        echo "Configuration aborted."
-        exit 1
-    fi
-    
-    # Persist all configuration
-    echo "ADV_FASTP_ARGS=\"$ADV_FASTP_ARGS\"" > analysis_config.env
-    echo "ALIGNER=\"$ALIGNER\"" >> analysis_config.env
-    echo "ADV_ALIGNER_ARGS=\"$ADV_ALIGNER_ARGS\"" >> analysis_config.env
-    echo "ADV_HOMER_ARGS=\"$ADV_HOMER_ARGS\"" >> analysis_config.env
-    
-    # CTK Configuration
-    echo "RUN_CIMS=\"$RUN_CIMS\"" >> analysis_config.env
-    echo "RUN_CITS=\"$RUN_CITS\"" >> analysis_config.env
-    echo "CIMS_ITERATIONS=\"$CIMS_ITERATIONS\"" >> analysis_config.env
-    echo "CIMS_FDR=\"$CIMS_FDR\"" >> analysis_config.env
-    echo "CITS_PVALUE=\"$CITS_PVALUE\"" >> analysis_config.env
-    echo "CITS_GAP=\"$CITS_GAP\"" >> analysis_config.env
-    echo "RUN_MOTIF=\"$RUN_MOTIF\"" >> analysis_config.env
-    echo "MOTIF_FLANK=\"$MOTIF_FLANK\"" >> analysis_config.env
-    
-    echo -e "${WIZ_GREEN}Configuration saved to 'analysis_config.env'. Starting Analysis...${WIZ_NC}"
-    echo "=================================================================="
-}
-

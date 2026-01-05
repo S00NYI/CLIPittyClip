@@ -16,7 +16,7 @@ CLIPittyClip v3.0 provides a complete, modernized workflow for CLIP-seq analysis
 - **Integrated QC**: `fastp` for quality filtering, trimming, and UMI extraction
 - **Demultiplexing**: Native barcode-based sample splitting with `cutadapt`
 - **CIMS/CITS Analysis**: Zhang lab's CTK toolkit integration for crosslink site detection
-- **Interactive Wizard**: `--advanced` mode for parameter tuning
+- **Interactive Wizard**: `--wizard` mode for guided configuration
 - **Flexible Output**: Conditional folder naming based on analysis type
 
 ## Pipeline Flow
@@ -218,7 +218,7 @@ Run `CLIPittyClip.sh --help` for full usage. Key options:
 | `-g, --groups` | Aggregate samples by group for CIMS/CITS |
 | `--no-dedup` | Disable pooled read deduplication |
 | `--sample <int>` | Test mode (first N reads) |
-| `--advanced` | Interactive configuration wizard |
+| `--wizard` | Interactive configuration wizard |
 
 ## Group-Based CIMS/CITS Analysis
 
@@ -299,7 +299,7 @@ Standalone mapping module for aligning FASTQ files to a reference genome.
 - `-t <int>`: Number of threads (default: 1)
 - `--aligner <star|bowtie2>`: Alignment tool (default: star)
 - `-o <path>`: Output directory
-- `--advanced`: Launch interactive configuration wizard
+- `--wizard`: Launch interactive configuration wizard
 
 ```bash
 # Using STAR
@@ -309,7 +309,7 @@ MAPittyMap.sh -i reads.fastq.gz -x /path/to/star_index -t 8 --aligner star
 MAPittyMap.sh -i reads.fastq.gz -x /path/to/bt2_index -t 8 --aligner bowtie2
 
 # Interactive wizard mode for custom aligner settings
-MAPittyMap.sh -i reads.fastq.gz -x /path/to/star_index -t 8 --advanced
+MAPittyMap.sh -i reads.fastq.gz -x /path/to/star_index -t 8 --wizard
 ```
 
 ---
@@ -326,7 +326,7 @@ Standalone peak calling using HOMER. Requires a directory containing collapsed B
 - `-f <int>`: Fragment length (default: 25)
 - `-n <string>`: Output name prefix
 - `-a <string>`: Additional HOMER findPeaks arguments
-- `--advanced`: Launch interactive HOMER configuration wizard
+- `--wizard`: Launch interactive HOMER configuration wizard
 
 ```bash
 # Basic peak calling
@@ -336,7 +336,7 @@ PEAKittyPeak.sh -p 50 -z 20 -n Combined
 PEAKittyPeak.sh -n Combined -a '-style factor -L 2'
 
 # Interactive wizard mode for HOMER settings
-PEAKittyPeak.sh --advanced
+PEAKittyPeak.sh --wizard
 ```
 
 ## Generating Genome Indices

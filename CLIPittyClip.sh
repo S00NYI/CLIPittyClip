@@ -80,7 +80,8 @@ function show_usage {
     echo "OUTPUT OPTIONS:"
     echo "  -k                 Keep intermediate files"
     echo "  --notification     Enable system notifications on completion"
-    echo "  --advanced         Launch interactive configuration wizard"
+    echo "  --wizard           Launch interactive configuration wizard
+  --advanced         Alias for --wizard (backward compatibility)"
     echo ""
     echo "EXAMPLES:"
     echo "  # Standard run (Single File)"
@@ -108,7 +109,7 @@ SAMPLE_SIZE=0
 CHILD_MODE="false"
 DEDUP_MODE="true" # Always on by default per user request
 NOTIFY_MODE="false"
-ADVANCED_MODE="false"
+WIZARD_MODE="false"
 ALIGNER="star" # Default match
 
 # CTK CIMS/CITS Parameters (with defaults)
@@ -168,8 +169,8 @@ while [[ $# -gt 0 ]]; do
         --dedup) DEDUP_MODE="true"; shift ;; # Keep for compat
         --notification) NOTIFY_MODE="true"; shift ;;
         --child) CHILD_MODE="true"; shift ;;
-        --advanced)
-            ADVANCED_MODE="true"
+        --wizard|--advanced)
+            WIZARD_MODE="true"
             shift
             ;;
         --verbose) VERBOSE="true"; shift ;;
@@ -190,16 +191,40 @@ else
 if [[ -f "analysis_config.env" ]]; then
     # We only source if we are NOT running the wizard right now (child process)
     # OR if we want to load defaults. 
-    # Logic: If --advanced, run wizard (which overwrites config). If not --advanced, try to load config.
-    if [[ "$ADVANCED_MODE" == "false" ]]; then
+    # Logic: If --wizard, run wizard (which overwrites config). If not --wizard, try to load config.
+    if [[ "$WIZARD_MODE" == "false" ]]; then
         source "analysis_config.env"
     fi
 fi
 
-if [[ "$ADVANCED_MODE" == "true" ]]; then
-    run_wizard
-    # Wizard writes analysis_config.env, so source it now
-    source "analysis_config.env"
+if [[ "$WIZARD_MODE" == "true" ]]; then
+    # Run the comprehensive wizard
+    run_wizard_clipittyclip
+    if [[ $? -ne 0 ]]; then
+        exit 1
+    fi
+    
+    # Apply wizard settings to main script variables
+    if [[ "$WIZ_MODE" == "pooled" ]]; then
+        INPUT_FILE="$WIZ_INPUT_FILE"
+        BARCODE_FILE="$WIZ_BARCODE_FILE"
+    elif [[ "$WIZ_MODE" == "single" ]]; then
+        INPUT_FILE="$WIZ_INPUT_FILE"
+    elif [[ "$WIZ_MODE" == "directory" ]]; then
+        INPUT_DIR="$WIZ_INPUT_DIR"
+    fi
+    
+    GENOME_INDEX="$WIZ_GENOME_INDEX"
+    ALIGNER="$WIZ_ALIGNER"
+    THREADS="$WIZ_THREADS"
+    UMI_LEN="$WIZ_UMI_LEN"
+    ADAPTER="$WIZ_ADAPTER"
+    [[ "$WIZ_CIMS" == "y" ]] && RUN_CIMS="true"
+    [[ "$WIZ_CITS" == "y" ]] && RUN_CITS="true"
+    PEAK_DIST="$WIZ_PEAK_DIST"
+    PEAK_SIZE="$WIZ_PEAK_SIZE"
+    FRAG_LEN="$WIZ_FRAG_LEN"
+    ADV_HOMER_ARGS="$WIZ_HOMER_ARGS"
 fi
 
 # Log file setup
@@ -207,14 +232,14 @@ LOG_FILE="$(pwd)/CLIPittyClip_$(date +%Y%m%d_%H%M%S).log"
     touch "${LOG_FILE}"
 fi
 
-# Validation: Need either -i or -d (but not both)
+# Validation: Need either -i or -d (but not both) - skip if wizard already set them
 if [[ -n "$INPUT_DIR" ]] && [[ -n "$INPUT_FILE" ]]; then
     log_error "Cannot use both -i and -d. Choose one input mode."
     show_usage
     exit 1
 fi
 
-if [[ -z "$INPUT_FILE" ]] && [[ -z "$INPUT_DIR" ]]; then
+if [[ -z "$INPUT_FILE" ]] && [[ -z "$INPUT_DIR" ]] && [[ "$WIZARD_MODE" == "false" ]]; then
     log_error "Missing required input (-i or -d). Provide a single file or input directory."
     show_usage
     exit 1

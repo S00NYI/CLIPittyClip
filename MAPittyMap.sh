@@ -16,7 +16,7 @@ INPUT_FILE=""
 EXP_ID=""
 ALIGNER="star"
 MISMATCH_MAX=2
-ADVANCED_MODE="false"
+WIZARD_MODE="false"
 
 function show_usage {
     echo ""
@@ -33,8 +33,9 @@ function show_usage {
     echo "  -o <str>         Output ID (default: derived from filename)"
     echo "  -t <int>         Number of threads (default: 1)"
     echo "  -m <int>         Max mismatches (default: 2)"
-    echo "  --advanced       Launch interactive configuration wizard"
-    echo "  -h, --help       Show this help message"
+    echo "  --wizard         Launch interactive configuration wizard
+  --advanced       Alias for --wizard (backward compatibility)
+  -h, --help       Show this help message"
     echo ""
     echo "OUTPUT:"
     echo "  Creates 1_BAM/ directory with sorted, indexed BAM file"
@@ -60,13 +61,29 @@ while [[ $# -gt 0 ]]; do
         -x) GENOME_INDEX="$2"; shift 2 ;;
         -o) EXP_ID="$2"; shift 2 ;;
         --aligner) ALIGNER=$(echo "$2" | tr '[:upper:]' '[:lower:]'); shift 2 ;;
-        --advanced) ADVANCED_MODE="true"; shift 1 ;;
+        --wizard|--advanced) WIZARD_MODE="true"; shift 1 ;;
         -t) THREADS="$2"; shift 2 ;;
         -m) MISMATCH_MAX="$2"; shift 2 ;;
         -h|--help) show_usage; exit 0 ;;
         *) log_error "Unknown option: $1"; show_usage; exit 1 ;;
     esac
 done
+
+# Run Wizard if requested (before validation so it can collect inputs)
+if [[ "$WIZARD_MODE" == "true" ]]; then
+    run_wizard_mapittymap
+    if [[ $? -ne 0 ]]; then
+        exit 1
+    fi
+    
+    # Apply wizard settings
+    INPUT_FILE="$WIZ_INPUT_FILE"
+    GENOME_INDEX="$WIZ_GENOME_INDEX"
+    ALIGNER="$WIZ_ALIGNER"
+    THREADS="$WIZ_THREADS"
+    MISMATCH_MAX="$WIZ_MISMATCHES"
+    [[ -n "$WIZ_OUTPUT_NAME" ]] && EXP_ID="$WIZ_OUTPUT_NAME"
+fi
 
 if [[ -z "$INPUT_FILE" ]] || [[ -z "$GENOME_INDEX" ]]; then
     log_error "Missing arguments."
@@ -79,16 +96,6 @@ check_file "$INPUT_FILE" || exit 1
 # Resolve absolute paths
 INPUT_FILE="$(cd "$(dirname "$INPUT_FILE")" && pwd)/$(basename "$INPUT_FILE")"
 GENOME_INDEX="$(cd "$GENOME_INDEX" && pwd)"
-
-# Run Wizard if requested
-if [[ "$ADVANCED_MODE" == "true" ]]; then
-    print_wiz_header
-    # Logic: Wizard sets ALIGNER and ADV_ALIGNER_ARGS
-    # We pass MISMATCHES as context for defaults if possible (MISMATCH_MAX maps to MISMATCHES var used in wizard)
-    export MISMATCHES="$MISMATCH_MAX" 
-    run_wizard_mapping
-    # Wizard updates global ALIGNER and ADV_ALIGNER_ARGS
-fi
 
 # Check Dependencies based on Aligner
 if [[ "$ALIGNER" == "bowtie2" ]]; then

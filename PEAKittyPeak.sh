@@ -14,7 +14,7 @@ PEAK_SIZE=20
 FRAG_LEN=25
 BASE_NAME="Combined"
 ADV_HOMER_ARGS="" # Additional arguments for findPeaks
-ADVANCED_MODE="false"
+WIZARD_MODE="false"
 
 function show_usage {
     echo ""
@@ -32,7 +32,8 @@ function show_usage {
     echo "  -f <int>       Fragment length (default: 25)"
     echo "  -n <str>       Base name for output (default: 'Combined')"
     echo "  -a <str>       Additional HOMER findPeaks arguments (quoted string)"
-    echo "  --advanced     Launch interactive HOMER configuration wizard"
+    echo "  --wizard       Launch interactive configuration wizard"
+    echo "  --advanced     Alias for --wizard (backward compatibility)"
     echo "  -h, --help     Show this help message"
     echo ""
     echo "EXAMPLES:"
@@ -54,7 +55,7 @@ while getopts "p:z:f:n:a:h-:" opt; do
   # Handle long options manually
   if [[ "$opt" == "-" ]]; then
       case "${OPTARG}" in
-          advanced) ADVANCED_MODE="true" ;;
+          wizard|advanced) WIZARD_MODE="true" ;;
           *) log_error "Invalid option --${OPTARG}"; show_usage; exit 1 ;;
       esac
       continue
@@ -71,13 +72,20 @@ while getopts "p:z:f:n:a:h-:" opt; do
   esac
 done
 
-# Run Wizard if requested
-if [[ "$ADVANCED_MODE" == "true" ]]; then
-    print_wiz_header
-    # Export PEAK_DIST so wizard sees the default user might have passed via -p
-    export PEAK_DIST
-    run_wizard_homer
-    # Wizard output: ADV_HOMER_ARGS is set globally
+# Run Wizard if requested (before validation so it can collect inputs)
+if [[ "$WIZARD_MODE" == "true" ]]; then
+    run_wizard_peakittypeak
+    if [[ $? -ne 0 ]]; then
+        exit 1
+    fi
+    
+    # Apply wizard settings
+    [[ -n "$WIZ_WORK_DIR" ]] && cd "$WIZ_WORK_DIR"
+    PEAK_DIST="$WIZ_PEAK_DIST"
+    PEAK_SIZE="$WIZ_PEAK_SIZE"
+    FRAG_LEN="$WIZ_FRAG_LEN"
+    BASE_NAME="$WIZ_OUTPUT_NAME"
+    ADV_HOMER_ARGS="$WIZ_HOMER_ARGS"
 fi
 
 # Check Requirements
