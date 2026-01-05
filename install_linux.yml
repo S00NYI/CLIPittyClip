@@ -1,0 +1,42 @@
+name: CLIPittyClip_env
+channels:
+  - conda-forge
+  - bioconda
+  - chaolinzhanglab
+dependencies:
+  # Core utilities
+  - wget
+  - python>=3.10
+  - perl
+  - perl-threaded
+  - perl-yaml
+  - perl-bioperl
+  - perl-math-cdf
+  
+  # Alignment & Processing
+  - bedtools
+  - samtools
+  - htslib
+  - bowtie2
+  - bwa
+  - star
+  
+  # CLIP-specific
+  - ctk
+  - cutadapt
+  - fastp
+  - seqkit
+  - trim-galore
+  - homer
+  
+  # Python packages
+  - pandas
+  - numpy
+  - scipy
+  - seaborn
+  - matplotlib
+  
+  # SSL/Certs
+  - ca-certificates
+  - openssl
+  - certifi

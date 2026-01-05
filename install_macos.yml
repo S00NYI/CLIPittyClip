@@ -1,0 +1,52 @@
+name: CLIPittyClip_env
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  # Core utilities
+  - wget
+  - python>=3.10
+  - perl
+  - perl-threaded
+  - perl-yaml
+  - perl-bioperl
+  - perl-math-cdf
+  
+  # Alignment & Processing
+  - bedtools
+  - samtools
+  - htslib
+  - bowtie2
+  - bwa
+  - star
+  
+  # CLIP-specific (CTK and HOMER installed separately - see README)
+  - cutadapt
+  - fastp
+  - seqkit
+  - trim-galore
+  
+  # Python packages
+  - pandas
+  - numpy
+  - scipy
+  - seaborn
+  - matplotlib
+  
+  # SSL/Certs
+  - ca-certificates
+  - openssl
+  - certifi
+
+# NOTE: After environment creation, install CTK and HOMER manually:
+# 
+# CTK Installation:
+#   git clone https://github.com/chaolinzhanglab/ctk.git ~/Tools/ctk
+#   echo 'export PATH=$PATH:~/Tools/ctk' >> ~/.zshrc
+#   echo 'export PERL5LIB=$PERL5LIB:~/Tools/ctk/czplib' >> ~/.zshrc
+#
+# HOMER Installation:
+#   mkdir -p ~/Tools/homer && cd ~/Tools/homer
+#   wget http://homer.ucsd.edu/homer/configureHomer.pl
+#   perl configureHomer.pl -install
+#   echo 'export PATH=$PATH:~/Tools/homer/bin' >> ~/.zshrc

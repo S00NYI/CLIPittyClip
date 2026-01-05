@@ -70,21 +70,47 @@ cd CLIPittyClip
 ```
 
 ### 2. Create Conda Environment
+
+#### Linux (Recommended)
 ```bash
-conda env create -f install_environment.yml
-# OR with mamba (faster)
-mamba env create -f install_environment.yml
+mamba env create -f install_linux.yml
 ```
 
-**Apple Silicon (M1/M2/M3)**: If issues arise, force x64 architecture:
+#### macOS (Intel or Apple Silicon)
 ```bash
-conda env create -f install_environment.yml --platform osx-64
+# Force x86 architecture (required for compatibility)
+CONDA_SUBDIR=osx-64 mamba create -n CLIPittyClip_env
+conda activate CLIPittyClip_env
+conda config --env --set subdir osx-64
+mamba env update -f install_macos.yml
+
+# Then install CTK and HOMER manually (see below)
 ```
 
-### 3. Activate & Setup
+### 3. macOS: Manual CTK & HOMER Installation
+
+Due to dependency conflicts, CTK and HOMER must be installed manually on macOS:
+
+**CTK:**
 ```bash
-conda activate clipittyclip_env
-bash install_zshrc.sh  # Add scripts to PATH
+git clone https://github.com/chaolinzhanglab/ctk.git ~/Tools/ctk
+echo 'export PATH=$PATH:~/Tools/ctk' >> ~/.zshrc
+echo 'export PERL5LIB=$PERL5LIB:~/Tools/ctk/czplib' >> ~/.zshrc
+source ~/.zshrc
+```
+
+**HOMER:**
+```bash
+mkdir -p ~/Tools/homer && cd ~/Tools/homer
+wget http://homer.ucsd.edu/homer/configureHomer.pl
+perl configureHomer.pl -install
+echo 'export PATH=$PATH:~/Tools/homer/bin' >> ~/.zshrc
+source ~/.zshrc
+```
+
+### 4. Activate Environment
+```bash
+conda activate CLIPittyClip_env
 ```
 
 ## Quick Start
