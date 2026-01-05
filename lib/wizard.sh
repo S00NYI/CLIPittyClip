@@ -300,12 +300,60 @@ run_wizard_clipittyclip() {
         
         prompt_value "  Enter number of threads" "1" WIZ_THREADS "int"
         
+        echo ""
+        if [[ "$WIZ_ALIGNER" == "star" ]]; then
+            echo -e "  ${WIZ_YELLOW}Current STAR defaults:${WIZ_NC}"
+            echo "    --outFilterMultimapNmax 10"
+            echo "    --outFilterMismatchNmax 2"
+            echo "    --alignEndsType EndToEnd"
+            echo ""
+            echo -e "  ${WIZ_GREEN}Common STAR options:${WIZ_NC}"
+            echo "    --outFilterMultimapNmax <int>    Max mapped locations (default: 10)"
+            echo "    --outFilterMismatchNmax <int>    Max mismatches (default: 2)"
+            echo "    --alignEndsType <str>            EndToEnd or Local"
+            echo "    --chimSegmentMin <int>           Min chimeric segment length"
+            echo ""
+            echo -e "  ${WIZ_YELLOW}Note:${WIZ_NC} These are examples. See STAR manual for full options."
+            echo "  Enter additional STAR arguments (optional):"
+            read -p "  > " WIZ_ALIGNER_ARGS
+        else
+            echo -e "  ${WIZ_YELLOW}Current Bowtie2 defaults:${WIZ_NC}"
+            echo "    --end-to-end (Standard sensitivity)"
+            echo "    --md"
+            echo ""
+            echo -e "  ${WIZ_GREEN}Common Bowtie2 options:${WIZ_NC}"
+            echo "    --local                          Local alignment mode"
+            echo "    --very-sensitive                 More accurate alignment"
+            echo "    -N <int>                         Max mismatches in seed (0 or 1)"
+            echo "    -L <int>                         Seed length"
+            echo ""
+            echo -e "  ${WIZ_YELLOW}Note:${WIZ_NC} These are examples. See Bowtie2 manual for full options."
+            echo "  Enter additional Bowtie2 arguments (optional):"
+            read -p "  > " WIZ_ALIGNER_ARGS
+        fi
+        
         # Preprocessing Settings
-        print_section "PREPROCESSING SETTINGS"
+        print_section "PREPROCESSING SETTINGS (fastp)"
         echo ""
         prompt_value "  Enter UMI length" "7" WIZ_UMI_LEN "int"
         echo "  Adapter options: L32 (default), L19, or custom sequence"
         prompt_value "  Enter 3' adapter" "L32" WIZ_ADAPTER
+        
+        echo ""
+        echo -e "  ${WIZ_YELLOW}Current fastp defaults:${WIZ_NC}"
+        echo "    --length_required 16"
+        echo "    --average_qual 30"
+        echo ""
+        echo -e "  ${WIZ_GREEN}Common fastp options:${WIZ_NC}"
+        echo "    -q, --qualified_quality_phred <int>   Quality threshold (default: 15)"
+        echo "    -l, --length_required <int>           Min read length (default: 15)"
+        echo "    --average_qual <int>                  Mean quality requirement"
+        echo "    --trim_front1 <int>                   Trim bases from front of read"
+        echo "    --trim_tail1 <int>                    Trim bases from tail of read"
+        echo ""
+        echo -e "  ${WIZ_YELLOW}Note:${WIZ_NC} These are examples. See fastp documentation for full options."
+        echo "  Enter additional fastp arguments (optional):"
+        read -p "  > " WIZ_FASTP_ARGS
         
         # CIMS/CITS Settings
         print_section "CIMS/CITS SETTINGS (CTK)"
@@ -313,14 +361,51 @@ run_wizard_clipittyclip() {
         prompt_yesno "  Enable CIMS analysis?" "n" WIZ_CIMS
         prompt_yesno "  Enable CITS analysis?" "n" WIZ_CITS
         
+        if [[ "$WIZ_CIMS" == "y" ]] || [[ "$WIZ_CITS" == "y" ]]; then
+            echo ""
+            echo -e "  ${WIZ_YELLOW}Current CTK defaults:${WIZ_NC}"
+            if [[ "$WIZ_CIMS" == "y" ]]; then
+                echo "    CIMS: iterations=10, FDR=1 (all sites)"
+            fi
+            if [[ "$WIZ_CITS" == "y" ]]; then
+                echo "    CITS: p-value=1 (all sites), gap=25"
+            fi
+            echo ""
+            echo -e "  ${WIZ_GREEN}Common CTK options (pass via CLI):${WIZ_NC}"
+            echo "    --cims-iter <int>      Permutation iterations (default: 10)"
+            echo "    --cims-fdr <float>     FDR cutoff (e.g., 0.001)"
+            echo "    --cits-pval <float>    P-value cutoff (e.g., 0.001)"
+            echo "    --cits-gap <int>       Clustering gap (-1 = no clustering)"
+            echo ""
+            echo -e "  ${WIZ_YELLOW}Note:${WIZ_NC} These are examples. See CTK documentation for full options."
+            echo "  Enter additional CTK arguments (optional):"
+            read -p "  > " WIZ_CTK_ARGS
+        fi
+        
         # Peak Calling Settings
         print_section "PEAK CALLING SETTINGS (HOMER)"
+        echo ""
+        echo -e "  ${WIZ_YELLOW}Current HOMER defaults:${WIZ_NC}"
+        echo "    -style factor"
+        echo "    -L 2"
+        echo "    -localSize 10000"
+        echo "    -minDist 50"
+        echo "    -size 20"
+        echo "    -fragLength 25"
         echo ""
         prompt_value "  Enter min distance between peaks" "50" WIZ_PEAK_DIST "int"
         prompt_value "  Enter peak size" "20" WIZ_PEAK_SIZE "int"
         prompt_value "  Enter fragment length" "25" WIZ_FRAG_LEN "int"
+        echo ""
+        echo -e "  ${WIZ_GREEN}Common HOMER findPeaks options:${WIZ_NC}"
+        echo "    -style <str>           factor (TF), histone (broad), groseq, tss"
+        echo "    -F <float>             Fold enrichment over control (default: 4.0)"
+        echo "    -L <float>             Local filtering enrichment (default: 2.0)"
+        echo "    -localSize <int>       Region size for local background"
+        echo "    -strand <str>          separate or both"
+        echo ""
+        echo -e "  ${WIZ_YELLOW}Note:${WIZ_NC} These are examples. See HOMER documentation for full options."
         echo "  Enter additional HOMER findPeaks arguments (optional):"
-        echo "  (Example: -style factor -L 2 -localSize 10000)"
         read -p "  > " WIZ_HOMER_ARGS
     fi
     
@@ -342,13 +427,23 @@ run_wizard_clipittyclip() {
     echo "  ├─────────────────────────────────────────────────────────────┤"
     printf "  │ %-20s %-38s │\n" "Aligner:" "$(echo "$WIZ_ALIGNER" | tr '[:lower:]' '[:upper:]')"
     printf "  │ %-20s %-38s │\n" "Threads:" "$WIZ_THREADS"
+    if [[ -n "$WIZ_ALIGNER_ARGS" ]]; then
+        printf "  │ %-20s %-38s │\n" "Aligner Args:" "$WIZ_ALIGNER_ARGS"
+    fi
+    echo "  ├─────────────────────────────────────────────────────────────┤"
     printf "  │ %-20s %-38s │\n" "UMI Length:" "$WIZ_UMI_LEN"
     printf "  │ %-20s %-38s │\n" "Adapter:" "$WIZ_ADAPTER"
+    if [[ -n "$WIZ_FASTP_ARGS" ]]; then
+        printf "  │ %-20s %-38s │\n" "fastp Args:" "$WIZ_FASTP_ARGS"
+    fi
     echo "  ├─────────────────────────────────────────────────────────────┤"
     local cims_status="Disabled"; [[ "$WIZ_CIMS" == "y" ]] && cims_status="Enabled"
     local cits_status="Disabled"; [[ "$WIZ_CITS" == "y" ]] && cits_status="Enabled"
     printf "  │ %-20s %-38s │\n" "CIMS:" "$cims_status"
     printf "  │ %-20s %-38s │\n" "CITS:" "$cits_status"
+    if [[ -n "$WIZ_CTK_ARGS" ]]; then
+        printf "  │ %-20s %-38s │\n" "CTK Args:" "$WIZ_CTK_ARGS"
+    fi
     echo "  ├─────────────────────────────────────────────────────────────┤"
     printf "  │ %-20s %-38s │\n" "Peak Distance:" "$WIZ_PEAK_DIST"
     printf "  │ %-20s %-38s │\n" "Peak Size:" "$WIZ_PEAK_SIZE"
@@ -369,8 +464,9 @@ run_wizard_clipittyclip() {
     # Export variables for main script
     export WIZ_MODE WIZ_INPUT_FILE WIZ_INPUT_DIR WIZ_BARCODE_FILE WIZ_GENOME_INDEX
     export WIZ_ALIGNER WIZ_THREADS WIZ_UMI_LEN WIZ_ADAPTER
+    export WIZ_ALIGNER_ARGS WIZ_FASTP_ARGS WIZ_CTK_ARGS WIZ_HOMER_ARGS
     export WIZ_CIMS WIZ_CITS
-    export WIZ_PEAK_DIST WIZ_PEAK_SIZE WIZ_FRAG_LEN WIZ_HOMER_ARGS
+    export WIZ_PEAK_DIST WIZ_PEAK_SIZE WIZ_FRAG_LEN
     
     echo -e "${WIZ_GREEN}Starting analysis...${WIZ_NC}"
     return 0
@@ -434,6 +530,38 @@ run_wizard_mapittymap() {
         
         local default_name=$(basename "$WIZ_INPUT_FILE" .fastq.gz)
         prompt_value "  Enter output name" "$default_name" WIZ_OUTPUT_NAME
+        
+        echo ""
+        if [[ "$WIZ_ALIGNER" == "star" ]]; then
+            echo -e "  ${WIZ_YELLOW}Current STAR defaults:${WIZ_NC}"
+            echo "    --outFilterMultimapNmax 10"
+            echo "    --outFilterMismatchNmax $WIZ_MISMATCHES"
+            echo "    --alignEndsType EndToEnd"
+            echo ""
+            echo -e "  ${WIZ_GREEN}Common STAR options:${WIZ_NC}"
+            echo "    --outFilterMultimapNmax <int>    Max mapped locations (default: 10)"
+            echo "    --outFilterMismatchNmax <int>    Max mismatches"
+            echo "    --alignEndsType <str>            EndToEnd or Local"
+            echo "    --chimSegmentMin <int>           Min chimeric segment length"
+            echo ""
+            echo -e "  ${WIZ_YELLOW}Note:${WIZ_NC} These are examples. See STAR manual for full options."
+            echo "  Enter additional STAR arguments (optional):"
+            read -p "  > " WIZ_ALIGNER_ARGS
+        else
+            echo -e "  ${WIZ_YELLOW}Current Bowtie2 defaults:${WIZ_NC}"
+            echo "    --end-to-end (Standard sensitivity)"
+            echo "    --md"
+            echo ""
+            echo -e "  ${WIZ_GREEN}Common Bowtie2 options:${WIZ_NC}"
+            echo "    --local                          Local alignment mode"
+            echo "    --very-sensitive                 More accurate alignment"
+            echo "    -N <int>                         Max mismatches in seed (0 or 1)"
+            echo "    -L <int>                         Seed length"
+            echo ""
+            echo -e "  ${WIZ_YELLOW}Note:${WIZ_NC} These are examples. See Bowtie2 manual for full options."
+            echo "  Enter additional Bowtie2 arguments (optional):"
+            read -p "  > " WIZ_ALIGNER_ARGS
+        fi
     fi
     
     # ─────────────────────────────────────────────────────────────────────────
@@ -451,6 +579,9 @@ run_wizard_mapittymap() {
     if [[ -n "$WIZ_OUTPUT_NAME" ]]; then
         printf "  │ %-20s %-38s │\n" "Output Name:" "$WIZ_OUTPUT_NAME"
     fi
+    if [[ -n "$WIZ_ALIGNER_ARGS" ]]; then
+        printf "  │ %-20s %-38s │\n" "Aligner Args:" "$WIZ_ALIGNER_ARGS"
+    fi
     echo "  └─────────────────────────────────────────────────────────────┘"
     echo ""
     
@@ -463,7 +594,7 @@ run_wizard_mapittymap() {
     
     # Export variables for main script
     export WIZ_INPUT_FILE WIZ_GENOME_INDEX
-    export WIZ_ALIGNER WIZ_THREADS WIZ_MISMATCHES WIZ_OUTPUT_NAME
+    export WIZ_ALIGNER WIZ_THREADS WIZ_MISMATCHES WIZ_OUTPUT_NAME WIZ_ALIGNER_ARGS
     
     echo -e "${WIZ_GREEN}Starting mapping...${WIZ_NC}"
     return 0
@@ -530,17 +661,31 @@ run_wizard_peakittypeak() {
             "HOMER findPeaks: http://homer.ucsd.edu/homer/ngs/peaks.html" \
             "HOMER Manual: http://homer.ucsd.edu/homer/"
         
-        print_section "PEAK PARAMETERS"
+        print_section "PEAK PARAMETERS (HOMER)"
+        echo ""
+        echo -e "  ${WIZ_YELLOW}Current HOMER defaults:${WIZ_NC}"
+        echo "    -style factor"
+        echo "    -L 2"
+        echo "    -localSize 10000"
+        echo "    -minDist 50"
+        echo "    -size 20"
+        echo "    -fragLength 25"
         echo ""
         prompt_value "  Enter min distance between peaks" "50" WIZ_PEAK_DIST "int"
         prompt_value "  Enter peak size" "20" WIZ_PEAK_SIZE "int"
         prompt_value "  Enter fragment length" "25" WIZ_FRAG_LEN "int"
         prompt_value "  Enter output name" "Combined" WIZ_OUTPUT_NAME
         
-        print_section "ADDITIONAL HOMER OPTIONS"
         echo ""
+        echo -e "  ${WIZ_GREEN}Common HOMER findPeaks options:${WIZ_NC}"
+        echo "    -style <str>           factor (TF), histone (broad), groseq, tss"
+        echo "    -F <float>             Fold enrichment over control (default: 4.0)"
+        echo "    -L <float>             Local filtering enrichment (default: 2.0)"
+        echo "    -localSize <int>       Region size for local background"
+        echo "    -strand <str>          separate or both"
+        echo ""
+        echo -e "  ${WIZ_YELLOW}Note:${WIZ_NC} These are examples. See HOMER documentation for full options."
         echo "  Enter additional HOMER findPeaks arguments (optional):"
-        echo "  (Example: -style factor -L 2 -localSize 10000)"
         read -p "  > " WIZ_HOMER_ARGS
     fi
     
