@@ -126,6 +126,17 @@ check_bowtie_index() {
     return 0
 }
 
+# Check for ncRNA Bowtie2 index in annotation directory
+# Returns 0 if found, 1 if not found (silent - caller handles messaging)
+check_ncrna_index() {
+    local dir="$1"
+    # Look for ncrna.1.bt2 or ncrna.1.bt2l in the directory
+    if [[ -f "${dir}/ncrna.1.bt2" ]] || [[ -f "${dir}/ncrna.1.bt2l" ]]; then
+        return 0
+    fi
+    return 1
+}
+
 show_header() {
     echo "$separator_line"
     echo -e "${BLUE}CLIPittyClip: Modern CLIP-seq Analysis Pipeline${NC}"

@@ -356,6 +356,36 @@ STAR --runMode genomeGenerate \
 bowtie2-build genome.fa /path/to/bt2_index/GRCh38
 ```
 
+### ncRNA Pre-filtering Index (Optional but Recommended)
+
+CLIPittyClip automatically filters ncRNA reads (rRNA, tRNA, snRNA, snoRNA) before genome alignment to improve peak calling accuracy. This is **enabled by default**.
+
+**Setup:** Place a Bowtie2 index with prefix `ncrna` in your annotation directory (same location as `-x`).
+
+**Building the ncRNA index:**
+
+1. Download ncRNA sequences from Ensembl:
+```bash
+# Human (GRCh38)
+wget ftp://ftp.ensembl.org/pub/release-110/fasta/homo_sapiens/ncrna/Homo_sapiens.GRCh38.ncrna.fa.gz
+gunzip Homo_sapiens.GRCh38.ncrna.fa.gz
+
+# Mouse (GRCm39)
+wget ftp://ftp.ensembl.org/pub/release-110/fasta/mus_musculus/ncrna/Mus_musculus.GRCm39.ncrna.fa.gz
+gunzip Mus_musculus.GRCm39.ncrna.fa.gz
+```
+
+2. Build Bowtie2 index (place in same directory as genome index):
+```bash
+bowtie2-build Homo_sapiens.GRCh38.ncrna.fa /path/to/annotation/ncrna
+```
+
+**Behavior:**
+- If `ncrna.1.bt2` found: Filters ncRNA reads, saves to `OTHERS/ncRNA_Mapping/`
+- If index not found: Prints warning, continues without filtering
+
+**To disable:** Use `--skip-ncrna` flag
+
 
 ## License
 

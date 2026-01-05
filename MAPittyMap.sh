@@ -17,6 +17,7 @@ EXP_ID=""
 ALIGNER="star"
 MISMATCH_MAX=2
 WIZARD_MODE="false"
+SKIP_NCRNA="false"  # ncRNA filtering is ON by default
 
 function show_usage {
     echo ""
@@ -35,6 +36,7 @@ function show_usage {
     echo "  -m <int>         Max mismatches (default: 2)"
     echo "  --wizard         Launch interactive configuration wizard
   --advanced       Alias for --wizard (backward compatibility)
+  --skip-ncrna     Disable ncRNA pre-filtering (on by default)
   -h, --help       Show this help message"
     echo ""
     echo "OUTPUT:"
@@ -62,6 +64,7 @@ while [[ $# -gt 0 ]]; do
         -o) EXP_ID="$2"; shift 2 ;;
         --aligner) ALIGNER=$(echo "$2" | tr '[:upper:]' '[:lower:]'); shift 2 ;;
         --wizard|--advanced) WIZARD_MODE="true"; shift 1 ;;
+        --skip-ncrna) SKIP_NCRNA="true"; shift ;;
         -t) THREADS="$2"; shift 2 ;;
         -m) MISMATCH_MAX="$2"; shift 2 ;;
         -h|--help) show_usage; exit 0 ;;
@@ -137,11 +140,24 @@ log_info "Logging to: $LOG_FILE"
 # Run Mapping
 cd "${OUT_DIR}" || exit 1
 
+# Run ncRNA pre-filtering if enabled and index exists
+MAPPING_INPUT="$INPUT_FILE"
+if [[ "$SKIP_NCRNA" == "false" ]]; then
+    if check_ncrna_index "$GENOME_INDEX"; then
+        mkdir -p "OTHERS/ncRNA_Mapping"
+        NCRNA_UNMAPPED="OTHERS/ncRNA_Mapping/${BASENAME}_ncrna_filtered.fastq.gz"
+        run_ncrna_filter "$INPUT_FILE" "$NCRNA_UNMAPPED" "OTHERS/ncRNA_Mapping" "$GENOME_INDEX" "$THREADS" "$BASENAME"
+        MAPPING_INPUT="$NCRNA_UNMAPPED"
+    else
+        log_warning "ncRNA index not found in $GENOME_INDEX. Skipping ncRNA pre-filtering."
+    fi
+fi
+
 if [[ "$ALIGNER" == "bowtie2" ]]; then
-    run_mapping_bowtie2 "$INPUT_FILE" "1_BAM/${BASENAME}" "$GENOME_INDEX" "$THREADS"
+    run_mapping_bowtie2 "$MAPPING_INPUT" "1_BAM/${BASENAME}" "$GENOME_INDEX" "$THREADS"
 else
     # Only Star uses Default Mismatches in the arguments, Bowtie2 uses standard sensitivity
-    run_mapping_star "$INPUT_FILE" "1_BAM/${BASENAME}" "$GENOME_INDEX" "$THREADS" "$MISMATCH_MAX"
+    run_mapping_star "$MAPPING_INPUT" "1_BAM/${BASENAME}" "$GENOME_INDEX" "$THREADS" "$MISMATCH_MAX"
 fi
 
 # Validate Output

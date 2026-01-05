@@ -76,6 +76,7 @@ function show_usage {
     echo "  -g, --groups <file> Aggregate samples by group for CIMS/CITS"
     echo "                      Format: sample_name<TAB>group_name"
     echo "  --sample <int>     Test mode: process only first N reads"
+    echo "  --skip-ncrna       Disable ncRNA pre-filtering (on by default)"
     echo ""
     echo "OUTPUT OPTIONS:"
     echo "  -k                 Keep intermediate files"
@@ -110,6 +111,7 @@ CHILD_MODE="false"
 DEDUP_MODE="true" # Always on by default per user request
 NOTIFY_MODE="false"
 WIZARD_MODE="false"
+SKIP_NCRNA="false"  # ncRNA filtering is ON by default
 ALIGNER="star" # Default match
 
 # CTK CIMS/CITS Parameters (with defaults)
@@ -167,6 +169,7 @@ while [[ $# -gt 0 ]]; do
         --mismatches) MISMATCHES="$2"; shift 2 ;;
         --no-dedup) DEDUP_MODE="false"; shift ;;
         --dedup) DEDUP_MODE="true"; shift ;; # Keep for compat
+        --skip-ncrna) SKIP_NCRNA="true"; shift ;;
         --notification) NOTIFY_MODE="true"; shift ;;
         --child) CHILD_MODE="true"; shift ;;
         --wizard|--advanced)
@@ -1049,13 +1052,28 @@ log_info "Working directory: $(pwd)"
 # 1. Preprocessing
 run_preprocessing "$INPUT_FILE" "$BASENAME" "$UMI_LEN" "$ADAPTER_3" "$THREADS" "$SAMPLE_SIZE" "$DEDUP_MODE"
 
+# 1b. ncRNA Pre-filtering (if enabled and index exists)
+CLEANED_FASTQ="${BASENAME}_cleaned.fastq.gz"
+if [[ "$SKIP_NCRNA" == "false" ]]; then
+    if check_ncrna_index "$GENOME_INDEX"; then
+        NCRNA_OUTPUT_DIR="OTHERS/ncRNA_Mapping"
+        NCRNA_UNMAPPED="${BASENAME}_ncrna_filtered.fastq.gz"
+        run_ncrna_filter "$CLEANED_FASTQ" "$NCRNA_UNMAPPED" "$NCRNA_OUTPUT_DIR" "$GENOME_INDEX" "$THREADS" "$BASENAME"
+        # Use filtered reads for genome mapping
+        CLEANED_FASTQ="$NCRNA_UNMAPPED"
+    else
+        log_warning "ncRNA index not found in $GENOME_INDEX. Skipping ncRNA pre-filtering."
+        log_warning "To build ncRNA index, see README.md for instructions."
+    fi
+fi
+
 # 2. Mapping
 MAPPED_PREFIX="${BASENAME}_mapped"
 if [[ "$ALIGNER" == "bowtie2" ]]; then
-    run_mapping_bowtie2 "${BASENAME}_cleaned.fastq.gz" "$MAPPED_PREFIX" "$GENOME_INDEX" "$THREADS"
+    run_mapping_bowtie2 "$CLEANED_FASTQ" "$MAPPED_PREFIX" "$GENOME_INDEX" "$THREADS"
 else
     # Default: STAR
-    run_mapping_star "${BASENAME}_cleaned.fastq.gz" "$MAPPED_PREFIX" "$GENOME_INDEX" "$THREADS" "$MISMATCH_MAX"
+    run_mapping_star "$CLEANED_FASTQ" "$MAPPED_PREFIX" "$GENOME_INDEX" "$THREADS" "$MISMATCH_MAX"
 fi
 # 3. PCR Collapse
 # BAM is "${MAPPED_PREFIX}.Aligned.sortedByCoord.out.bam"

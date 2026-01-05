@@ -231,6 +231,53 @@ run_preprocessing() {
     fi
 }
 
+# 1b. ncRNA Pre-filtering with Bowtie2
+# Filters out rRNA, tRNA, and other ncRNA reads before genome alignment
+# Input: FASTQ from fastp
+# Output: Unmapped reads (for genome alignment), Mapped reads (QC)
+run_ncrna_filter() {
+    local input_fastq="$1"
+    local output_unmapped="$2"    # Reads that didn't map to ncRNA (continue to genome)
+    local output_dir="$3"         # Directory for ncRNA mapping outputs
+    local index_dir="$4"
+    local threads="$5"
+    local sample_name="$6"
+    
+    # Create output directory
+    mkdir -p "$output_dir"
+    
+    local ncrna_bam="${output_dir}/${sample_name}_ncrna.bam"
+    local ncrna_stats="${output_dir}/${sample_name}_ncrna_stats.txt"
+    
+    update_status "ncRNA Filter"
+    
+    # Run Bowtie2 mapping to ncRNA index
+    # --un-gz: write unmapped reads to file (these go to genome mapping)
+    # Mapped reads are saved to BAM for QC
+    local bt2_cmd="bowtie2 -x \"${index_dir}/ncrna\" \
+        -U \"$input_fastq\" \
+        --un-gz \"$output_unmapped\" \
+        -p $threads \
+        2> \"$ncrna_stats\" \
+        | samtools view -bS - > \"$ncrna_bam\""
+    
+    log_info "Running ncRNA filter: $bt2_cmd"
+    
+    if execute_cmd "$bt2_cmd"; then
+        # Index the BAM for potential downstream use
+        samtools index "$ncrna_bam" 2>/dev/null || true
+        
+        # Extract alignment rate from stats
+        local align_rate=$(grep "overall alignment rate" "$ncrna_stats" | grep -oE "[0-9]+\.[0-9]+%" || echo "N/A")
+        log_info "ncRNA alignment rate: $align_rate"
+        
+        return 0
+    else
+        log_error "ncRNA filtering failed"
+        return 1
+    fi
+}
+
 # 2. Mapping with STAR
 run_mapping_star() {
     local input_fastq="$1"
