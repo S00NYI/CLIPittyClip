@@ -161,8 +161,16 @@ CLIPittyClip.sh -d /path/to/samples_folder/ -x /path/to/star_index -t 8
 # Using Bowtie2 instead
 CLIPittyClip.sh -i reads.fastq.gz -x /path/to/bt2_index -t 8 --aligner bowtie2
 
-# With CIMS/CITS analysis
-CLIPittyClip.sh -i reads.fastq.gz -x /path/to/star_index --cims --cits
+# With CIMS analysis only
+CLIPittyClip.sh -i reads.fastq.gz -x /path/to/star_index -t 8 --cims
+
+# With CITS analysis only
+CLIPittyClip.sh -i reads.fastq.gz -x /path/to/star_index -t 8 --cits
+
+# With both CIMS and CITS analysis
+CLIPittyClip.sh -i reads.fastq.gz -x /path/to/star_index -t 8 --ctk
+# OR equivalently:
+CLIPittyClip.sh -i reads.fastq.gz -x /path/to/star_index -t 8 --cims --cits
 ```
 
 ## Input Modes
@@ -204,15 +212,15 @@ Use `-g groups.txt` to aggregate replicates/samples before running CIMS/CITS:
 CLIPittyClip.sh -i pool.fq.gz -b barcodes.txt -x index --cims --cits -g groups.txt
 ```
 
-**groups.txt format** (tab-separated):
+**groups.txt format** (tab-separated: `SampleName<TAB>GroupName`):
 ```
-G3BP_E_Ars_R1    G3BP_Ars
-G3BP_E_Ars_R2    G3BP_Ars
-NES_E_Ars_R1     NES_Ars
-NES_E_Ars_R2     NES_Ars
+Condition_A_Rep1    Condition_A
+Condition_A_Rep2    Condition_A
+Condition_B_Rep1    Condition_B
+Condition_B_Rep2    Condition_B
 ```
 
-Samples not listed are treated as individual groups.
+> **Note:** Samples not listed in the groups file are treated as individual groups (analyzed separately).
 
 ## Output Structure
 
@@ -265,15 +273,42 @@ Samples not listed are treated as individual groups.
 ## Standalone Tools
 
 ### MAPittyMap.sh
-Standalone mapping module.
+Standalone mapping module for aligning FASTQ files to a reference genome.
+
+**Required inputs:**
+- `-i <path>`: Input FASTQ file (gzipped)
+- `-x <path>`: Path to genome index directory
+
+**Key options:**
+- `-t <int>`: Number of threads (default: 1)
+- `--aligner <star|bowtie2>`: Alignment tool (default: star)
+- `-o <path>`: Output directory
+
 ```bash
-MAPittyMap.sh -i reads.fastq.gz -x /path/to/index -t 8 --aligner star
+# Using STAR
+MAPittyMap.sh -i reads.fastq.gz -x /path/to/star_index -t 8 --aligner star
+
+# Using Bowtie2
+MAPittyMap.sh -i reads.fastq.gz -x /path/to/bt2_index -t 8 --aligner bowtie2
 ```
 
+---
+
 ### PEAKittyPeak.sh
-Standalone peak calling (requires BED folder).
+Standalone peak calling using HOMER. Requires a directory containing collapsed BED files.
+
+**Required inputs:**
+- Input directory containing `.bed` files (current directory by default)
+
+**Key options:**
+- `-p <int>`: Peak size (default: 50)
+- `-z <int>`: Fragment size (default: 20)
+- `-n <string>`: Output name prefix
+- `-s <path>`: Path to chrom.sizes file
+
 ```bash
-PEAKittyPeak.sh -p 50 -z 20 -n Combined
+# Run from directory containing BED files
+PEAKittyPeak.sh -p 50 -z 20 -n Combined -s /path/to/chrom.sizes
 ```
 
 ## Generating Genome Indices
@@ -293,12 +328,6 @@ STAR --runMode genomeGenerate \
 bowtie2-build genome.fa /path/to/bt2_index/GRCh38
 ```
 
-## Notes
-
-- **Deduplication**: Enabled by default via `seqkit rmdup`. Disable with `--no-dedup`.
-- **Unified Preprocessing**: All runs use `samtools calmd` → `parseAlignment.pl` → `tag2collapse.pl`, generating `mutations.txt` for future CIMS/CITS compatibility.
-- **Default Thresholds**: CIMS FDR and CITS p-value default to 1 (report all sites).
-- **Apple Silicon**: CTK scripts use Conda's Perl to avoid library issues.
 
 ## License
 
