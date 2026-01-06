@@ -211,21 +211,22 @@ Run `CLIPittyClip.sh --help` for full usage. Key options:
 | `--aligner` | `star` (default) or `bowtie2` |
 | `-b <path>` | Barcode file for demultiplexing |
 | `--mismatches` | Max barcode mismatches (default: 1) |
+| `--skip-ncrna` | Disable ncRNA pre-filtering (on by default) |
 | `--cims` | Enable CIMS analysis |
 | `--cits` | Enable CITS analysis |
-| `--cims-fdr` | CIMS FDR threshold (default: 1) |
-| `--cits-pval` | CITS p-value threshold (default: 1) |
-| `-g, --groups` | Aggregate samples by group for CIMS/CITS |
+| `--cims-fdr` | CIMS FDR threshold (default: 0.05) |
+| `--cits-pval` | CITS p-value threshold (default: 0.05) |
+| `-g, --ctk-group` | Aggregate samples by group for CIMS/CITS |
 | `--no-dedup` | Disable pooled read deduplication |
 | `--sample <int>` | Test mode (first N reads) |
 | `--wizard` | Interactive configuration wizard |
 
 ## Group-Based CIMS/CITS Analysis
 
-Use `-g groups.txt` to aggregate replicates/samples before running CIMS/CITS:
+Use `--ctk-group groups.txt` to aggregate replicates/samples before running CIMS/CITS:
 
 ```bash
-CLIPittyClip.sh -i pool.fq.gz -b barcodes.txt -x index --cims --cits -g groups.txt
+CLIPittyClip.sh -i pool.fq.gz -b barcodes.txt -x index --cims --cits --ctk-group groups.txt
 ```
 
 **groups.txt format** (tab-separated: `SampleName<TAB>GroupName`):
@@ -326,6 +327,8 @@ Standalone peak calling using HOMER. Requires a directory containing collapsed B
 - `-f <int>`: Fragment length (default: 25)
 - `-n <string>`: Output name prefix
 - `-a <string>`: Additional HOMER findPeaks arguments
+- `--ctk-dir <path>`: Add CIMS/CITS site counts from CTK analysis
+- `--ctk-group <file>`: Groups file for CTK aggregation
 - `--wizard`: Launch interactive HOMER configuration wizard
 
 ```bash
@@ -334,6 +337,9 @@ PEAKittyPeak.sh -p 50 -z 20 -n Combined
 
 # With custom HOMER arguments
 PEAKittyPeak.sh -n Combined -a '-style factor -L 2'
+
+# With CTK site counts (adds _del, _sub, _trunc columns)
+PEAKittyPeak.sh -n Combined --ctk-dir ./CTK_Analysis/
 
 # Interactive wizard mode for HOMER settings
 PEAKittyPeak.sh --wizard
