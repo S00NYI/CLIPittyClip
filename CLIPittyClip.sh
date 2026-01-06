@@ -68,12 +68,12 @@ function show_usage {
     echo "  --cims             Enable CIMS analysis (mutation sites only)"
     echo "  --cits             Enable CITS analysis (truncation sites only)"
     echo "  --cims-iter <int>  CIMS permutation iterations (default: 10)"
-    echo "  --cims-fdr <float> CIMS FDR threshold (default: 0.001)"
-    echo "  --cits-pval <float> CITS p-value threshold (default: 0.001)"
+    echo "  --cims-fdr <float> CIMS FDR threshold (default: 0.05)"
+    echo "  --cits-pval <float> CITS p-value threshold (default: 0.05)"
     echo "  --cits-gap <int>   CITS clustering gap (default: 25, -1=no cluster)"
     echo "  --motif-flank <int> Motif flanking nucleotides (default: 10)"
     echo "  --no-motif         Skip motif enrichment analysis"
-    echo "  -g, --groups <file> Aggregate samples by group for CIMS/CITS"
+    echo "  -g, --ctk-group <file> Aggregate samples by group for CIMS/CITS"
     echo "                      Format: sample_name<TAB>group_name"
     echo "  --sample <int>     Test mode: process only first N reads"
     echo "  --skip-ncrna       Disable ncRNA pre-filtering (on by default)"
@@ -116,12 +116,12 @@ ALIGNER="star" # Default match
 
 # CTK CIMS/CITS Parameters (with defaults)
 CIMS_ITERATIONS="10"
-CIMS_FDR="1"
-CITS_PVALUE="1"
+CIMS_FDR="0.05"
+CITS_PVALUE="0.05"
 CITS_GAP="25"
 RUN_MOTIF="yes"
 MOTIF_FLANK="10"
-GROUPS_FILE=""  # Optional: group samples for CIMS/CITS aggregation
+CTK_CTK_GROUPS_FILE=""  # Optional: group samples for CIMS/CITS aggregation
 
 # Capture Start Time (Seconds) for duration calculation
 PIPELINE_START=$(date +%s)
@@ -162,7 +162,7 @@ while [[ $# -gt 0 ]]; do
         --cits-gap) CITS_GAP="$2"; shift 2 ;;
         --motif-flank) MOTIF_FLANK="$2"; shift 2 ;;
         --no-motif) RUN_MOTIF="no"; shift ;;
-        -g|--groups) GROUPS_FILE="$2"; shift 2 ;;
+        -g|--ctk-group) CTK_CTK_GROUPS_FILE="$2"; shift 2 ;;
         --sample) SAMPLE_SIZE="$2"; shift 2 ;;
         -b|--barcode) BARCODE_FILE="$2"; DEMUX="yes"; shift 2 ;;
         -d|--input-dir) INPUT_DIR="$2"; shift 2 ;;
@@ -277,18 +277,18 @@ fi
 GENOME_INDEX="$(cd "$GENOME_INDEX" && pwd)"
 
 # Validate groups file (requires --cims or --cits)
-if [[ -n "$GROUPS_FILE" ]]; then
+if [[ -n "$CTK_GROUPS_FILE" ]]; then
     if [[ "$RUN_CIMS" != "true" ]] && [[ "$RUN_CITS" != "true" ]]; then
         log_error "-g/--groups requires --cims and/or --cits"
         show_usage
         exit 1
     fi
-    if [[ ! -f "$GROUPS_FILE" ]]; then
-        log_error "Groups file not found: $GROUPS_FILE"
+    if [[ ! -f "$CTK_GROUPS_FILE" ]]; then
+        log_error "Groups file not found: $CTK_GROUPS_FILE"
         exit 1
     fi
-    GROUPS_FILE="$(cd "$(dirname "$GROUPS_FILE")" && pwd)/$(basename "$GROUPS_FILE")"
-    log_info "Groups file: $GROUPS_FILE"
+    CTK_GROUPS_FILE="$(cd "$(dirname "$CTK_GROUPS_FILE")" && pwd)/$(basename "$CTK_GROUPS_FILE")"
+    log_info "Groups file: $CTK_GROUPS_FILE"
 fi
 
 # ------------------------------------------------------------------
@@ -436,7 +436,7 @@ if [[ -n "$INPUT_DIR" ]]; then
     # Build extra flags for child processes
     EXTRA_FLAGS=""
     # Only pass CIMS/CITS to children if NOT using groups file (group CTK runs after batch)
-    if [[ -z "$GROUPS_FILE" ]]; then
+    if [[ -z "$CTK_GROUPS_FILE" ]]; then
         if [[ "$RUN_CIMS" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --cims"; fi
         if [[ "$RUN_CITS" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --cits"; fi
     fi
@@ -515,8 +515,8 @@ if [[ -n "$INPUT_DIR" ]]; then
              "$OUTPUT_ROOT/$DIR_IND_PEAK_LOGS"
     
     # Run Group-based CTK Analysis (if groups file provided)
-    if [[ -n "$GROUPS_FILE" ]]; then
-        run_group_ctk_analysis "$GROUPS_FILE" "$OUTPUT_ROOT" "$GENOME_INDEX" \
+    if [[ -n "$CTK_GROUPS_FILE" ]]; then
+        run_group_ctk_analysis "$CTK_GROUPS_FILE" "$OUTPUT_ROOT" "$GENOME_INDEX" \
             "$CIMS_ITERATIONS" "$CIMS_FDR" "$CITS_PVALUE" "$CITS_GAP" \
             "$MOTIF_FLANK" "$RUN_MOTIF" "$RUN_CIMS" "$RUN_CITS"
     fi
@@ -697,7 +697,7 @@ if [[ "$DEMUX" == "yes" ]]; then
     # Check if we need to pass CIMS/CITS flags
     EXTRA_FLAGS=""
     # Only pass CIMS/CITS to children if NOT using groups file (group CTK runs after batch)
-    if [[ -z "$GROUPS_FILE" ]]; then
+    if [[ -z "$CTK_GROUPS_FILE" ]]; then
         if [[ "$RUN_CIMS" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --cims"; fi
         if [[ "$RUN_CITS" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --cits"; fi
     fi
@@ -820,8 +820,8 @@ if [[ "$DEMUX" == "yes" ]]; then
              "$OUTPUT_ROOT/$DIR_IND_PEAK_LOGS"
     
     # Run Group-based CTK Analysis (if groups file provided)
-    if [[ -n "$GROUPS_FILE" ]]; then
-        run_group_ctk_analysis "$GROUPS_FILE" "$OUTPUT_ROOT" "$GENOME_INDEX" \
+    if [[ -n "$CTK_GROUPS_FILE" ]]; then
+        run_group_ctk_analysis "$CTK_GROUPS_FILE" "$OUTPUT_ROOT" "$GENOME_INDEX" \
             "$CIMS_ITERATIONS" "$CIMS_FDR" "$CITS_PVALUE" "$CITS_GAP" \
             "$MOTIF_FLANK" "$RUN_MOTIF" "$RUN_CIMS" "$RUN_CITS"
     fi

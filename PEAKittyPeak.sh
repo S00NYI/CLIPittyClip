@@ -4,8 +4,9 @@
 # Uses the unified lib/utils.sh for logging
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# Source utils and WIZARD (just in case)
+# Source utils, modules, and wizard
 source "${SCRIPT_DIR}/lib/utils.sh"
+source "${SCRIPT_DIR}/lib/modules.sh"
 source "${SCRIPT_DIR}/lib/wizard.sh"
 
 # Default Values
@@ -15,6 +16,10 @@ FRAG_LEN=25
 BASE_NAME="Combined"
 ADV_HOMER_ARGS="" # Additional arguments for findPeaks
 WIZARD_MODE="false"
+CTK_DIR=""         # Optional: CTK analysis output directory
+CTK_GROUPS_FILE="" # Optional: groups file for CTK aggregation
+CIMS_FDR="0.05"    # Default FDR threshold for CIMS
+CITS_PVALUE="0.05" # Default p-value threshold for CITS
 
 function show_usage {
     echo ""
@@ -32,6 +37,10 @@ function show_usage {
     echo "  -f <int>       Fragment length (default: 25)"
     echo "  -n <str>       Base name for output (default: 'Combined')"
     echo "  -a <str>       Additional HOMER findPeaks arguments (quoted string)"
+    echo "  --ctk-dir <path>   Add CIMS/CITS site counts from CTK analysis"
+    echo "  --ctk-group <file> Groups file for CTK aggregation (optional)"
+    echo "  --cims-fdr <float> CIMS FDR threshold (default: 0.05)"
+    echo "  --cits-pval <float> CITS p-value threshold (default: 0.05)"
     echo "  --wizard       Launch interactive configuration wizard"
     echo "  --advanced     Alias for --wizard (backward compatibility)"
     echo "  -h, --help     Show this help message"
@@ -43,6 +52,9 @@ function show_usage {
     echo "  # With custom HOMER args"
     echo "  PEAKittyPeak.sh -n Combined -a '-style factor -L 2'"
     echo ""
+    echo "  # With CTK site counts"
+    echo "  PEAKittyPeak.sh -n Combined --ctk-dir ./CTK_Analysis/"
+    echo ""
 }
 
 if [[ "$1" == "-h" ]] || [[ "$1" == "--help" ]]; then
@@ -50,26 +62,22 @@ if [[ "$1" == "-h" ]] || [[ "$1" == "--help" ]]; then
     exit 0
 fi
 
-# Parse Options
-while getopts "p:z:f:n:a:h-:" opt; do
-  # Handle long options manually
-  if [[ "$opt" == "-" ]]; then
-      case "${OPTARG}" in
-          wizard|advanced) WIZARD_MODE="true" ;;
-          *) log_error "Invalid option --${OPTARG}"; show_usage; exit 1 ;;
-      esac
-      continue
-  fi
-
-  case $opt in
-    p) PEAK_DIST="$OPTARG" ;;
-    z) PEAK_SIZE="$OPTARG" ;;
-    f) FRAG_LEN="$OPTARG" ;;
-    n) BASE_NAME="$OPTARG" ;;
-    a) ADV_HOMER_ARGS="$OPTARG" ;;
-    h) show_usage; exit 0 ;;
-    \?) log_error "Invalid option -$OPTARG"; show_usage; exit 1 ;;
-  esac
+# Parse Options using while loop for better long option handling
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -p) PEAK_DIST="$2"; shift 2 ;;
+        -z) PEAK_SIZE="$2"; shift 2 ;;
+        -f) FRAG_LEN="$2"; shift 2 ;;
+        -n) BASE_NAME="$2"; shift 2 ;;
+        -a) ADV_HOMER_ARGS="$2"; shift 2 ;;
+        --ctk-dir) CTK_DIR="$2"; shift 2 ;;
+        --ctk-group) CTK_GROUPS_FILE="$2"; shift 2 ;;
+        --cims-fdr) CIMS_FDR="$2"; shift 2 ;;
+        --cits-pval) CITS_PVALUE="$2"; shift 2 ;;
+        --wizard|--advanced) WIZARD_MODE="true"; shift ;;
+        -h|--help) show_usage; exit 0 ;;
+        *) log_error "Invalid option: $1"; show_usage; exit 1 ;;
+    esac
 done
 
 # Run Wizard if requested (before validation so it can collect inputs)
@@ -176,6 +184,21 @@ if [[ -f "${BASE_NAME}_TagDir/peaks.txt" ]]; then
         # Move raw coverage file
         mv "coverage_${s_name}.txt" "${OUT_DIR}/peakCoverage/"
     done
+    
+    # 5. Add CTK columns if --ctk-dir was provided
+    if [[ -n "$CTK_DIR" ]]; then
+        if [[ -d "$CTK_DIR" ]]; then
+            log_info "Adding CTK site counts from: $CTK_DIR"
+            add_ctk_columns_to_peak_matrix \
+                "${OUT_DIR}/${BASE_NAME}_peakCoverage.txt" \
+                "${OUT_DIR}/peaks_Sorted.bed" \
+                "$CTK_DIR" \
+                "$CIMS_FDR" \
+                "$CITS_PVALUE"
+        else
+            log_error "CTK directory not found: $CTK_DIR"
+        fi
+    fi
     
     log_info "Analysis Finished."
     log_info "Outputs stored in: $OUT_DIR"

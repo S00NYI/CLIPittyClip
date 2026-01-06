@@ -515,6 +515,104 @@ run_peak_calling() {
     log_info "Peak calling complete. Log saved to $log_file"
 }
 
+# 4b. Add CTK columns to peak coverage matrix
+# Adds _del, _sub, _trunc columns for each sample/group with CTK outputs
+add_ctk_columns_to_peak_matrix() {
+    local peak_matrix="$1"         # Input/output: peak coverage matrix file
+    local peaks_bed="$2"           # Sorted peaks BED file for bedtools
+    local ctk_dir="$3"             # Directory containing CTK outputs
+    local cims_fdr="${4:-0.05}"    # FDR threshold for CIMS filtering
+    local cits_pval="${5:-0.05}"   # P-value threshold for CITS filtering
+    
+    log_info "Adding CTK site counts to peak matrix..."
+    log_info "CTK directory: $ctk_dir"
+    log_info "Thresholds: CIMS FDR < $cims_fdr, CITS p-value < $cits_pval"
+    
+    # Helper function to add column from CTK file
+    add_ctk_column() {
+        local ctk_file="$1"
+        local column_name="$2"
+        local ctk_type="$3"  # "cims" or "cits"
+        local threshold="$4"
+        
+        if [[ ! -s "$ctk_file" ]]; then
+            log_warning "CTK file not found or empty: $ctk_file"
+            return 1
+        fi
+        
+        local temp_filtered="${ctk_file}.filtered.bed"
+        local temp_coverage="${ctk_file}.coverage.txt"
+        
+        # Filter by threshold and convert to BED
+        if [[ "$ctk_type" == "cims" ]]; then
+            # CIMS: Column 9 is FDR, skip header line
+            grep -v "^#" "$ctk_file" | awk -F'\t' -v fdr="$threshold" \
+                '$9+0 < fdr {print $1"\t"$2"\t"$3"\t"$4"\t"$5"\t"$6}' > "$temp_filtered"
+        else
+            # CITS: P-value is embedded in name as [P=value]
+            grep -v "^#" "$ctk_file" | awk -F'\t' -v pval="$threshold" '{
+                if (match($4, /\[P=([0-9.e+-]+)\]/, arr)) {
+                    if (arr[1]+0 < pval) print $1"\t"$2"\t"$3"\t"$4"\t"$5"\t"$6
+                }
+            }' > "$temp_filtered"
+        fi
+        
+        local site_count=$(wc -l < "$temp_filtered")
+        log_info "  $column_name: $site_count significant sites"
+        
+        if [[ "$site_count" -eq 0 ]]; then
+            # Add column of zeros
+            local num_rows=$(($(wc -l < "$peak_matrix") - 1))  # Subtract header
+            echo "$column_name" > temp_col.txt
+            yes "0" | head -n "$num_rows" >> temp_col.txt
+        else
+            # Count sites per peak using bedtools
+            bedtools coverage -s -a "$peaks_bed" -b "$temp_filtered" > "$temp_coverage"
+            
+            # Extract count column (7th) and combine with header
+            echo "$column_name" > temp_col.txt
+            awk '{print $7}' "$temp_coverage" >> temp_col.txt
+        fi
+        
+        # Paste to matrix
+        paste "$peak_matrix" temp_col.txt > temp_matrix.txt
+        mv temp_matrix.txt "$peak_matrix"
+        
+        # Cleanup
+        rm -f "$temp_filtered" "$temp_coverage" temp_col.txt
+    }
+    
+    # Find and process CIMS deletion files
+    if [[ -d "${ctk_dir}/CIMS" ]]; then
+        for cims_del_file in "${ctk_dir}/CIMS/"*_CIMS_del.txt; do
+            if [[ -f "$cims_del_file" ]]; then
+                local name=$(basename "$cims_del_file" _CIMS_del.txt)
+                add_ctk_column "$cims_del_file" "${name}_del" "cims" "$cims_fdr"
+            fi
+        done
+        
+        # Find and process CIMS substitution files
+        for cims_sub_file in "${ctk_dir}/CIMS/"*_CIMS_sub.txt; do
+            if [[ -f "$cims_sub_file" ]]; then
+                local name=$(basename "$cims_sub_file" _CIMS_sub.txt)
+                add_ctk_column "$cims_sub_file" "${name}_sub" "cims" "$cims_fdr"
+            fi
+        done
+    fi
+    
+    # Find and process CITS files
+    if [[ -d "${ctk_dir}/CITS" ]]; then
+        for cits_file in "${ctk_dir}/CITS/"*_CITS.txt; do
+            if [[ -f "$cits_file" ]]; then
+                local name=$(basename "$cits_file" _CITS.txt)
+                add_ctk_column "$cits_file" "${name}_trunc" "cits" "$cits_pval"
+            fi
+        done
+    fi
+    
+    log_info "CTK columns added to peak matrix."
+}
+
 # 5. CIMS Analysis (CTK)
 # Detects crosslinking-induced mutation sites
 # ═══════════════════════════════════════════════════════════════════════════
@@ -680,9 +778,11 @@ run_cits() {
         log_info "CITS raw output: $raw_count sites"
         
         # Filter to single-nucleotide sites (singleton) - this is the main output
-        awk '{if($3-$2==1) {print $0}}' "$cits_raw" > "$output_file"
+        # Add header for consistency with CIMS output
+        echo -e "#chrom\tchromStart\tchromEnd\tname\tscore\tstrand" > "$output_file"
+        awk '{if($3-$2==1) {print $0}}' "$cits_raw" >> "$output_file"
         
-        local singleton_count=$(wc -l < "$output_file")
+        local singleton_count=$(($(wc -l < "$output_file") - 1))  # Subtract header
         log_info "CITS complete: $singleton_count singleton sites in $output_file"
         
         # Remove intermediate raw file
@@ -888,8 +988,8 @@ run_ctk_analysis() {
     local genome_fasta="$4"
     local sample_name="$5"
     local cims_iterations="${6:-10}"
-    local cims_fdr="${7:-1}"
-    local cits_pvalue="${8:-1}"
+    local cims_fdr="${7:-0.05}"
+    local cits_pvalue="${8:-0.05}"
     local cits_gap="${9:-25}"
     local motif_flank="${10:-10}"
     local run_motif="${11:-yes}"
