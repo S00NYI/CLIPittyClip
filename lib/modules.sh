@@ -267,9 +267,15 @@ run_ncrna_filter() {
         # Index the BAM for potential downstream use
         samtools index "$ncrna_bam" 2>/dev/null || true
         
-        # Extract alignment rate from stats
+        # Extract alignment rate from stats and display on console
         local align_rate=$(grep "overall alignment rate" "$ncrna_stats" | grep -oE "[0-9]+\.[0-9]+%" || echo "N/A")
+        local total_reads=$(grep "reads; of these:" "$ncrna_stats" | grep -oE "^[0-9]+" || echo "N/A")
+        local aligned_reads=$(grep "aligned exactly 1 time" "$ncrna_stats" | grep -oE "^[[:space:]]*[0-9]+" | tr -d ' ' || echo "0")
+        local multi_aligned=$(grep "aligned >1 times" "$ncrna_stats" | grep -oE "^[[:space:]]*[0-9]+" | tr -d ' ' || echo "0")
+        local ncrna_reads=$((aligned_reads + multi_aligned))
+        
         log_info "ncRNA alignment rate: $align_rate"
+        console_msg "  ncRNA Filter: ${align_rate} of reads mapped to ncRNA (${ncrna_reads}/${total_reads} filtered out)"
         
         return 0
     else
