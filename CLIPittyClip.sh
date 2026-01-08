@@ -567,6 +567,31 @@ if [[ -n "$INPUT_DIR" ]]; then
         fi
     done
     
+    # ncRNA Filtering Summary
+    console_msg "\n[ncRNA FILTERING SUMMARY]"
+    printf "  %-25s %-15s %-15s %s\n" "Sample" "ncRNA Reads" "Total Reads" "% Filtered"
+    console_msg "  ----------------------------------------------------------------"
+    
+    for sample in "${SAMPLE_FILES[@]}"; do
+        sample_name=$(basename "$sample")
+        sample_name="${sample_name%.fastq.gz}"
+        sample_name="${sample_name%.fq.gz}"
+        sample_out="${sample_name}_analysis"
+        ncrna_stats="${sample_out}/OTHERS/ncRNA_Mapping/${sample_name}_ncrna_stats.txt"
+        
+        if [[ -f "$ncrna_stats" ]]; then
+            align_rate=$(grep "overall alignment rate" "$ncrna_stats" | grep -oE "[0-9]+\.[0-9]+%" || echo "N/A")
+            total=$(grep "reads; of these:" "$ncrna_stats" | grep -oE "^[0-9]+" || echo "N/A")
+            aligned=$(grep "aligned exactly 1 time" "$ncrna_stats" | grep -oE "^[[:space:]]*[0-9]+" | tr -d ' ' || echo "0")
+            multi=$(grep "aligned >1 times" "$ncrna_stats" | grep -oE "^[[:space:]]*[0-9]+" | tr -d ' ' || echo "0")
+            ncrna=$((aligned + multi))
+            printf "  %-25s %-15s %-15s %s\n" "$sample_name" "$ncrna" "$total" "$align_rate"
+        else
+            printf "  %-25s %-15s %-15s %s\n" "$sample_name" "-" "-" "SKIPPED"
+        fi
+    done
+    console_msg "  ----------------------------------------------------------------"
+    
     # Combined Peak Calling
     console_msg "\n[COMBINED PEAK CALLING]"
     BED_DIR="$OUTPUT_ROOT/$DIR_BED"
@@ -591,10 +616,33 @@ if [[ -n "$INPUT_DIR" ]]; then
     # Final Summary
     PIPELINE_END=$(date +%s)
     DURATION=$((PIPELINE_END - PIPELINE_START))
+    H=$((DURATION/3600))
+    M=$(( (DURATION%3600)/60 ))
+    S=$((DURATION%60))
     
     console_msg "\n[COMPLETE]"
-    console_msg "  > Duration: $((DURATION / 60))m $((DURATION % 60))s"
+    console_msg "  > Duration: ${H}h ${M}m ${S}s"
     console_msg "  > Output: $OUTPUT_ROOT/"
+    
+    # Save console summary log at output folder level
+    CONSOLE_LOG="${OUTPUT_ROOT}_summary.log"
+    {
+        echo "========================================"
+        echo "CLIPittyClip Analysis Summary"
+        echo "========================================"
+        echo "Date: $(date)"
+        echo "Input Directory: ${INPUT_DIR}"
+        echo "Samples: $total_samples"
+        echo "Duration: ${H}h ${M}m ${S}s"
+        echo ""
+        echo "Output: $OUTPUT_ROOT/"
+        echo "  - BAM files:      $OUTPUT_ROOT/$DIR_BAM/"
+        echo "  - BED files:      $OUTPUT_ROOT/$DIR_BED/"
+        echo "  - Peaks:          $OUTPUT_ROOT/$DIR_PEAKS/"
+        echo "  - Detailed logs:  $OUTPUT_ROOT/$DIR_REPORTS/"
+        echo "========================================"
+    } > "$CONSOLE_LOG"
+    console_msg "  > Summary log: $CONSOLE_LOG"
     
     send_notification "CLIPittyClip" "Directory batch analysis complete: $total_samples samples"
     
@@ -996,6 +1044,36 @@ if [[ "$DEMUX" == "yes" ]]; then
          LOG_FILE="$OUTPUT_ROOT/$DIR_REPORTS/${INPUT_BASENAME}_CLIPittyClip.log"
     fi
     
+    # ncRNA Filtering Summary
+    console_msg "\n[ncRNA FILTERING SUMMARY]"
+    printf "  %-25s %-15s %-15s %s\n" "Sample" "ncRNA Reads" "Total Reads" "% Filtered"
+    console_msg "  ----------------------------------------------------------------"
+    
+    for sample in demux_fastq/*.fastq.gz "$OUTPUT_ROOT/$DIR_DEMUX"/*.fastq.gz 2>/dev/null; do
+        if [[ -f "$sample" ]]; then
+            sample_name=$(basename "$sample" .fastq.gz)
+            [[ "$sample_name" == "unknown" ]] && continue
+            
+            # Check in analysis dir first, then in OUTPUT_ROOT
+            ncrna_stats="${sample_name}_analysis/OTHERS/ncRNA_Mapping/${sample_name}_ncrna_stats.txt"
+            if [[ ! -f "$ncrna_stats" ]]; then
+                ncrna_stats="$OUTPUT_ROOT/$DIR_REPORTS/ncRNA/${sample_name}_ncrna_stats.txt"
+            fi
+            
+            if [[ -f "$ncrna_stats" ]]; then
+                align_rate=$(grep "overall alignment rate" "$ncrna_stats" | grep -oE "[0-9]+\.[0-9]+%" || echo "N/A")
+                total=$(grep "reads; of these:" "$ncrna_stats" | grep -oE "^[0-9]+" || echo "N/A")
+                aligned=$(grep "aligned exactly 1 time" "$ncrna_stats" | grep -oE "^[[:space:]]*[0-9]+" | tr -d ' ' || echo "0")
+                multi=$(grep "aligned >1 times" "$ncrna_stats" | grep -oE "^[[:space:]]*[0-9]+" | tr -d ' ' || echo "0")
+                ncrna=$((aligned + multi))
+                printf "  %-25s %-15s %-15s %s\n" "$sample_name" "$ncrna" "$total" "$align_rate"
+            else
+                printf "  %-25s %-15s %-15s %s\n" "$sample_name" "-" "-" "SKIPPED"
+            fi
+        fi
+    done
+    console_msg "  ----------------------------------------------------------------"
+    
     # Output Summary
     console_msg "\n[OUTPUT]"
     console_msg "  All results saved to: $OUTPUT_ROOT/"
@@ -1019,6 +1097,26 @@ if [[ "$DEMUX" == "yes" ]]; then
     
     console_msg "End Time: $(date '+%Y-%m-%d %H:%M:%S')"
     console_msg "Total Duration: ${H}h ${M}m ${S}s"
+    
+    # Save console summary log at output folder level
+    CONSOLE_LOG="${OUTPUT_ROOT}_summary.log"
+    {
+        echo "========================================"
+        echo "CLIPittyClip Analysis Summary"
+        echo "========================================"
+        echo "Date: $(date)"
+        echo "Input: ${INPUT_FILE}"
+        echo "Samples: $total_samples"
+        echo "Duration: ${H}h ${M}m ${S}s"
+        echo ""
+        echo "Output: $OUTPUT_ROOT/"
+        echo "  - BAM files:      $OUTPUT_ROOT/$DIR_BAM/"
+        echo "  - BED files:      $OUTPUT_ROOT/$DIR_BED/"
+        echo "  - Peaks:          $OUTPUT_ROOT/$DIR_PEAKS/"
+        echo "  - Detailed logs:  $OUTPUT_ROOT/$DIR_REPORTS/"
+        echo "========================================"
+    } > "$CONSOLE_LOG"
+    console_msg "  > Summary log: $CONSOLE_LOG"
     
     send_notification "CLIPittyClip" "Pipeline execution finished successfully. Duration: ${H}h ${M}m ${S}s"
     exit 0
@@ -1088,7 +1186,7 @@ check_dependency parseAlignment.pl
 
 run_parse_alignment "${BAM_FILE}" "${BASENAME}_parsed.bed" "${MUTATION_FILE}" "$GENOME_INDEX"
 
-run_collapse_pcr "${BASENAME}_parsed.bed" "${COLLAPSED_BED}"
+run_collapse_pcr "${BASENAME}_parsed.bed" "${COLLAPSED_BED}" "${UMI_LEN}"
 
 # 4. Coverage Analysis (Bedgraph)
 run_coverage "${COLLAPSED_BED}" "${BASENAME}" "$GENOME_INDEX/chrom.sizes" # Pass genome file if available

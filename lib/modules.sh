@@ -480,11 +480,21 @@ run_mapping_bowtie2() {
 run_collapse_pcr() {
     local input_bed="$1"
     local output_bed="$2"
+    local umi_len="${3:-0}"  # Optional: UMI length, defaults to 0
 
     update_status "Collapsing"
     log_info "Collapsing PCR duplicates with CTK tag2collapse.pl..."
     
-    local cmd="$CONDA_PREFIX/bin/perl $(which tag2collapse.pl) --keep-tag-name --keep-max-score --random-barcode \
+    # Only use --random-barcode when UMI is present in read names
+    local barcode_flag=""
+    if [ "${umi_len:-0}" -gt 0 ]; then
+        barcode_flag="--random-barcode"
+        log_info "UMI mode (length=$umi_len): using random barcode collapse"
+    else
+        log_info "No UMI: using position-only collapse"
+    fi
+    
+    local cmd="$CONDA_PREFIX/bin/perl $(which tag2collapse.pl) --keep-tag-name --keep-max-score ${barcode_flag} \
         \"${input_bed}\" \"${output_bed}\""
 
     execute_cmd "$cmd"
