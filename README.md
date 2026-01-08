@@ -248,7 +248,7 @@ Condition_B_Rep2    Condition_B
 ├── 2_COLLAPSED_BED/         # PCR-deduplicated BED
 ├── 3_BEDGRAPH/              # Coverage tracks
 ├── 4_PEAKS/                 # HOMER peak results
-│   ├── Combined_peaks/
+│   ├── COMBINED_PEAKS/
 │   └── SAMPLE_PEAKS/
 │
 ├── 5_CTK_Analysis/          # When --cims --cits (both)
@@ -366,7 +366,9 @@ bowtie2-build genome.fa /path/to/bt2_index/GRCh38
 
 CLIPittyClip automatically filters ncRNA reads (rRNA, tRNA, snRNA, snoRNA) before genome alignment to improve peak calling accuracy. This is **enabled by default**.
 
-**Setup:** Place a Bowtie2 index with prefix `ncrna` in your annotation directory (same location as `-x`).
+**Setup:** Place a Bowtie2 index with prefix `ncrna` in either:
+- **Recommended:** `<annotation_dir>/ncRNA/` subfolder
+- **Legacy:** Directly in `<annotation_dir>/` (same location as `-x`)
 
 **Building the ncRNA index:**
 
@@ -381,16 +383,42 @@ wget ftp://ftp.ensembl.org/pub/release-110/fasta/mus_musculus/ncrna/Mus_musculus
 gunzip Mus_musculus.GRCm39.ncrna.fa.gz
 ```
 
-2. Build Bowtie2 index (place in same directory as genome index):
+2. Build Bowtie2 index (recommended: place in ncRNA subfolder):
 ```bash
-bowtie2-build Homo_sapiens.GRCh38.ncrna.fa /path/to/annotation/ncrna
+mkdir -p /path/to/annotation/ncRNA
+bowtie2-build Homo_sapiens.GRCh38.ncrna.fa /path/to/annotation/ncRNA/ncrna
 ```
 
 **Behavior:**
-- If `ncrna.1.bt2` found: Filters ncRNA reads, saves to `OTHERS/ncRNA_Mapping/`
+- Checks `<annotation_dir>/ncRNA/ncrna.1.bt2` first, then falls back to `<annotation_dir>/ncrna.1.bt2`
+- If index found: Filters ncRNA reads, saves to `OTHERS/ncRNA_Mapping/`
 - If index not found: Prints warning, continues without filtering
 
 **To disable:** Use `--skip-ncrna` flag
+
+### Annotation Directory Structure
+
+For CTK CIMS/CITS motif analysis, the annotation directory (`-x`) should contain:
+
+```
+/path/to/annotation/
+├── GRCh38.primary_assembly.genome.fa    # Reference FASTA (required for motif analysis)
+├── Genome                               # STAR index files...
+├── SA
+├── SAindex
+├── genomeParameters.txt
+├── chrom.sizes                          # Optional: for bedgraph generation
+└── ncRNA/                               # Recommended subfolder
+    ├── ncrna.1.bt2                      # Bowtie2 ncRNA index
+    ├── ncrna.2.bt2
+    ├── ncrna.3.bt2
+    ├── ncrna.4.bt2
+    ├── ncrna.rev.1.bt2
+    └── ncrna.rev.2.bt2
+```
+
+> [!NOTE]
+> The reference FASTA for motif analysis is auto-detected with priority: `*genome*.fa` > `*primary*.fa` > any `.fa` excluding `*ncrna*`
 
 
 ## License

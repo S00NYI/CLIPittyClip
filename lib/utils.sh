@@ -130,8 +130,14 @@ check_bowtie_index() {
 # Returns 0 if found, 1 if not found (silent - caller handles messaging)
 check_ncrna_index() {
     local dir="$1"
-    # Look for ncrna.1.bt2 or ncrna.1.bt2l in the directory
+    # Check ncRNA/ subfolder first (recommended structure)
+    if [[ -f "${dir}/ncRNA/ncrna.1.bt2" ]] || [[ -f "${dir}/ncRNA/ncrna.1.bt2l" ]]; then
+        echo "${dir}/ncRNA"  # Return the path where index was found
+        return 0
+    fi
+    # Fallback: check top-level directory (backwards compatibility)
     if [[ -f "${dir}/ncrna.1.bt2" ]] || [[ -f "${dir}/ncrna.1.bt2l" ]]; then
+        echo "${dir}"  # Return the path where index was found
         return 0
     fi
     return 1

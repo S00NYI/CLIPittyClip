@@ -1242,8 +1242,14 @@ run_group_ctk_analysis() {
             fi
         done
         
-        # 9. Get genome fasta for motif analysis
-        local genome_fasta=$(find "$genome_index" -name "*.fa" -o -name "*.fasta" 2>/dev/null | head -n 1)
+        # 9. Get genome fasta for motif analysis (prioritize genome/primary, exclude ncrna)
+        local genome_fasta=$(find "$genome_index" -maxdepth 1 \( -name "*genome*.fa" -o -name "*genome*.fasta" \) 2>/dev/null | head -n 1)
+        if [[ -z "$genome_fasta" ]]; then
+            genome_fasta=$(find "$genome_index" -maxdepth 1 \( -name "*primary*.fa" -o -name "*primary*.fasta" \) 2>/dev/null | head -n 1)
+        fi
+        if [[ -z "$genome_fasta" ]]; then
+            genome_fasta=$(find "$genome_index" -maxdepth 1 \( -name "*.fa" -o -name "*.fasta" \) ! -name "*ncrna*" 2>/dev/null | head -n 1)
+        fi
         
         # 10. Run CTK analysis on aggregated data
         if [[ -s "$group_collapsed" ]]; then

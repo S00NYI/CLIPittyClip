@@ -121,7 +121,7 @@ CITS_PVALUE="0.05"
 CITS_GAP="25"
 RUN_MOTIF="yes"
 MOTIF_FLANK="10"
-CTK_CTK_GROUPS_FILE=""  # Optional: group samples for CIMS/CITS aggregation
+CTK_GROUPS_FILE=""  # Optional: group samples for CIMS/CITS aggregation
 
 # Capture Start Time (Seconds) for duration calculation
 PIPELINE_START=$(date +%s)
@@ -162,7 +162,7 @@ while [[ $# -gt 0 ]]; do
         --cits-gap) CITS_GAP="$2"; shift 2 ;;
         --motif-flank) MOTIF_FLANK="$2"; shift 2 ;;
         --no-motif) RUN_MOTIF="no"; shift ;;
-        -g|--ctk-group) CTK_CTK_GROUPS_FILE="$2"; shift 2 ;;
+        -g|--ctk-group) CTK_GROUPS_FILE="$2"; shift 2 ;;
         --sample) SAMPLE_SIZE="$2"; shift 2 ;;
         -b|--barcode) BARCODE_FILE="$2"; DEMUX="yes"; shift 2 ;;
         -d|--input-dir) INPUT_DIR="$2"; shift 2 ;;
@@ -507,7 +507,7 @@ if [[ -n "$INPUT_DIR" ]]; then
              "$OUTPUT_ROOT/$DIR_BED" \
              "$OUTPUT_ROOT/$DIR_BG" \
              "$OUTPUT_ROOT/$DIR_PEAKS/SAMPLE_PEAKS" \
-             "$OUTPUT_ROOT/$DIR_PEAKS/Combined_peaks" \
+             "$OUTPUT_ROOT/$DIR_PEAKS/COMBINED_PEAKS" \
              "$OUTPUT_ROOT/$DIR_OTHERS/STAR_OUTPUT" \
              "$OUTPUT_ROOT/$DIR_REPORTS/FASTP_REPORT" \
              "$OUTPUT_ROOT/$DIR_REPORTS/STAR_LOGS/DETAILED_LOGS_CAN_BE_DELETED" \
@@ -560,6 +560,13 @@ if [[ -n "$INPUT_DIR" ]]; then
             mv "$sample_out"/REPORTS/FASTP_REPORT/* "$OUTPUT_ROOT/$DIR_REPORTS/FASTP_REPORT/" 2>/dev/null
             mv "$sample_out"/REPORTS/*_pipeline.log "$OUTPUT_ROOT/$DIR_REPORTS/" 2>/dev/null
             
+            # Move ncRNA Mapping outputs
+            if [[ -d "$sample_out/OTHERS/ncRNA_Mapping" ]]; then
+                mkdir -p "$OUTPUT_ROOT/$DIR_OTHERS/ncRNA_Mapping"
+                mv "$sample_out"/OTHERS/ncRNA_Mapping/*_ncrna_stats.txt "$OUTPUT_ROOT/$DIR_OTHERS/ncRNA_Mapping/" 2>/dev/null
+                mv "$sample_out"/OTHERS/ncRNA_Mapping/*_ncrna.bam* "$OUTPUT_ROOT/$DIR_OTHERS/ncRNA_Mapping/" 2>/dev/null
+            fi
+            
             # Cleanup sample dir (keep if -k)
             if [[ "$KEEP_INTERMEDIATE" != "yes" ]]; then
                 rm -rf "$sample_out"
@@ -607,11 +614,11 @@ if [[ -n "$INPUT_DIR" ]]; then
     
     # Move combined results
     if [[ -d "PEAKS" ]]; then
-        mv PEAKS/* "$OUTPUT_ROOT/$DIR_PEAKS/Combined_peaks/" 2>/dev/null
+        mv PEAKS/* "$OUTPUT_ROOT/$DIR_PEAKS/COMBINED_PEAKS/" 2>/dev/null
         rm -rf PEAKS
     fi
     
-    console_msg "  > Combined peaks: $OUTPUT_ROOT/$DIR_PEAKS/Combined_peaks/"
+    console_msg "  > Combined peaks: $OUTPUT_ROOT/$DIR_PEAKS/COMBINED_PEAKS/"
     
     # Final Summary
     PIPELINE_END=$(date +%s)
@@ -860,7 +867,7 @@ if [[ "$DEMUX" == "yes" ]]; then
              "$OUTPUT_ROOT/$DIR_BED" \
              "$OUTPUT_ROOT/$DIR_BG" \
              "$OUTPUT_ROOT/$DIR_PEAKS/SAMPLE_PEAKS" \
-             "$OUTPUT_ROOT/$DIR_PEAKS/Combined_peaks" \
+             "$OUTPUT_ROOT/$DIR_PEAKS/COMBINED_PEAKS" \
              "$OUTPUT_ROOT/$DIR_OTHERS/STAR_OUTPUT" \
              "$OUTPUT_ROOT/$DIR_REPORTS/FASTP_REPORT" \
              "$OUTPUT_ROOT/$DIR_REPORTS/STAR_LOGS/DETAILED_LOGS_CAN_BE_DELETED" \
@@ -960,6 +967,13 @@ if [[ "$DEMUX" == "yes" ]]; then
                 cp "$analysis_dir"/*Log.progress.out "$OUTPUT_ROOT/$DIR_REPORTS/STAR_LOGS/DETAILED_LOGS_CAN_BE_DELETED/" 2>/dev/null
                 cp "$analysis_dir"/*SJ.out.tab "$OUTPUT_ROOT/$DIR_OTHERS/STAR_OUTPUT/" 2>/dev/null
                 
+                # ncRNA Mapping outputs
+                if [[ -d "$analysis_dir/OTHERS/ncRNA_Mapping" ]]; then
+                    mkdir -p "$OUTPUT_ROOT/$DIR_OTHERS/ncRNA_Mapping"
+                    cp "$analysis_dir"/OTHERS/ncRNA_Mapping/*_ncrna_stats.txt "$OUTPUT_ROOT/$DIR_OTHERS/ncRNA_Mapping/" 2>/dev/null
+                    cp "$analysis_dir"/OTHERS/ncRNA_Mapping/*_ncrna.bam* "$OUTPUT_ROOT/$DIR_OTHERS/ncRNA_Mapping/" 2>/dev/null
+                fi
+                
                 # Pipeline Log (The child specific one)
                 # It's named ${sample_name}_analysis.log inside the dir
                 cp "$analysis_dir"/*.log "$OUTPUT_ROOT/$DIR_REPORTS/${sample_name}_detailed.log" 2>/dev/null
@@ -996,7 +1010,7 @@ if [[ "$DEMUX" == "yes" ]]; then
     if [[ -x "$PEAK_SCRIPT" ]]; then
         console_msg "  > Running HOMER Peak Calling (Aggregated)..."
         
-        # Run it inside the output root so it sees "BED" symlink and writes "Combined_peaks" there
+        # Run it inside the output root so it sees "BED" symlink and writes "COMBINED_PEAKS" there
         curr_dir=$(pwd)
         cd "$OUTPUT_ROOT" || exit 1
         
@@ -1010,12 +1024,12 @@ if [[ "$DEMUX" == "yes" ]]; then
         # Remove symlink
         rm BED
         
-        # Move generated `Combined_peaks` to strictly correct place if needed
-        # It creates "Combined_peaks" in CWD ($OUTPUT_ROOT).
-        # We wanted it in "$DIR_PEAKS/Combined_peaks".
-        if [[ -d "Combined_peaks" ]]; then
-            mv "Combined_peaks"/* "$DIR_PEAKS/Combined_peaks/" 2>/dev/null
-            rmdir "Combined_peaks"
+        # Move generated `COMBINED_PEAKS` to strictly correct place if needed
+        # It creates "COMBINED_PEAKS" in CWD ($OUTPUT_ROOT).
+        # We wanted it in "$DIR_PEAKS/COMBINED_PEAKS".
+        if [[ -d "COMBINED_PEAKS" ]]; then
+            mv "COMBINED_PEAKS"/* "$DIR_PEAKS/COMBINED_PEAKS/" 2>/dev/null
+            rmdir "COMBINED_PEAKS"
         fi
         
         cd "$curr_dir"
@@ -1062,6 +1076,12 @@ if [[ "$DEMUX" == "yes" ]]; then
     
     # Remove sampled input if it exists (pattern match)
     rm -f *_sampled_*.fastq.gz
+    
+    # Remove CTK temp directories (CITS.pl_* and CIMS.pl_*)
+    rm -rf CITS.pl_* CIMS.pl_* 2>/dev/null
+    
+    # Remove CTK temp files (*.tmp from perl scripts)
+    rm -f *.tmp 2>/dev/null
 
     # Also remove the main log if it was created in this dir (CLIPittyClip_*.log)
     # We want to MOVE it to REPORTS and rename it.
@@ -1149,14 +1169,15 @@ run_preprocessing "$INPUT_FILE" "$BASENAME" "$UMI_LEN" "$ADAPTER_3" "$THREADS" "
 # 1b. ncRNA Pre-filtering (if enabled and index exists)
 CLEANED_FASTQ="${BASENAME}_cleaned.fastq.gz"
 if [[ "$SKIP_NCRNA" == "false" ]]; then
-    if check_ncrna_index "$GENOME_INDEX"; then
+    NCRNA_INDEX_DIR=$(check_ncrna_index "$GENOME_INDEX")
+    if [[ -n "$NCRNA_INDEX_DIR" ]]; then
         NCRNA_OUTPUT_DIR="OTHERS/ncRNA_Mapping"
         NCRNA_UNMAPPED="${BASENAME}_ncrna_filtered.fastq.gz"
-        run_ncrna_filter "$CLEANED_FASTQ" "$NCRNA_UNMAPPED" "$NCRNA_OUTPUT_DIR" "$GENOME_INDEX" "$THREADS" "$BASENAME"
+        run_ncrna_filter "$CLEANED_FASTQ" "$NCRNA_UNMAPPED" "$NCRNA_OUTPUT_DIR" "$NCRNA_INDEX_DIR" "$THREADS" "$BASENAME"
         # Use filtered reads for genome mapping
         CLEANED_FASTQ="$NCRNA_UNMAPPED"
     else
-        log_warning "ncRNA index not found in $GENOME_INDEX. Skipping ncRNA pre-filtering."
+        log_warning "ncRNA index not found in $GENOME_INDEX or $GENOME_INDEX/ncRNA. Skipping ncRNA pre-filtering."
         log_warning "To build ncRNA index, see README.md for instructions."
     fi
 fi
@@ -1206,10 +1227,20 @@ if [[ "$RUN_CIMS" == "true" ]] || [[ "$RUN_CITS" == "true" ]]; then
     fi
     
     # Find reference FASTA for motif analysis
-    ref_fasta=$(find "$GENOME_INDEX" -name "*.fa" -o -name "*.fasta" 2>/dev/null | head -n 1)
+    # Priority: 1) *genome*.fa, 2) *primary*.fa, 3) any .fa excluding *ncrna*
+    ref_fasta=$(find "$GENOME_INDEX" -maxdepth 1 \( -name "*genome*.fa" -o -name "*genome*.fasta" \) 2>/dev/null | head -n 1)
+    if [[ -z "$ref_fasta" ]]; then
+        ref_fasta=$(find "$GENOME_INDEX" -maxdepth 1 \( -name "*primary*.fa" -o -name "*primary*.fasta" \) 2>/dev/null | head -n 1)
+    fi
+    if [[ -z "$ref_fasta" ]]; then
+        # Fallback: any .fa/.fasta excluding ncrna
+        ref_fasta=$(find "$GENOME_INDEX" -maxdepth 1 \( -name "*.fa" -o -name "*.fasta" \) ! -name "*ncrna*" 2>/dev/null | head -n 1)
+    fi
     if [[ -z "$ref_fasta" ]]; then
         log_warning "Reference FASTA not found. Motif analysis may be skipped."
         ref_fasta=""
+    else
+        log_info "Using reference FASTA for motif analysis: $ref_fasta"
     fi
     
     mkdir -p "$CTK_OUTPUT"

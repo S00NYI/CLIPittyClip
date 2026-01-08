@@ -156,7 +156,7 @@ flowchart TD
 │   └── chrom.sizes
 │
 ├── 4_PEAKS/                          # Peak calling results
-│   ├── Combined_peaks/               # Aggregated analysis
+│   ├── COMBINED_PEAKS/               # Aggregated analysis
 │   │   ├── peaks.bed
 │   │   ├── peaks_Sorted.bed
 │   │   └── Combined_TagDir/

@@ -143,13 +143,14 @@ cd "${OUT_DIR}" || exit 1
 # Run ncRNA pre-filtering if enabled and index exists
 MAPPING_INPUT="$INPUT_FILE"
 if [[ "$SKIP_NCRNA" == "false" ]]; then
-    if check_ncrna_index "$GENOME_INDEX"; then
+    NCRNA_INDEX_DIR=$(check_ncrna_index "$GENOME_INDEX")
+    if [[ -n "$NCRNA_INDEX_DIR" ]]; then
         mkdir -p "OTHERS/ncRNA_Mapping"
         NCRNA_UNMAPPED="OTHERS/ncRNA_Mapping/${BASENAME}_ncrna_filtered.fastq.gz"
-        run_ncrna_filter "$INPUT_FILE" "$NCRNA_UNMAPPED" "OTHERS/ncRNA_Mapping" "$GENOME_INDEX" "$THREADS" "$BASENAME"
+        run_ncrna_filter "$INPUT_FILE" "$NCRNA_UNMAPPED" "OTHERS/ncRNA_Mapping" "$NCRNA_INDEX_DIR" "$THREADS" "$BASENAME"
         MAPPING_INPUT="$NCRNA_UNMAPPED"
     else
-        log_warning "ncRNA index not found in $GENOME_INDEX. Skipping ncRNA pre-filtering."
+        log_warning "ncRNA index not found in $GENOME_INDEX or $GENOME_INDEX/ncRNA. Skipping ncRNA pre-filtering."
     fi
 fi
 
