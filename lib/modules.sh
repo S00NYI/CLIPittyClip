@@ -275,7 +275,7 @@ run_ncrna_filter() {
         local ncrna_reads=$((aligned_reads + multi_aligned))
         
         log_info "ncRNA alignment rate: $align_rate"
-        console_msg "  ncRNA Filter: ${align_rate} of reads mapped to ncRNA (${ncrna_reads}/${total_reads} filtered out)"
+        # Note: Per-sample stats logged to file; summary table shown after batch
         
         return 0
     else
