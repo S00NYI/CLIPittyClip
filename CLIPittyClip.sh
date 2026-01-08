@@ -1030,36 +1030,17 @@ if [[ "$DEMUX" == "yes" ]]; then
         log_error "PEAKittyPeak.sh not found."
     fi
     
-    # Cleanup Analysis Folders and Temp Files
-    console_msg "  > Cleaning up temporary analysis directories and files..."
-    rm -rf *_analysis barcodes.fasta
-    
-    # Remove sampled input if it exists (pattern match)
-    rm -f *_sampled_*.fastq.gz
-
-    # Also remove the main log if it was created in this dir (CLIPittyClip_*.log)
-    # We want to MOVE it to REPORTS and rename it.
-    if [[ -f "$LOG_FILE" ]]; then
-         mv "$LOG_FILE" "$OUTPUT_ROOT/$DIR_REPORTS/${INPUT_BASENAME}_CLIPittyClip.log"
-         LOG_FILE="$OUTPUT_ROOT/$DIR_REPORTS/${INPUT_BASENAME}_CLIPittyClip.log"
-    fi
-    
-    # ncRNA Filtering Summary
+    # ncRNA Filtering Summary (before cleanup so stats files still exist)
     console_msg "\n[ncRNA FILTERING SUMMARY]"
     printf "  %-25s %-15s %-15s %s\n" "Sample" "ncRNA Reads" "Total Reads" "% Filtered"
     console_msg "  ----------------------------------------------------------------"
     
-    shopt -s nullglob  # Handle case where no files match
-    for sample in demux_fastq/*.fastq.gz "$OUTPUT_ROOT/$DIR_DEMUX"/*.fastq.gz; do
-        if [[ -f "$sample" ]]; then
-            sample_name=$(basename "$sample" .fastq.gz)
+    for analysis_dir in *_analysis; do
+        if [[ -d "$analysis_dir" ]]; then
+            sample_name="${analysis_dir%_analysis}"
             [[ "$sample_name" == "unknown" ]] && continue
             
-            # Check in analysis dir first, then in OUTPUT_ROOT
-            ncrna_stats="${sample_name}_analysis/OTHERS/ncRNA_Mapping/${sample_name}_ncrna_stats.txt"
-            if [[ ! -f "$ncrna_stats" ]]; then
-                ncrna_stats="$OUTPUT_ROOT/$DIR_REPORTS/ncRNA/${sample_name}_ncrna_stats.txt"
-            fi
+            ncrna_stats="${analysis_dir}/OTHERS/ncRNA_Mapping/${sample_name}_ncrna_stats.txt"
             
             if [[ -f "$ncrna_stats" ]]; then
                 align_rate=$(grep "overall alignment rate" "$ncrna_stats" | grep -oE "[0-9]+\.[0-9]+%" || echo "N/A")
@@ -1073,8 +1054,21 @@ if [[ "$DEMUX" == "yes" ]]; then
             fi
         fi
     done
-    shopt -u nullglob  # Reset
     console_msg "  ----------------------------------------------------------------"
+    
+    # Cleanup Analysis Folders and Temp Files
+    console_msg "  > Cleaning up temporary analysis directories and files..."
+    rm -rf *_analysis barcodes.fasta
+    
+    # Remove sampled input if it exists (pattern match)
+    rm -f *_sampled_*.fastq.gz
+
+    # Also remove the main log if it was created in this dir (CLIPittyClip_*.log)
+    # We want to MOVE it to REPORTS and rename it.
+    if [[ -f "$LOG_FILE" ]]; then
+         mv "$LOG_FILE" "$OUTPUT_ROOT/$DIR_REPORTS/${INPUT_BASENAME}_CLIPittyClip.log"
+         LOG_FILE="$OUTPUT_ROOT/$DIR_REPORTS/${INPUT_BASENAME}_CLIPittyClip.log"
+    fi
     
     # Output Summary
     console_msg "\n[OUTPUT]"
