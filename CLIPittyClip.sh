@@ -1049,7 +1049,8 @@ if [[ "$DEMUX" == "yes" ]]; then
     printf "  %-25s %-15s %-15s %s\n" "Sample" "ncRNA Reads" "Total Reads" "% Filtered"
     console_msg "  ----------------------------------------------------------------"
     
-    for sample in demux_fastq/*.fastq.gz "$OUTPUT_ROOT/$DIR_DEMUX"/*.fastq.gz 2>/dev/null; do
+    shopt -s nullglob  # Handle case where no files match
+    for sample in demux_fastq/*.fastq.gz "$OUTPUT_ROOT/$DIR_DEMUX"/*.fastq.gz; do
         if [[ -f "$sample" ]]; then
             sample_name=$(basename "$sample" .fastq.gz)
             [[ "$sample_name" == "unknown" ]] && continue
@@ -1072,6 +1073,7 @@ if [[ "$DEMUX" == "yes" ]]; then
             fi
         fi
     done
+    shopt -u nullglob  # Reset
     console_msg "  ----------------------------------------------------------------"
     
     # Output Summary
