@@ -239,6 +239,12 @@ Condition_B_Rep2    Condition_B
 
 > **Note:** Samples not listed in the groups file are treated as individual groups (analyzed separately).
 
+> [!WARNING]
+> **Memory Requirements:** Group-based CTK analysis aggregates all samples before running CIMS/CITS, which can require significant memory (>64GB RAM recommended for large datasets with millions of reads). If you encounter memory issues or system crashes, consider:
+> - Running CTK on individual samples instead of groups
+> - Adding temporary swap space (see `add_temp_swap.sh` utility script)
+> - Using a machine with more RAM
+
 ## Output Structure
 
 ```
