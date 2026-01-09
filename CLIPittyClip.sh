@@ -1020,7 +1020,20 @@ if [[ "$DEMUX" == "yes" ]]; then
 
         # Call script (using absolute path or relative to old pwd)
         # Call script with -n COMBINED to create COMBINED_peaks folder
-        "$PEAK_SCRIPT" -n COMBINED > "$PEAK_LOG" 2>&1
+        # Add --ctk-dir if CTK analysis was enabled
+        PEAK_CMD="$PEAK_SCRIPT -n COMBINED"
+        if [[ "$RUN_CIMS" == "true" ]] || [[ "$RUN_CITS" == "true" ]]; then
+            # Determine CTK folder name (same logic as main script)
+            if [[ "$RUN_CIMS" == "true" ]] && [[ "$RUN_CITS" == "true" ]]; then
+                CTK_FOLDER="5_CTK_Analysis"
+            elif [[ "$RUN_CIMS" == "true" ]]; then
+                CTK_FOLDER="5_CIMS_Analysis"
+            else
+                CTK_FOLDER="5_CITS_Analysis"
+            fi
+            PEAK_CMD="$PEAK_CMD --ctk-dir ./$CTK_FOLDER"
+        fi
+        $PEAK_CMD > "$PEAK_LOG" 2>&1
         
         # Remove symlink
         rm BED

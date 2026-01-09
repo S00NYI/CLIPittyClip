@@ -599,7 +599,12 @@ add_ctk_columns_to_peak_matrix() {
     }
     
     # Find and process CIMS deletion files
+    # Check both: 1) Direct structure: ctk_dir/CIMS/  2) Group structure: ctk_dir/*/CIMS/
+    local cims_found=false
+    
+    # First try direct structure
     if [[ -d "${ctk_dir}/CIMS" ]]; then
+        cims_found=true
         for cims_del_file in "${ctk_dir}/CIMS/"*_CIMS_del.txt; do
             if [[ -f "$cims_del_file" ]]; then
                 local name=$(basename "$cims_del_file" _CIMS_del.txt)
@@ -607,7 +612,6 @@ add_ctk_columns_to_peak_matrix() {
             fi
         done
         
-        # Find and process CIMS substitution files
         for cims_sub_file in "${ctk_dir}/CIMS/"*_CIMS_sub.txt; do
             if [[ -f "$cims_sub_file" ]]; then
                 local name=$(basename "$cims_sub_file" _CIMS_sub.txt)
@@ -616,12 +620,54 @@ add_ctk_columns_to_peak_matrix() {
         done
     fi
     
+    # If no direct CIMS folder, try group subfolders (ctk_dir/*/CIMS/)
+    if [[ "$cims_found" == "false" ]]; then
+        for group_dir in "${ctk_dir}"/*/; do
+            if [[ -d "${group_dir}CIMS" ]]; then
+                cims_found=true
+                for cims_del_file in "${group_dir}CIMS/"*_CIMS_del.txt; do
+                    if [[ -f "$cims_del_file" ]]; then
+                        local name=$(basename "$cims_del_file" _CIMS_del.txt)
+                        add_ctk_column "$cims_del_file" "${name}_del" "cims" "$cims_fdr"
+                    fi
+                done
+                
+                for cims_sub_file in "${group_dir}CIMS/"*_CIMS_sub.txt; do
+                    if [[ -f "$cims_sub_file" ]]; then
+                        local name=$(basename "$cims_sub_file" _CIMS_sub.txt)
+                        add_ctk_column "$cims_sub_file" "${name}_sub" "cims" "$cims_fdr"
+                    fi
+                done
+            fi
+        done
+    fi
+    
     # Find and process CITS files
+    # Check both: 1) Direct structure: ctk_dir/CITS/  2) Group structure: ctk_dir/*/CITS/
+    local cits_found=false
+    
+    # First try direct structure
     if [[ -d "${ctk_dir}/CITS" ]]; then
-        for cits_file in "${ctk_dir}/CITS/"*_CITS.txt; do
+        cits_found=true
+        for cits_file in "${ctk_dir}/CITS/"*_CITS.txt "${ctk_dir}/CITS/"*_CITS.bed; do
             if [[ -f "$cits_file" ]]; then
-                local name=$(basename "$cits_file" _CITS.txt)
+                local name=$(basename "$cits_file" | sed 's/_CITS\.\(txt\|bed\)$//')
                 add_ctk_column "$cits_file" "${name}_trunc" "cits" "$cits_pval"
+            fi
+        done
+    fi
+    
+    # If no direct CITS folder, try group subfolders
+    if [[ "$cits_found" == "false" ]]; then
+        for group_dir in "${ctk_dir}"/*/; do
+            if [[ -d "${group_dir}CITS" ]]; then
+                cits_found=true
+                for cits_file in "${group_dir}CITS/"*_CITS.txt "${group_dir}CITS/"*_CITS.bed; do
+                    if [[ -f "$cits_file" ]]; then
+                        local name=$(basename "$cits_file" | sed 's/_CITS\.\(txt\|bed\)$//')
+                        add_ctk_column "$cits_file" "${name}_trunc" "cits" "$cits_pval"
+                    fi
+                done
             fi
         done
     fi
