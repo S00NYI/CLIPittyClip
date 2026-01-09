@@ -1019,17 +1019,18 @@ if [[ "$DEMUX" == "yes" ]]; then
         console_msg "  > Detailed Peak Log: $DIR_PEAK_LOGS/$(basename "$PEAK_LOG")"
 
         # Call script (using absolute path or relative to old pwd)
-        "$PEAK_SCRIPT" > "$PEAK_LOG" 2>&1
+        # Call script with -n COMBINED to create COMBINED_peaks folder
+        "$PEAK_SCRIPT" -n COMBINED > "$PEAK_LOG" 2>&1
         
         # Remove symlink
         rm BED
         
-        # Move generated `COMBINED_PEAKS` to strictly correct place if needed
-        # It creates "COMBINED_PEAKS" in CWD ($OUTPUT_ROOT).
-        # We wanted it in "$DIR_PEAKS/COMBINED_PEAKS".
-        if [[ -d "COMBINED_PEAKS" ]]; then
-            mv "COMBINED_PEAKS"/* "$DIR_PEAKS/COMBINED_PEAKS/" 2>/dev/null
-            rmdir "COMBINED_PEAKS"
+        # Move generated `COMBINED_peaks` to strictly correct place if needed
+        # PEAKittyPeak creates "{BASE_NAME}_peaks" folder in CWD ($OUTPUT_ROOT).
+        # We want it in "$DIR_PEAKS/COMBINED_PEAKS".
+        if [[ -d "COMBINED_peaks" ]]; then
+            mv "COMBINED_peaks"/* "$DIR_PEAKS/COMBINED_PEAKS/" 2>/dev/null
+            rmdir "COMBINED_peaks"
         fi
         
         cd "$curr_dir"
