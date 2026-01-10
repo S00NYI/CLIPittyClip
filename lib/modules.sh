@@ -429,14 +429,29 @@ run_mapping_bowtie2() {
     log_info "Input: $input_file"
     log_info "Index: $genome_index"
     
-    # Verify index (look for .1.bt2 or .1.bt2l)
-    local found_idx=$(find "$genome_index" -name "*.1.bt2" 2>/dev/null | head -n 1)
+    # Verify index (look for .1.bt2 or .1.bt2l, excluding ncRNA patterns)
+    # First try top-level (maxdepth 1), then fall back to deeper search
+    local found_idx=""
+    
+    # Try .1.bt2 at top level first, excluding ncRNA
+    found_idx=$(find "$genome_index" -maxdepth 1 -name "*.1.bt2" ! -name "*ncrna*" 2>/dev/null | head -n 1)
+    
+    # If not found, try .1.bt2l at top level
     if [[ -z "$found_idx" ]]; then
-       found_idx=$(find "$genome_index" -name "*.1.bt2l" 2>/dev/null | head -n 1)
-       if [[ -z "$found_idx" ]]; then
-            log_error "Bowtie2 index files (*.1.bt2) not found in $genome_index"
-            return 1
-       fi
+        found_idx=$(find "$genome_index" -maxdepth 1 -name "*.1.bt2l" ! -name "*ncrna*" 2>/dev/null | head -n 1)
+    fi
+    
+    # Fall back to deeper search (excluding ncRNA subfolder)
+    if [[ -z "$found_idx" ]]; then
+        found_idx=$(find "$genome_index" -name "*.1.bt2" ! -path "*/ncRNA/*" ! -name "*ncrna*" 2>/dev/null | head -n 1)
+    fi
+    if [[ -z "$found_idx" ]]; then
+        found_idx=$(find "$genome_index" -name "*.1.bt2l" ! -path "*/ncRNA/*" ! -name "*ncrna*" 2>/dev/null | head -n 1)
+    fi
+    
+    if [[ -z "$found_idx" ]]; then
+        log_error "Bowtie2 index files (*.1.bt2) not found in $genome_index"
+        return 1
     fi
     
     # Construct base name for index

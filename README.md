@@ -240,9 +240,8 @@ Condition_B_Rep2    Condition_B
 > **Note:** Samples not listed in the groups file are treated as individual groups (analyzed separately).
 
 > [!WARNING]
-> **Memory Requirements:** Group-based CTK analysis aggregates all samples before running CIMS/CITS, which can require significant memory (>64GB RAM recommended for large datasets with millions of reads). If you encounter memory issues or system crashes, consider:
+> **Memory Requirements:** Group-based CTK analysis aggregates all samples in each group before running CIMS/CITS, which can require significant memory (>64GB RAM recommended for large datasets). If you encounter memory issues or system crashes, consider:
 > - Running CTK on individual samples instead of groups
-> - Adding temporary swap space (see `add_temp_swap.sh` utility script)
 > - Using a machine with more RAM
 
 ## Output Structure
@@ -254,10 +253,10 @@ Condition_B_Rep2    Condition_B
 ├── 2_COLLAPSED_BED/         # PCR-deduplicated BED
 ├── 3_BEDGRAPH/              # Coverage tracks
 ├── 4_PEAKS/                 # HOMER peak results
-│   ├── COMBINED_PEAKS/
-│   └── SAMPLE_PEAKS/
+│   ├── COMBINED_PEAKS/      # Peaks across all samples
+│   └── SAMPLE_PEAKS/        # Peaks per sample
 │
-├── 5_CTK_Analysis/          # When --cims --cits (both)
+├── 5_CTK_Analysis/          # When --run-ctk
 │   ├── CIMS/
 │   ├── CITS/
 │   └── motif_analysis/
@@ -266,13 +265,17 @@ Condition_B_Rep2    Condition_B
 │ OR
 ├── 5_CITS_Analysis/         # When --cits only
 │
-├── 6_OTHERS/                # When CTK analysis enabled
-│   └── STAR_OUTPUT/
-│ OR
-├── 5_OTHERS/                # When no CTK analysis
-│   └── STAR_OUTPUT/
+├── 6_OTHERS/                # Support files
+│   ├── STAR_OUTPUT/         # Splice junctions (STAR only)
+│   └── ncRNA_Mapping/       # ncRNA mapping results
 │
 └── REPORTS/                 # Logs and QC reports
+    ├── FASTP_REPORT/        # HTML/JSON QC reports
+    ├── ALIGNER_LOGS/        # Aligner summaries (STAR only)
+    ├── SAMPLES/             # Detailed per-sample logs
+    └── PEAK/                # Peak calling logs
+
+{INPUT_BASENAME}.log         # Complete console log of the run
 ```
 
 ## Console Output
@@ -368,9 +371,9 @@ STAR --runMode genomeGenerate \
 bowtie2-build genome.fa /path/to/bt2_index/GRCh38
 ```
 
-### ncRNA Pre-filtering Index (Optional but Recommended)
+### ncRNA Pre-filtering Index (Recommended)
 
-CLIPittyClip automatically filters ncRNA reads (rRNA, tRNA, snRNA, snoRNA) before genome alignment to improve peak calling accuracy. This is **enabled by default**.
+CLIPittyClip can automatically filter ncRNA reads (rRNA, tRNA, snRNA, snoRNA) before genome alignment to improve peak calling accuracy. This is **enabled by default**.
 
 **Setup:** Place a Bowtie2 index with prefix `ncrna` in either:
 - **Recommended:** `<annotation_dir>/ncRNA/` subfolder

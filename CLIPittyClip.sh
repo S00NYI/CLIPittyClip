@@ -13,6 +13,8 @@ source "${SCRIPT_DIR}/lib/utils.sh"
 source "${SCRIPT_DIR}/lib/modules.sh"
 source "${SCRIPT_DIR}/lib/wizard.sh"
 
+# Console output capture will be enabled after argument parsing (only for parent process)
+
 # Default Values
 THREADS=1
 KEEP_INTERMEDIATE="no"
@@ -188,7 +190,18 @@ done
 # If CHILD_MODE, we suppress main log creation to avoid spamming root dir.
 if [[ "$CHILD_MODE" == "true" ]]; then
     LOG_FILE="/dev/null"
+    TEMP_CONSOLE_LOG=""  # No console log for child processes
 else
+    # Enable console output capture for parent process only
+    # Derive log name from input file if available
+    if [[ -n "$INPUT_FILE" ]]; then
+        TEMP_CONSOLE_LOG="$(basename "$INPUT_FILE" .fastq.gz).log"
+    elif [[ -n "$INPUT_DIR" ]]; then
+        TEMP_CONSOLE_LOG="$(basename "$INPUT_DIR").log"
+    else
+        TEMP_CONSOLE_LOG="CLIPittyClip_$$.log"
+    fi
+    exec > >(tee -a "$TEMP_CONSOLE_LOG") 2>&1
     # Use absolute path so redirects work correctly even if we cd later
 # Check for existing config in current directory (e.g. from parent process or previous run)
 if [[ -f "analysis_config.env" ]]; then
@@ -508,12 +521,17 @@ if [[ -n "$INPUT_DIR" ]]; then
              "$OUTPUT_ROOT/$DIR_BG" \
              "$OUTPUT_ROOT/$DIR_PEAKS/SAMPLE_PEAKS" \
              "$OUTPUT_ROOT/$DIR_PEAKS/COMBINED_PEAKS" \
-             "$OUTPUT_ROOT/$DIR_OTHERS/STAR_OUTPUT" \
              "$OUTPUT_ROOT/$DIR_REPORTS/FASTP_REPORT" \
-             "$OUTPUT_ROOT/$DIR_REPORTS/STAR_LOGS/DETAILED_LOGS_CAN_BE_DELETED" \
+             "$OUTPUT_ROOT/$DIR_REPORTS/ALIGNER_LOGS/DETAILED_LOGS_CAN_BE_DELETED" \
+             "$OUTPUT_ROOT/$DIR_REPORTS/SAMPLES" \
              "$OUTPUT_ROOT/$DIR_PEAK_LOGS" \
              "$OUTPUT_ROOT/$DIR_IND_PEAK_LOGS"
     
+    # Create aligner-specific folders
+    if [[ "$ALIGNER" != "bowtie2" ]]; then
+        mkdir -p "$OUTPUT_ROOT/$DIR_OTHERS/STAR_OUTPUT"
+    fi
+
     # Run Group-based CTK Analysis (if groups file provided)
     if [[ -n "$CTK_GROUPS_FILE" ]]; then
         run_group_ctk_analysis "$CTK_GROUPS_FILE" "$OUTPUT_ROOT" "$GENOME_INDEX" \
@@ -631,25 +649,10 @@ if [[ -n "$INPUT_DIR" ]]; then
     console_msg "  > Duration: ${H}h ${M}m ${S}s"
     console_msg "  > Output: $OUTPUT_ROOT/"
     
-    # Save console summary log at output folder level
-    CONSOLE_LOG="${OUTPUT_ROOT}_summary.log"
-    {
-        echo "========================================"
-        echo "CLIPittyClip Analysis Summary"
-        echo "========================================"
-        echo "Date: $(date)"
-        echo "Input Directory: ${INPUT_DIR}"
-        echo "Samples: $total_samples"
-        echo "Duration: ${H}h ${M}m ${S}s"
-        echo ""
-        echo "Output: $OUTPUT_ROOT/"
-        echo "  - BAM files:      $OUTPUT_ROOT/$DIR_BAM/"
-        echo "  - BED files:      $OUTPUT_ROOT/$DIR_BED/"
-        echo "  - Peaks:          $OUTPUT_ROOT/$DIR_PEAKS/"
-        echo "  - Detailed logs:  $OUTPUT_ROOT/$DIR_REPORTS/"
-        echo "========================================"
-    } > "$CONSOLE_LOG"
-    console_msg "  > Summary log: $CONSOLE_LOG"
+    # Console log already named and captured (see post-parsing initialization)
+    if [[ -n "$TEMP_CONSOLE_LOG" && -f "$TEMP_CONSOLE_LOG" ]]; then
+        console_msg "  > Console log: $TEMP_CONSOLE_LOG"
+    fi
     
     send_notification "CLIPittyClip" "Directory batch analysis complete: $total_samples samples"
     
@@ -818,18 +821,27 @@ if [[ "$DEMUX" == "yes" ]]; then
                 -o ${sample_name} \
                 $EXTRA_FLAGS"
             
-            # Run the command. 
+            # Run the command with log capture
             # In CHILD_MODE, the script will produce `update_status` outputs (echo -ne ... \r).
-            # This should appear on the console right after our printf above.
-            $cmd
+            # We capture this into a sample-specific log while still showing it on console.
+            $cmd 2>&1 | tee "${sample_name}.log"
+            
+            # Check exit status of the PIPELINE (not tee) using PIPESTATUS
+            pipestatus="${PIPESTATUS[0]}"
             
             # When child finishes, we need to print "Done." and a newline to finalize the line.
-            if [ $? -eq 0 ]; then
+            if [ $pipestatus -eq 0 ]; then
                 update_status_done
                 echo "[BATCH] Sample $sample_name analysis complete." >> "$LOG_FILE"
+                
+                # Move the captured log into the analysis directory if it exists
+                if [[ -d "${sample_name}_analysis" ]]; then
+                    mv "${sample_name}.log" "${sample_name}_analysis/${sample_name}.log"
+                fi
             else
                 echo -e "${RED}FAILED${NC}"
                 log_error ">>> Sample $sample_name analysis FAILED."
+                # Keep the log file in root for debugging
             fi
         fi
     done
@@ -868,12 +880,17 @@ if [[ "$DEMUX" == "yes" ]]; then
              "$OUTPUT_ROOT/$DIR_BG" \
              "$OUTPUT_ROOT/$DIR_PEAKS/SAMPLE_PEAKS" \
              "$OUTPUT_ROOT/$DIR_PEAKS/COMBINED_PEAKS" \
-             "$OUTPUT_ROOT/$DIR_OTHERS/STAR_OUTPUT" \
              "$OUTPUT_ROOT/$DIR_REPORTS/FASTP_REPORT" \
-             "$OUTPUT_ROOT/$DIR_REPORTS/STAR_LOGS/DETAILED_LOGS_CAN_BE_DELETED" \
+             "$OUTPUT_ROOT/$DIR_REPORTS/ALIGNER_LOGS/DETAILED_LOGS_CAN_BE_DELETED" \
+             "$OUTPUT_ROOT/$DIR_REPORTS/SAMPLES" \
              "$OUTPUT_ROOT/$DIR_PEAK_LOGS" \
              "$OUTPUT_ROOT/$DIR_IND_PEAK_LOGS"
     
+    # Create aligner-specific folders
+    if [[ "$ALIGNER" != "bowtie2" ]]; then
+        mkdir -p "$OUTPUT_ROOT/$DIR_OTHERS/STAR_OUTPUT"
+    fi
+
     # Run Group-based CTK Analysis (if groups file provided)
     if [[ -n "$CTK_GROUPS_FILE" ]]; then
         run_group_ctk_analysis "$CTK_GROUPS_FILE" "$OUTPUT_ROOT" "$GENOME_INDEX" \
@@ -961,11 +978,17 @@ if [[ "$DEMUX" == "yes" ]]; then
                 cp "$analysis_dir"/*_fastp.html "$OUTPUT_ROOT/$DIR_REPORTS/FASTP_REPORT/" 2>/dev/null
                 cp "$analysis_dir"/*_fastp.json "$OUTPUT_ROOT/$DIR_REPORTS/FASTP_REPORT/" 2>/dev/null
                 
-                # STAR
-                cp "$analysis_dir"/*Log.final.out "$OUTPUT_ROOT/$DIR_REPORTS/STAR_LOGS/" 2>/dev/null
-                cp "$analysis_dir"/*Log.out "$OUTPUT_ROOT/$DIR_REPORTS/STAR_LOGS/DETAILED_LOGS_CAN_BE_DELETED/" 2>/dev/null
-                cp "$analysis_dir"/*Log.progress.out "$OUTPUT_ROOT/$DIR_REPORTS/STAR_LOGS/DETAILED_LOGS_CAN_BE_DELETED/" 2>/dev/null
-                cp "$analysis_dir"/*SJ.out.tab "$OUTPUT_ROOT/$DIR_OTHERS/STAR_OUTPUT/" 2>/dev/null
+                # Aligner-specific logs
+                if [[ "$ALIGNER" == "bowtie2" ]]; then
+                    # Bowtie2 logs (summary is part of stderr, captured in sample log)
+                    :  # No separate log files for Bowtie2
+                else
+                    # STAR logs
+                    cp "$analysis_dir"/*Log.final.out "$OUTPUT_ROOT/$DIR_REPORTS/ALIGNER_LOGS/" 2>/dev/null
+                    cp "$analysis_dir"/*Log.out "$OUTPUT_ROOT/$DIR_REPORTS/ALIGNER_LOGS/DETAILED_LOGS_CAN_BE_DELETED/" 2>/dev/null
+                    cp "$analysis_dir"/*Log.progress.out "$OUTPUT_ROOT/$DIR_REPORTS/ALIGNER_LOGS/DETAILED_LOGS_CAN_BE_DELETED/" 2>/dev/null
+                    cp "$analysis_dir"/*SJ.out.tab "$OUTPUT_ROOT/$DIR_OTHERS/STAR_OUTPUT/" 2>/dev/null
+                fi
                 
                 # ncRNA Mapping outputs
                 if [[ -d "$analysis_dir/OTHERS/ncRNA_Mapping" ]]; then
@@ -976,7 +999,7 @@ if [[ "$DEMUX" == "yes" ]]; then
                 
                 # Pipeline Log (The child specific one)
                 # It's named ${sample_name}_analysis.log inside the dir
-                cp "$analysis_dir"/*.log "$OUTPUT_ROOT/$DIR_REPORTS/${sample_name}_detailed.log" 2>/dev/null
+                cp "$analysis_dir"/*.log "$OUTPUT_ROOT/$DIR_REPORTS/SAMPLES/${sample_name}_detailed.log" 2>/dev/null
                 
             else
                 log_warning "Analysis directory not found for $sample_name"
@@ -1128,25 +1151,10 @@ if [[ "$DEMUX" == "yes" ]]; then
     console_msg "End Time: $(date '+%Y-%m-%d %H:%M:%S')"
     console_msg "Total Duration: ${H}h ${M}m ${S}s"
     
-    # Save console summary log at output folder level
-    CONSOLE_LOG="${OUTPUT_ROOT}_summary.log"
-    {
-        echo "========================================"
-        echo "CLIPittyClip Analysis Summary"
-        echo "========================================"
-        echo "Date: $(date)"
-        echo "Input: ${INPUT_FILE}"
-        echo "Samples: $total_samples"
-        echo "Duration: ${H}h ${M}m ${S}s"
-        echo ""
-        echo "Output: $OUTPUT_ROOT/"
-        echo "  - BAM files:      $OUTPUT_ROOT/$DIR_BAM/"
-        echo "  - BED files:      $OUTPUT_ROOT/$DIR_BED/"
-        echo "  - Peaks:          $OUTPUT_ROOT/$DIR_PEAKS/"
-        echo "  - Detailed logs:  $OUTPUT_ROOT/$DIR_REPORTS/"
-        echo "========================================"
-    } > "$CONSOLE_LOG"
-    console_msg "  > Summary log: $CONSOLE_LOG"
+    # Console log already named and captured (see post-parsing initialization)
+    if [[ -n "$TEMP_CONSOLE_LOG" && -f "$TEMP_CONSOLE_LOG" ]]; then
+        console_msg "  > Console log: $TEMP_CONSOLE_LOG"
+    fi
     
     send_notification "CLIPittyClip" "Pipeline execution finished successfully. Duration: ${H}h ${M}m ${S}s"
     exit 0

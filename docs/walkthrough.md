@@ -181,7 +181,7 @@ flowchart TD
 │
 └── REPORTS/                          # Logs and QC reports
     ├── FASTP_REPORT/
-    ├── STAR_LOGS/
+    ├── ALIGNER_LOGS/
     ├── PEAK/
     │   └── INDIVIDUAL_SAMPLES/
     ├── CIMS_CITS/
