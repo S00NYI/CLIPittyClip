@@ -592,6 +592,11 @@ if [[ -n "$INPUT_DIR" ]]; then
         fi
     done
     
+    # Combined BedGraph Generation (Directory Mode)
+    if [[ -n "$CTK_GROUPS_FILE" ]]; then
+        run_combined_bedgraph "$OUTPUT_ROOT" "$CTK_GROUPS_FILE" "$OUTPUT_ROOT/$DIR_BG"
+    fi
+    
     # ncRNA Filtering Summary
     console_msg "\n[ncRNA FILTERING SUMMARY]"
     printf "  %-25s %-15s %-15s %s\n" "Sample" "ncRNA Reads" "Total Reads" "% Filtered"
@@ -1099,6 +1104,11 @@ if [[ "$DEMUX" == "yes" ]]; then
         log_error "PEAKittyPeak.sh not found."
     fi
     
+    # Combined BedGraph Generation
+    if [[ -n "$CTK_GROUPS_FILE" ]]; then
+        run_combined_bedgraph "$OUTPUT_ROOT" "$CTK_GROUPS_FILE" "$OUTPUT_ROOT/$DIR_BG"
+    fi
+
     # ncRNA Filtering Summary (before cleanup so stats files still exist)
     console_msg "\n[ncRNA FILTERING SUMMARY]"
     printf "  %-25s %-15s %-15s %s\n" "Sample" "ncRNA Reads" "Total Reads" "% Filtered"

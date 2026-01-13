@@ -1162,38 +1162,125 @@ run_ctk_analysis() {
 
 # 7. Coverage Analysis (Bedgraph)
 run_coverage() {
-    local input_bed="$1"
+    local input_bed="$1"       # Previously used input BED, now we prefer BAM directly
     local output_prefix="$2"
-    local genome_file="$3" # Requires genome file (chrom sizes)
-
+    local genome_file="$3"     # Requires genome file (chrom sizes), but using -ibam allows header usage? 
+                               # genomecov -ibam uses BAM header! So genome_file technically not strictly needed for bam input mode
+                               # unless we want to be safe. But user's request is stream.
+    
     update_status "Bedgraph"
-    log_info "generating separate strand bedGraphs..."
+    log_info "generating normalized, filtered bedGraphs..."
     
-    # We need chromosome sizes for genomecov -bg. 
-    # Try to extract from BAM if genome_file is not valid
-    local chrom_sizes="$genome_file"
+    # 1. Identify BAM file
+    # We generally assume BAM is named typical way
+    # input_bed was usually "sample.collapsed.bed"
+    # Corresponding BAM is "sample.Aligned.sortedByCoord.out.bam"
+    # We can infer it from input_bed path or similar.
+    # Actually, input_bed logic is inherited. 
+    # Let's find the BAM.
+    local bam_file="$(dirname "$input_bed")/$(basename "${input_bed%.collapsed.bed}").Aligned.sortedByCoord.out.bam"
     
-    if [[ ! -f "$chrom_sizes" ]]; then
-        # Try to find default chrom.sizes or extract from BAM
-        chrom_sizes="chrom.sizes"
-        if [[ ! -f "$chrom_sizes" ]]; then
-             local bam_file=$(ls *.sortedByCoord.out.bam | head -n 1)
-             if [[ -f "$bam_file" ]]; then
-                  samtools view -H "$bam_file" | grep "@SQ" | sed 's/@SQ\tSN://' | sed 's/\tLN:/\t/' > "$chrom_sizes"
-             else
-                 log_error "Cannot generate bedgraph: genome chrom.sizes missing and no BAM found for extraction."
-                 return 1
-             fi
-        fi
+    if [[ ! -f "$bam_file" ]]; then
+        # Try fallback naming or location
+        bam_file="$(dirname "$input_bed")/$(basename "${input_bed%.bed}").Aligned.sortedByCoord.out.bam"
     fi
-
+    
+    if [[ ! -f "$bam_file" ]]; then
+         log_error "Combined/Normalized BedGraph requires BAM input, but could not locate: $bam_file"
+         return 1
+    fi
+    
+    # 2. Calculate Scale Factor for Normalization
+    # Count mapped reads (primary alignments only? or all mapped?)
+    # usually -F 4 (mapped). User script used -F 4.
+    local mapped=$(samtools view -c -F 4 "$bam_file")
+    
+    if [[ "$mapped" -eq 0 ]]; then
+        log_warning "No mapped reads found in $bam_file. Skipping BedGraph."
+        return 0
+    fi
+    
+    local scale=$(echo "scale=6; 1000000 / $mapped" | bc)
+    log_info "  Mapped Reads: $mapped | Scale Factor: $scale"
+    
+    # 3. Generate BedGraph (Filtered & Normalized)
+    # Using 'cigar !~ "N"' to remove junction reads
+    # Streaming samtools -> bedtools genomecov
+    
     # Positive Strand
-    bedtools genomecov -i "$input_bed" -g "$chrom_sizes" -bg -strand + > "${output_prefix}_pos.bedgraph"
+    samtools view -h -e 'cigar !~ "N"' "$bam_file" | \
+    bedtools genomecov -ibam stdin -bg -strand + -scale "$scale" > "${output_prefix}_pos.bedgraph"
     
     # Negative Strand
-    bedtools genomecov -i "$input_bed" -g "$chrom_sizes" -bg -strand - > "${output_prefix}_neg.bedgraph"
+    samtools view -h -e 'cigar !~ "N"' "$bam_file" | \
+    bedtools genomecov -ibam stdin -bg -strand - -scale "$scale" > "${output_prefix}_neg.bedgraph"
+    
     
     log_info "Bedgraphs generated: ${output_prefix}_pos.bedgraph, ${output_prefix}_neg.bedgraph"
+}
+
+# 8. Combined BedGraph Generation (Group Averaging)
+run_combined_bedgraph() {
+    local output_dir="$1"
+    local groups_file="$2"
+    local bedgraph_dir="$3"
+    
+    update_status "Combined BedGraph"
+    log_info "Generating combined average bedgraphs..."
+    
+    mkdir -p "$output_dir/COMBINED_BEDGRAPH"
+    
+    # Identify Groups
+    # If groups file provided, use it. Else, maybe regex?
+    # For robust implementation, we'll assume GROUPS_FILE structure: SampleName<TAB>GroupName
+    
+    if [[ -z "$groups_file" || ! -f "$groups_file" ]]; then
+        log_warning "No valid groups file provided. Skipping combined bedgraph generation."
+        return 0
+    fi
+    
+    # Extract unique groups
+    local groups=$(awk '{print $2}' "$groups_file" | sort | uniq)
+    
+    for group in $groups; do
+        log_info "Processing Group: $group"
+        
+        # Get samples for this group
+        local samples=$(awk -v g="$group" '$2==g {print $1}' "$groups_file")
+        
+        # Process Positive and Negative strands separately
+        for strand in "pos" "neg"; do
+            local bg_files=""
+            local count=0
+            
+            for sample in $samples; do
+                # Construct expected filename from run_coverage output
+                # {sample}_pos.bedgraph
+                local f="$bedgraph_dir/${sample}_${strand}.bedgraph"
+                if [[ -f "$f" ]]; then
+                    bg_files="$bg_files $f"
+                    ((count++))
+                fi
+            done
+            
+            if [[ $count -gt 0 ]]; then
+                # Union and Average
+                # Unionbedg produces: chrom start end val1 val2 ... valN
+                # Column 1,2,3 are coords. Columns 4 to 3+N are values.
+                # Average = sum(col 4..NF) / (NF-3)
+                
+                local output_file="$output_dir/COMBINED_BEDGRAPH/${group}_combined_${strand}.bedgraph"
+                
+                bedtools unionbedg -i $bg_files | \
+                awk -v N="$count" '{sum=0; for(i=4;i<=NF;i++) sum+=$i; print $1,$2,$3,sum/N}' \
+                > "$output_file"
+                
+                log_info "  Generatd: $(basename "$output_file") ($count replicates)"
+            else
+                log_warning "  No bedgraph files found for group $group ($strand)"
+            fi
+        done
+    done
 }
 
 # ═══════════════════════════════════════════════════════════════════════════

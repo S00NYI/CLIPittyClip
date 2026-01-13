@@ -11,13 +11,15 @@ A comprehensive, single-command CLIP-seq data analysis pipeline from FASTQ to pe
 
 CLIPittyClip v3.0 provides a complete, modernized workflow for CLIP-seq analysis:
 
-- **Dual Aligner Support**: STAR (default) or Bowtie2
+- **Dual Aligner Support**: STAR (default) or Bowtie2 (with smart index prioritization)
 - **Unified Preprocessing**: `samtools calmd` → `parseAlignment.pl` → `tag2collapse.pl`
+- **Advanced Coverage Analysis**: Normalized BedGraph generation (CPM) with junction read removal (CIGAR filtering) and group averaging
 - **Integrated QC**: `fastp` for quality filtering, trimming, and UMI extraction
 - **Demultiplexing**: Native barcode-based sample splitting with `cutadapt`
-- **CIMS/CITS Analysis**: Zhang lab's CTK toolkit integration for crosslink site detection
+- **Dual-Mode Peak Calling**: Robust `PEAKittyPeak` module supporting aggregated (meta-peak) or individual calling without filesystem limitations
+- **Group-Based Analysis**: Integrated support for group-wise peak aggregation and CTK analysis
+- **Flexible Reporting**: Centralized `REPORTS/` folder with detailed logs and stats
 - **Interactive Wizard**: `--wizard` mode for guided configuration
-- **Flexible Output**: Conditional folder naming based on analysis type
 
 ## Pipeline Flow
 
@@ -251,9 +253,10 @@ Condition_B_Rep2    Condition_B
 ├── 0_DEMUX_FASTQ/           # Demultiplexed reads
 ├── 1_BAM/                   # Aligned BAM files
 ├── 2_COLLAPSED_BED/         # PCR-deduplicated BED
-├── 3_BEDGRAPH/              # Coverage tracks
+├── 3_BEDGRAPH/              # Coverage tracks (Normalized CPM)
+│   ├── COMBINED_BEDGRAPH/   # (Group mode) Averaged replicates
 ├── 4_PEAKS/                 # HOMER peak results
-│   ├── COMBINED_PEAKS/      # Peaks across all samples
+│   ├── COMBINED_PEAKS/      # Peaks across all samples (or aggregated)
 │   └── SAMPLE_PEAKS/        # Peaks per sample
 │
 ├── 5_CTK_Analysis/          # When --run-ctk
@@ -271,11 +274,13 @@ Condition_B_Rep2    Condition_B
 │
 └── REPORTS/                 # Logs and QC reports
     ├── FASTP_REPORT/        # HTML/JSON QC reports
-    ├── ALIGNER_LOGS/        # Aligner summaries (STAR only)
+    ├── ALIGNER_LOGS/        # Aligner summaries (STAR/Bowtie2)
     ├── SAMPLES/             # Detailed per-sample logs
-    └── PEAK/                # Peak calling logs
+    ├── PEAK/                # Peak calling logs
+    └── BEDGRAPH/            # BedGraph generation logs (optional)
 
 {INPUT_BASENAME}.log         # Complete console log of the run
+
 ```
 
 ## Console Output
@@ -329,6 +334,7 @@ Standalone peak calling using HOMER. Requires a directory containing collapsed B
 
 **Required inputs:**
 - Run from a directory containing a `BED/` folder with `.bed` files
+- OR use `-i <directory>` to specify input BED directory explicitly
 
 **Key options:**
 - `-p <int>`: Min distance between peaks (default: 50)
@@ -336,13 +342,18 @@ Standalone peak calling using HOMER. Requires a directory containing collapsed B
 - `-f <int>`: Fragment length (default: 25)
 - `-n <string>`: Output name prefix
 - `-a <string>`: Additional HOMER findPeaks arguments
+- `--aggregate`: Combine all input BED files into a single meta-sample for peak calling
+- `--no-aggregate`: Process each BED file individually (Default)
 - `--ctk-dir <path>`: Add CIMS/CITS site counts from CTK analysis
 - `--ctk-group <file>`: Groups file for CTK aggregation
 - `--wizard`: Launch interactive HOMER configuration wizard
 
 ```bash
-# Basic peak calling
-PEAKittyPeak.sh -p 50 -z 20 -n Combined
+# Individual Peak Calling (Default)
+PEAKittyPeak.sh -i ./2_COLLAPSED_BED -n Analysis --no-aggregate
+
+# Aggregated Peak Calling (Meta-sample)
+PEAKittyPeak.sh -i ./2_COLLAPSED_BED -n Combined --aggregate
 
 # With custom HOMER arguments
 PEAKittyPeak.sh -n Combined -a '-style factor -L 2'
@@ -399,9 +410,9 @@ bowtie2-build Homo_sapiens.GRCh38.ncrna.fa /path/to/annotation/ncRNA/ncrna
 ```
 
 **Behavior:**
-- Checks `<annotation_dir>/ncRNA/ncrna.1.bt2` first, then falls back to `<annotation_dir>/ncrna.1.bt2`
-- If index found: Filters ncRNA reads, saves to `OTHERS/ncRNA_Mapping/`
-- If index not found: Prints warning, continues without filtering
+- **Prioritization**: When searching for genome indices, Bowtie2/STAR wrappers exclude indices matching `*ncrna*` to prevent accidental alignment to the ncRNA subset (fixing 0% alignment issues).
+- **Filtering**: Before main alignment, reads are mapped against `<annotation_dir>/ncRNA/ncrna.1.bt2`.
+- **Output**: Unfiltered (non-ncRNA) reads continue to genome alignment. ncRNA stats are saved to `REPORTS/ncRNA_Mapping/`.
 
 **To disable:** Use `--skip-ncrna` flag
 
