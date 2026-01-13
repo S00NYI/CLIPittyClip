@@ -598,21 +598,23 @@ if [[ -n "$INPUT_DIR" ]]; then
     console_msg "  ----------------------------------------------------------------"
     
     for sample in "${SAMPLE_FILES[@]}"; do
-        sample_name=$(basename "$sample")
-        sample_name="${sample_name%.fastq.gz}"
-        sample_name="${sample_name%.fq.gz}"
-        sample_out="${sample_name}_analysis"
-        ncrna_stats="${sample_out}/OTHERS/ncRNA_Mapping/${sample_name}_ncrna_stats.txt"
-        
-        if [[ -f "$ncrna_stats" ]]; then
-            align_rate=$(grep "overall alignment rate" "$ncrna_stats" | grep -oE "[0-9]+\.[0-9]+%" || echo "N/A")
-            total=$(grep "reads; of these:" "$ncrna_stats" | grep -oE "^[0-9]+" || echo "N/A")
-            aligned=$(grep "aligned exactly 1 time" "$ncrna_stats" | grep -oE "^[[:space:]]*[0-9]+" | tr -d ' ' || echo "0")
-            multi=$(grep "aligned >1 times" "$ncrna_stats" | grep -oE "^[[:space:]]*[0-9]+" | tr -d ' ' || echo "0")
-            ncrna=$((aligned + multi))
-            printf "  %-25s %-15s %-15s %s\n" "$sample_name" "$ncrna" "$total" "$align_rate"
-        else
-            printf "  %-25s %-15s %-15s %s\n" "$sample_name" "-" "-" "SKIPPED"
+        if [ -f "$sample" ]; then
+            sample_name=$(basename "$sample")
+            sample_name="${sample_name%.fastq.gz}"
+            sample_name="${sample_name%.fq.gz}"
+            sample_out="${sample_name}_analysis"
+            ncrna_stats="${sample_out}/OTHERS/ncRNA_Mapping/${sample_name}_ncrna_stats.txt"
+            
+            if [[ -f "$ncrna_stats" ]]; then
+                align_rate=$(grep "overall alignment rate" "$ncrna_stats" | grep -oE "[0-9]+\.[0-9]+%" || echo "N/A")
+                total=$(grep "reads; of these:" "$ncrna_stats" | grep -oE "^[0-9]+" || echo "N/A")
+                aligned=$(grep "aligned exactly 1 time" "$ncrna_stats" | grep -oE "^[[:space:]]*[0-9]+" | tr -d ' ' || echo "0")
+                multi=$(grep "aligned >1 times" "$ncrna_stats" | grep -oE "^[[:space:]]*[0-9]+" | tr -d ' ' || echo "0")
+                ncrna=$((aligned + multi))
+                printf "  %-25s %-15s %-15s %s\n" "$sample_name" "$ncrna" "$total" "$align_rate"
+            else
+                printf "  %-25s %-15s %-15s %s\n" "$sample_name" "-" "-" "SKIPPED"
+            fi
         fi
     done
     console_msg "  ----------------------------------------------------------------"
@@ -620,15 +622,24 @@ if [[ -n "$INPUT_DIR" ]]; then
     # Combined Peak Calling
     console_msg "\n[COMBINED PEAK CALLING]"
     BED_DIR="$OUTPUT_ROOT/$DIR_BED"
-    BED_SYMLINK="BED"
-    
-    if [[ -d "$BED_SYMLINK" ]]; then rm -rf "$BED_SYMLINK"; fi
-    ln -s "$BED_DIR" "$BED_SYMLINK"
     
     PEAK_LOG="$OUTPUT_ROOT/$DIR_PEAK_LOGS/${INPUT_BASENAME}_PeakCalling.log"
-    "$SCRIPT_DIR/PEAKittyPeak.sh" -n "Combined" -p "$PEAK_DIST" > "$PEAK_LOG" 2>&1
     
-    rm -f "$BED_SYMLINK"
+    PEAK_CMD="$SCRIPT_DIR/PEAKittyPeak.sh -i \"$BED_DIR\" --aggregate -n \"Combined\" -p \"$PEAK_DIST\" -z \"$PEAK_SIZE\" -f \"$FRAG_LEN\""
+    if [[ -n "$DIR_CTK" ]]; then
+        PEAK_CMD="$PEAK_CMD --ctk-dir \"$OUTPUT_ROOT/$DIR_CTK\""
+    fi
+    if [[ -n "$CTK_GROUPS_FILE" ]]; then
+        PEAK_CMD="$PEAK_CMD --ctk-group \"$CTK_GROUPS_FILE\""
+    fi
+    if [[ "$RUN_CIMS" == "true" ]]; then
+        PEAK_CMD="$PEAK_CMD --cims-fdr \"$CIMS_FDR\""
+    fi
+    if [[ "$RUN_CITS" == "true" ]]; then
+        PEAK_CMD="$PEAK_CMD --cits-pval \"$CITS_PVALUE\""
+    fi
+    
+    eval "$PEAK_CMD" > "$PEAK_LOG" 2>&1
     
     # Move combined results
     if [[ -d "PEAKS" ]]; then
@@ -866,8 +877,17 @@ if [[ "$DEMUX" == "yes" ]]; then
     # OTHERS folder number depends on whether CTK analysis is enabled
     if [[ "$RUN_CIMS" == "true" ]] || [[ "$RUN_CITS" == "true" ]]; then
         DIR_OTHERS="6_OTHERS"
+        # Determine CTK folder name for PEAKittyPeak.sh
+        if [[ "$RUN_CIMS" == "true" ]] && [[ "$RUN_CITS" == "true" ]]; then
+            DIR_CTK="5_CTK_Analysis"
+        elif [[ "$RUN_CIMS" == "true" ]]; then
+            DIR_CTK="5_CIMS_Analysis"
+        else
+            DIR_CTK="5_CITS_Analysis"
+        fi
     else
         DIR_OTHERS="5_OTHERS"
+        DIR_CTK="" # No CTK analysis, so no CTK folder
     fi
     DIR_REPORTS="REPORTS"
     DIR_PEAK_LOGS="REPORTS/PEAK"
@@ -1017,36 +1037,28 @@ if [[ "$DEMUX" == "yes" ]]; then
     fi
     console_msg "  > Found $count BED files."
     log_info "Collected $count BED files."
-    
-    # Run PEAKittyPeak.sh on Aggregated Data
-    # PEAK_SCRIPT requires BED/ directory. We named it 2_COLLAPSED_BED...
-    # We should update PEAKittyPeak or symlink.
-    # Updating PEAKittyPeak is cleaner, but let's just make a temporary symlink?
-    # Or just tell PEAKittyPeak where to look?
-    # PEAKittyPeak.sh is simple. Let's just create the "Combined Input" manually here?
-    # No, keep modularity. 
-    # Let's symlink:
-    ln -s "2_COLLAPSED_BED" "$OUTPUT_ROOT/BED"
-    
     PEAK_SCRIPT="$(dirname "$0")/PEAKittyPeak.sh"
     
     if [[ -x "$PEAK_SCRIPT" ]]; then
         console_msg "  > Running HOMER Peak Calling (Aggregated)..."
         
-        # Run it inside the output root so it sees "BED" symlink and writes "COMBINED_PEAKS" there
+        # Run it inside the output root
+        # We pass "2_COLLAPSED_BED" which is relative to OUTPUT_ROOT
         curr_dir=$(pwd)
         cd "$OUTPUT_ROOT" || exit 1
         
         # Define separate log for peak calling details (Specific Name)
-        PEAK_LOG="$(pwd)/$DIR_PEAK_LOGS/${INPUT_BASENAME}_PeakCalling.log"
-        console_msg "  > Detailed Peak Log: $DIR_PEAK_LOGS/$(basename "$PEAK_LOG")"
+        PEAK_LOG="REPORTS/PEAK/${INPUT_BASENAME}_PeakCalling.log"
+        console_msg "  > Detailed Peak Log: REPORTS/PEAK/$(basename "$PEAK_LOG")"
 
         # Call script (using absolute path or relative to old pwd)
         # Call script with -n COMBINED to create COMBINED_peaks folder
+        # Use -i 2_COLLAPSED_BED (relative to OUTPUT_ROOT) and --aggregate parameter
+        PEAK_CMD="bash $PEAK_SCRIPT -i 2_COLLAPSED_BED --aggregate -n COMBINED -p $PEAK_DIST -z $PEAK_SIZE -f $FRAG_LEN"
+        
         # Add --ctk-dir if CTK analysis was enabled
-        PEAK_CMD="$PEAK_SCRIPT -n COMBINED"
         if [[ "$RUN_CIMS" == "true" ]] || [[ "$RUN_CITS" == "true" ]]; then
-            # Determine CTK folder name (same logic as main script)
+            # Determine CTK folder name
             if [[ "$RUN_CIMS" == "true" ]] && [[ "$RUN_CITS" == "true" ]]; then
                 CTK_FOLDER="5_CTK_Analysis"
             elif [[ "$RUN_CIMS" == "true" ]]; then
@@ -1055,11 +1067,17 @@ if [[ "$DEMUX" == "yes" ]]; then
                 CTK_FOLDER="5_CITS_Analysis"
             fi
             PEAK_CMD="$PEAK_CMD --ctk-dir ./$CTK_FOLDER"
+            
+            # Add CIMS/CITS params
+            PEAK_CMD="$PEAK_CMD --cims-fdr $CIMS_FDR --cits-pval $CITS_PVALUE"
+            if [[ -n "$CTK_GROUPS_FILE" ]]; then
+                PEAK_CMD="$PEAK_CMD --ctk-group $CTK_GROUPS_FILE"
+            fi
         fi
-        $PEAK_CMD > "$PEAK_LOG" 2>&1
         
-        # Remove symlink
-        rm BED
+        eval "$PEAK_CMD" > "$PEAK_LOG" 2>&1
+        
+        # (No Symlink to remove)
         
         # Move generated `COMBINED_peaks` to strictly correct place if needed
         # PEAKittyPeak creates "{BASE_NAME}_peaks" folder in CWD ($OUTPUT_ROOT).

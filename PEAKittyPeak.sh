@@ -32,6 +32,9 @@ function show_usage {
     echo "  Typically called automatically by CLIPittyClip.sh after sample processing."
     echo ""
     echo "OPTIONS:"
+    echo "  -i, --input <dir> Input directory containing BED files (default: BED)"
+    echo "  --aggregate    Enable Aggregation Mode (combine all inputs)"
+    echo "  --no-aggregate Disable Aggregation Mode (process individually)"
     echo "  -p <int>       Min distance between peaks (default: 50)"
     echo "  -z <int>       Peak size (default: 20)"
     echo "  -f <int>       Fragment length (default: 25)"
@@ -46,14 +49,11 @@ function show_usage {
     echo "  -h, --help     Show this help message"
     echo ""
     echo "EXAMPLES:"
-    echo "  # Basic peak calling"
-    echo "  PEAKittyPeak.sh -p 50 -z 20 -n MyExperiment"
+    echo "  # Basic peak calling (Individual Mode)"
+    echo "  PEAKittyPeak.sh -i ./bed_files/"
     echo ""
-    echo "  # With custom HOMER args"
-    echo "  PEAKittyPeak.sh -n Combined -a '-style factor -L 2'"
-    echo ""
-    echo "  # With CTK site counts"
-    echo "  PEAKittyPeak.sh -n Combined --ctk-dir ./CTK_Analysis/"
+    echo "  # Aggregated peak calling"
+    echo "  PEAKittyPeak.sh -i ./bed_files/ --aggregate -n AllSamples"
     echo ""
 }
 
@@ -63,8 +63,14 @@ if [[ "$1" == "-h" ]] || [[ "$1" == "--help" ]]; then
 fi
 
 # Parse Options using while loop for better long option handling
+INPUT_BED_DIR="BED"  # Default used if -i not provided
+AGGREGATE="false"    # Default: Individual mode
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        -i|--input) INPUT_BED_DIR="$2"; shift 2 ;;
+        --aggregate) AGGREGATE="true"; shift ;;
+        --no-aggregate) AGGREGATE="false"; shift ;;
         -p) PEAK_DIST="$2"; shift 2 ;;
         -z) PEAK_SIZE="$2"; shift 2 ;;
         -f) FRAG_LEN="$2"; shift 2 ;;
@@ -80,129 +86,142 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Run Wizard if requested (before validation so it can collect inputs)
+# Run Wizard if requested
 if [[ "$WIZARD_MODE" == "true" ]]; then
     run_wizard_peakittypeak
-    if [[ $? -ne 0 ]]; then
-        exit 1
-    fi
-    
-    # Apply wizard settings
+    if [[ $? -ne 0 ]]; then exit 1; fi
     [[ -n "$WIZ_WORK_DIR" ]] && cd "$WIZ_WORK_DIR"
     PEAK_DIST="$WIZ_PEAK_DIST"
     PEAK_SIZE="$WIZ_PEAK_SIZE"
     FRAG_LEN="$WIZ_FRAG_LEN"
     BASE_NAME="$WIZ_OUTPUT_NAME"
     ADV_HOMER_ARGS="$WIZ_HOMER_ARGS"
+    # Wizard currently assumes CWD/BED, can be updated later if needed
 fi
 
 # Check Requirements
-if [[ ! -d "BED" ]]; then
-    log_error "Directory 'BED' not found. Please run this script in the parent folder of your BED files."
+if [[ ! -d "$INPUT_BED_DIR" ]]; then
+    log_error "Input directory '$INPUT_BED_DIR' not found."
     exit 1
 fi
 
-BED_COUNT=$(ls BED/*.bed 2>/dev/null | wc -l)
+BED_COUNT=$(ls "$INPUT_BED_DIR"/*.bed 2>/dev/null | wc -l)
 if [[ $BED_COUNT -eq 0 ]]; then
-    log_error "No .bed files found in BED/ folder."
+    log_error "No .bed files found in '$INPUT_BED_DIR'."
     exit 1
 fi
 
 log_info "PEAKittyPeak: Peak Calling Module"
-log_info "Mode:        $(if [[ "$ADVANCED_MODE" == "true" ]]; then echo "ADVANCED"; else echo "STANDARD"; fi)"
+log_info "Input Dir:   $INPUT_BED_DIR"
 log_info "Input Files: $BED_COUNT"
+log_info "Mode:        $(if [[ "$AGGREGATE" == "true" ]]; then echo "AGGREGATE"; else echo "INDIVIDUAL"; fi)"
 log_info "Parameters:  Dist=$PEAK_DIST, Size=$PEAK_SIZE, Frag=$FRAG_LEN"
-if [[ -n "$ADV_HOMER_ARGS" ]]; then
-    log_info "Advanced Args: $ADV_HOMER_ARGS"
-fi
 
-# 1. Combine BED Files
-log_info "Combining BED files..."
-cat BED/*.bed > "${BASE_NAME}.bed"
-
-# 2. Call Peaks (HOMER)
-log_info "Calling peaks with HOMER..."
-makeTagDirectory "${BASE_NAME}_TagDir/" "${BASE_NAME}.bed" -single -format bed > /dev/null 2>&1
-
-CMD="findPeaks ${BASE_NAME}_TagDir/ -o auto -style factor -L 2 -localSize 10000 -strand separate \
-    -minDist ${PEAK_DIST} -size ${PEAK_SIZE} -fragLength ${FRAG_LEN} ${ADV_HOMER_ARGS}"
-
-log_info "Running: $CMD"
-eval "$CMD" 2>&1 | grep -v "Job finished" # Reduce noise
-
-# 3. Process Peaks
-log_info "Processing peaks output..."
-if [[ -f "${BASE_NAME}_TagDir/peaks.txt" ]]; then
-    # Convert peaks.txt to BED format
-    sed '/^[[:blank:]]*#/d;s/#.*//' "${BASE_NAME}_TagDir/peaks.txt" > peaksTemp.bed
-    awk 'OFS="\t" {print $2, $3, $4, $1, $6, $5}' peaksTemp.bed > peaks.bed
-    rm peaksTemp.bed
+# --- Function: Call Peaks ---
+call_peaks() {
+    local input_file="$1"
+    local output_name="$2"
     
-    # Sort
-    sort -k 1,1 -k2,2n peaks.bed > peaks_Sorted.bed
+    log_info "Processing: $output_name"
     
-    # Organize Output
-    OUT_DIR="${BASE_NAME}_peaks"
-    mkdir -p "$OUT_DIR"
-    mkdir -p "${OUT_DIR}/peakCoverage"
+    # 1. Provide a temporary directory for tag outputs to avoid conflicts
+    local tag_dir="${output_name}_TagDir"
     
-    mv "${BASE_NAME}_TagDir" "$OUT_DIR"
-    mv "${BASE_NAME}.bed" "$OUT_DIR"
-    mv peaks.bed "$OUT_DIR"
-    mv peaks_Sorted.bed "$OUT_DIR" # Keep sorted version in root
+    # 2. Call Peaks (HOMER)
+    makeTagDirectory "$tag_dir/" "$input_file" -single -format bed > /dev/null 2>&1
     
-    # 4. Coverage Analysis
-    log_info "Calculating coverage..."
-    # Copy sorted bed to serve as base table
-    cp "${OUT_DIR}/peaks_Sorted.bed" "${OUT_DIR}/${BASE_NAME}_peakCoverage.txt"
-    
-    # Header
-    echo -e "chr\tstart\tend\tname\tscore\tstrand" > colnames.txt
-    cat "${OUT_DIR}/${BASE_NAME}_peakCoverage.txt" >> colnames.txt
-    mv colnames.txt "${OUT_DIR}/${BASE_NAME}_peakCoverage.txt"
-    
-    for bed_file in BED/*.bed; do
-        s_name=$(basename "$bed_file" .bed)
-        s_name=$(basename "$s_name" .collapsed) # Strip .collapsed if present
+    local cmd="findPeaks $tag_dir/ -o auto -style factor -L 2 -localSize 10000 -strand separate \
+        -minDist ${PEAK_DIST} -size ${PEAK_SIZE} -fragLength ${FRAG_LEN} ${ADV_HOMER_ARGS}"
         
-        bedtools coverage -s -a "${OUT_DIR}/peaks_Sorted.bed" -b "$bed_file" > "coverage_${s_name}.txt"
-        
-        # Extract coverage column (7th column in bedtools coverage default output)
-        awk 'FNR>0 {print $7}' "coverage_${s_name}.txt" > temp_cov.txt
-        
-        # Append name to temp header
-        echo "$s_name" > temp_col.txt
-        cat temp_cov.txt >> temp_col.txt
-        
-        # Paste to main table
-        paste "${OUT_DIR}/${BASE_NAME}_peakCoverage.txt" temp_col.txt > temp_table.txt
-        mv temp_table.txt "${OUT_DIR}/${BASE_NAME}_peakCoverage.txt"
-        
-        # Cleanup temp
-        rm temp_cov.txt temp_col.txt
-        
-        # Move raw coverage file
-        mv "coverage_${s_name}.txt" "${OUT_DIR}/peakCoverage/"
-    done
+    log_info "Running: findPeaks ..."
+    # Capture output but reduce noise
+    eval "$cmd" 2>&1 | grep -v "Job finished"
     
-    # 5. Add CTK columns if --ctk-dir was provided
-    if [[ -n "$CTK_DIR" ]]; then
-        if [[ -d "$CTK_DIR" ]]; then
-            log_info "Adding CTK site counts from: $CTK_DIR"
-            add_ctk_columns_to_peak_matrix \
-                "${OUT_DIR}/${BASE_NAME}_peakCoverage.txt" \
-                "${OUT_DIR}/peaks_Sorted.bed" \
-                "$CTK_DIR" \
-                "$CIMS_FDR" \
-                "$CITS_PVALUE"
-        else
-            log_error "CTK directory not found: $CTK_DIR"
+    # 3. Process Peaks
+    # findPeaks outputs to peaks.txt in the tag directory usually, unless -o specified
+    # Using -o auto, HOMER usually outputs to tagDir/peaks.txt
+    
+    if [[ -f "$tag_dir/peaks.txt" ]]; then
+        # Convert peaks.txt to BED format
+        sed '/^[[:blank:]]*#/d;s/#.*//' "$tag_dir/peaks.txt" > peaksTemp.bed
+        awk 'OFS="\t" {print $2, $3, $4, $1, $6, $5}' peaksTemp.bed > peaks.bed
+        rm peaksTemp.bed
+        
+        # Sort
+        sort -k 1,1 -k2,2n peaks.bed > peaks_Sorted.bed
+        
+        # Organize Output
+        local out_dir="${output_name}_peaks"
+        mkdir -p "$out_dir"
+        mkdir -p "${out_dir}/peakCoverage"
+        
+        mv "$tag_dir" "$out_dir/"
+        # Copy input bed to output to preserve input
+        cp "$input_file" "$out_dir/${output_name}.bed"
+        mv peaks.bed "$out_dir/"
+        mv peaks_Sorted.bed "$out_dir/"
+        
+        # 4. Coverage Analysis
+        # Copy sorted bed to serve as base table
+        cp "${out_dir}/peaks_Sorted.bed" "${out_dir}/${output_name}_peakCoverage.txt"
+        
+        # Header
+        echo -e "chr\tstart\tend\tname\tscore\tstrand" > colnames.txt
+        
+        # Add Peak Coverage Columns using annotatePeaks.pl
+        if [[ -f "${out_dir}/${output_name}.bed" ]]; then
+            log_info "Adding peak coverage counts..."
+            annotatePeaks.pl "${out_dir}/peaks_Sorted.bed" hg38 -noann -nogene -p "${out_dir}/${output_name}.bed" > temp_counts.txt 2>/dev/null
+            
+            # Extract count column (last column)
+            awk -F'\t' '{print $NF}' temp_counts.txt > counts.col
+            echo "${output_name}_Counts" > header.col
+            cat header.col counts.col > final_counts.col
+            # Paste to coverage file
+            paste "${out_dir}/${output_name}_peakCoverage.txt" final_counts.col > temp_paste.txt
+            mv temp_paste.txt "${out_dir}/${output_name}_peakCoverage.txt"
+            
+            # Add header name
+            echo -e "${output_name}_Counts" >> colnames.txt
+            
+            rm temp_counts.txt counts.col header.col final_counts.col 2>/dev/null
         fi
+        
+        # Add CTK CIMS/CITS columns if requested
+        if [[ -n "$CTK_DIR" ]]; then
+            log_info "Adding CTK columns..."
+            add_ctk_columns_to_peak_matrix "${out_dir}/${output_name}_peakCoverage.txt" "$CTK_DIR" "$CTK_GROUPS_FILE"
+        fi
+        
+        log_info "Peak calling for $output_name complete: $out_dir/"
+    else
+        log_error "No peaks generated for $output_name"
     fi
+}
+
+
+# --- Execution Flow ---
+
+if [[ "$AGGREGATE" == "true" ]]; then
+    # Aggregate Mode: Combine all BEDs and call once
+    log_info "Mode: AGGREGATE - Combining all .bed files..."
+    cat "$INPUT_BED_DIR"/*.bed > "${BASE_NAME}.bed"
+    call_peaks "${BASE_NAME}.bed" "${BASE_NAME}"
+    rm "${BASE_NAME}.bed" 2>/dev/null
     
-    log_info "Analysis Finished."
-    log_info "Outputs stored in: $OUT_DIR"
 else
-    log_error "Peak calling failed (peaks.txt not found)."
-    exit 1
+    # Individual Mode: Loop through files
+    log_info "Mode: INDIVIDUAL - Processing files separately..."
+    # Ensure shell expansion works
+    shopt -s nullglob
+    for bed_file in "$INPUT_BED_DIR"/*.bed; do
+        if [[ -f "$bed_file" ]]; then
+            bname=$(basename "$bed_file" .bed)
+            call_peaks "$bed_file" "$bname"
+        fi
+    done
+    shopt -u nullglob
 fi
+
+log_info "PEAKittyPeak analysis complete."
+exit 0
