@@ -757,9 +757,9 @@ add_matrix_columns() {
             
             for stat in sum mean max; do
                 # Map positive strand peaks to pos bedgraph
-                bedtools map -a peaks_pos.tmp.bed -b "${sample}_pos_sorted.bg.tmp" -c 4 -o "$stat" -null 0 > "bg_pos_${stat}.tmp"
+                bedtools map -a peaks_pos.tmp.bed -b "${sample}_pos_sorted.bg.tmp" -c 4 -o "$stat" -null 0 2>/dev/null > "bg_pos_${stat}.tmp"
                 # Map negative strand peaks to neg bedgraph
-                bedtools map -a peaks_neg.tmp.bed -b "${sample}_neg_sorted.bg.tmp" -c 4 -o "$stat" -null 0 > "bg_neg_${stat}.tmp"
+                bedtools map -a peaks_neg.tmp.bed -b "${sample}_neg_sorted.bg.tmp" -c 4 -o "$stat" -null 0 2>/dev/null > "bg_neg_${stat}.tmp"
                 
                 # Combine and sort to match original peak order
                 # Add line numbers for sorting
@@ -829,8 +829,8 @@ add_matrix_columns() {
                 sort -k1,1 -k2,2n "$grp_bg_neg" > "${group}_neg_sorted.bg.tmp"
                 
                 for stat in sum mean max; do
-                    bedtools map -a peaks_pos.tmp.bed -b "${group}_pos_sorted.bg.tmp" -c 4 -o "$stat" -null 0 > "bg_pos_${stat}.tmp"
-                    bedtools map -a peaks_neg.tmp.bed -b "${group}_neg_sorted.bg.tmp" -c 4 -o "$stat" -null 0 > "bg_neg_${stat}.tmp"
+                    bedtools map -a peaks_pos.tmp.bed -b "${group}_pos_sorted.bg.tmp" -c 4 -o "$stat" -null 0 2>/dev/null > "bg_pos_${stat}.tmp"
+                    bedtools map -a peaks_neg.tmp.bed -b "${group}_neg_sorted.bg.tmp" -c 4 -o "$stat" -null 0 2>/dev/null > "bg_neg_${stat}.tmp"
                     
                     awk -F'\t' '
                     BEGIN { 
