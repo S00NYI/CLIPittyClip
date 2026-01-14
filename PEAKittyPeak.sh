@@ -190,7 +190,8 @@ call_peaks() {
         # Add CTK CIMS/CITS columns if requested
         if [[ -n "$CTK_DIR" ]]; then
             log_info "Adding CTK columns..."
-            add_ctk_columns_to_peak_matrix "${out_dir}/${output_name}_peakCoverage.txt" "$CTK_DIR" "$CTK_GROUPS_FILE"
+            # Pass correct arguments: Matrix, PeaksBED, CTK_Dir, Thresholds
+            add_ctk_columns_to_peak_matrix "${out_dir}/${output_name}_peakCoverage.txt" "${out_dir}/peaks_Sorted.bed" "$CTK_DIR" "$CIMS_FDR" "$CITS_PVALUE"
         fi
         
         log_info "Peak calling for $output_name complete: $out_dir/"

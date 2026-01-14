@@ -508,8 +508,17 @@ if [[ -n "$INPUT_DIR" ]]; then
     # OTHERS folder number depends on whether CTK analysis is enabled
     if [[ "$RUN_CIMS" == "true" ]] || [[ "$RUN_CITS" == "true" ]]; then
         DIR_OTHERS="6_OTHERS"
+        # Determine CTK folder name for PEAKittyPeak.sh
+        if [[ "$RUN_CIMS" == "true" ]] && [[ "$RUN_CITS" == "true" ]]; then
+            DIR_CTK="5_CTK_Analysis"
+        elif [[ "$RUN_CIMS" == "true" ]]; then
+            DIR_CTK="5_CIMS_Analysis"
+        else
+            DIR_CTK="5_CITS_Analysis"
+        fi
     else
         DIR_OTHERS="5_OTHERS"
+        DIR_CTK="" # No CTK analysis, so no CTK folder
     fi
     DIR_REPORTS="REPORTS"
     DIR_PEAK_LOGS="REPORTS/PEAK"
