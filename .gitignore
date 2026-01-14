@@ -1,3 +1,6 @@
 
 indices.tar.gz
 .DS_Store
+
+bedgraph_normalization_1.sh
+bedgraph_normalization_2.R
