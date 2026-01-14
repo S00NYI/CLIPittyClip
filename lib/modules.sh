@@ -546,6 +546,329 @@ run_peak_calling() {
     log_info "Peak calling complete. Log saved to $log_file"
 }
 
+# 4b. Add Enhanced Columns to Peak Coverage Matrix
+# Adds: BC (groups), Raw Group Counts, Normalized Counts, BedGraph Stats
+# Column Order: BC -> Raw Counts -> Normalized Counts -> BG Stats
+add_matrix_columns() {
+    local peak_matrix="$1"      # Path to peakCoverage.txt
+    local peaks_bed="$2"        # Path to peaks_Sorted.bed
+    local bg_dir="$3"           # BedGraph directory
+    local scale_file="$4"       # Scale factors TSV
+    local groups_file="$5"      # Optional groups file
+    
+    log_info "Adding enhanced columns to peak matrix..."
+    
+    # Validate inputs
+    if [[ ! -f "$peak_matrix" ]]; then
+        log_error "Peak matrix not found: $peak_matrix"
+        return 1
+    fi
+    
+    # Extract sample names from scale_factors.tsv (reliable source of actual samples)
+    # NOT from matrix header (which may include CTK columns)
+    if [[ ! -f "$scale_file" ]]; then
+        log_warning "Scale factors file not found: $scale_file. Enhanced columns will be limited."
+        local samples=()
+    else
+        local samples=($(cut -f1 "$scale_file"))
+    fi
+    
+    log_info "  Samples detected: ${samples[*]}"
+    
+    # Prepare temp files for new columns
+    local new_cols_file=$(mktemp)
+    local new_header=""
+    
+    # -------------------------------------------
+    # STEP 1: Biological Complexity (BC) - Groups Only
+    # -------------------------------------------
+    if [[ -n "$groups_file" && -f "$groups_file" ]]; then
+        log_info "  Calculating Biological Complexity (BC)..."
+        local unique_groups=$(awk '{gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2}' "$groups_file" | sort -u)
+        
+        for group in $unique_groups; do
+            log_info "    Group: $group"
+            # Get sample column indices for this group
+            local group_samples=$(awk -v g="$group" '{gsub(/^[ \t]+|[ \t]+$/, "", $1); gsub(/^[ \t]+|[ \t]+$/, "", $2)} $2==g {print $1}' "$groups_file")
+            
+            # For each peak (row), count samples with count > 0
+            awk -F'\t' -v samples="$group_samples" -v allsamples="${samples[*]}" '
+            BEGIN {
+                split(samples, gs, " ")
+                split(allsamples, as, " ")
+                # Build map of sample name -> column index (1-based, offset by 6)
+                for(i=1; i<=length(as); i++) col_map[as[i]] = i + 6
+            }
+            NR==1 { print "'"$group"'_BC"; next }
+            {
+                bc=0
+                for(i in gs) {
+                    s = gs[i]
+                    if(s in col_map) {
+                        c = col_map[s]
+                        if($c + 0 > 0) bc++
+                    }
+                }
+                print bc
+            }
+            ' "$peak_matrix" > "bc_${group}.col"
+            
+            # Add to new columns
+            if [[ ! -s "$new_cols_file" ]]; then
+                cat "bc_${group}.col" > "$new_cols_file"
+            else
+                paste "$new_cols_file" "bc_${group}.col" > "${new_cols_file}.tmp"
+                mv "${new_cols_file}.tmp" "$new_cols_file"
+            fi
+            rm -f "bc_${group}.col"
+        done
+    fi
+    
+    # -------------------------------------------
+    # STEP 2: Normalized Read Counts (Per Sample)
+    # -------------------------------------------
+    if [[ -f "$scale_file" ]]; then
+        log_info "  Adding normalized read counts..."
+        
+        for sample in "${samples[@]}"; do
+            # Get scale factor for this sample
+            local sf=$(grep -P "^${sample}\t|/${sample}\t" "$scale_file" | tail -1 | cut -f3)
+            if [[ -z "$sf" ]]; then
+                log_warning "    Scale factor not found for $sample, using 1.0"
+                sf="1.0"
+            fi
+            
+            # Get column index for this sample (1-based)
+            local col_idx=0
+            for i in "${!samples[@]}"; do
+                if [[ "${samples[$i]}" == "$sample" ]]; then
+                    col_idx=$((i + 7))  # Offset by 6 base columns + 1 for 1-indexing
+                    break
+                fi
+            done
+            
+            # Calculate normalized value: raw_count * scale_factor
+            awk -F'\t' -v col="$col_idx" -v sf="$sf" '
+            NR==1 { print "'"${sample}"'_normed"; next }
+            { printf "%.4f\n", $col * sf }
+            ' "$peak_matrix" > "normed_${sample}.col"
+            
+            # Add to new columns
+            if [[ ! -s "$new_cols_file" ]]; then
+                cat "normed_${sample}.col" > "$new_cols_file"
+            else
+                paste "$new_cols_file" "normed_${sample}.col" > "${new_cols_file}.tmp"
+                mv "${new_cols_file}.tmp" "$new_cols_file"
+            fi
+            rm -f "normed_${sample}.col"
+        done
+    fi
+    
+    # -------------------------------------------
+    # STEP 3: Group Columns (Raw Sum + Normalized Sum) - Groups Only
+    # -------------------------------------------
+    if [[ -n "$groups_file" && -f "$groups_file" ]]; then
+        log_info "  Adding group aggregate columns..."
+        local unique_groups=$(awk '{gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2}' "$groups_file" | sort -u)
+        
+        for group in $unique_groups; do
+            local group_samples=$(awk -v g="$group" '{gsub(/^[ \t]+|[ \t]+$/, "", $1); gsub(/^[ \t]+|[ \t]+$/, "", $2)} $2==g {print $1}' "$groups_file")
+            
+            # Sum raw counts for group
+            awk -F'\t' -v samples="$group_samples" -v allsamples="${samples[*]}" '
+            BEGIN {
+                split(samples, gs, " ")
+                split(allsamples, as, " ")
+                for(i=1; i<=length(as); i++) col_map[as[i]] = i + 6
+            }
+            NR==1 { print "'"$group"'"; next }
+            {
+                sum=0
+                for(i in gs) {
+                    s = gs[i]
+                    if(s in col_map) sum += $col_map[s]
+                }
+                print sum
+            }
+            ' "$peak_matrix" > "grp_raw_${group}.col"
+            
+            paste "$new_cols_file" "grp_raw_${group}.col" > "${new_cols_file}.tmp"
+            mv "${new_cols_file}.tmp" "$new_cols_file"
+            rm -f "grp_raw_${group}.col"
+            
+            # Sum normalized counts for group
+            # This needs to reference the normalized columns we just added
+            # For simplicity, recalculate using scale factors
+            awk -F'\t' -v samples="$group_samples" -v allsamples="${samples[*]}" -v sf_file="$scale_file" '
+            BEGIN {
+                split(samples, gs, " ")
+                split(allsamples, as, " ")
+                for(i=1; i<=length(as); i++) col_map[as[i]] = i + 6
+                # Load scale factors
+                while((getline line < sf_file) > 0) {
+                    split(line, sf_parts, "\t")
+                    # Extract sample name from path
+                    n = split(sf_parts[1], path_parts, "/")
+                    sname = path_parts[n]
+                    scale[sname] = sf_parts[3]
+                }
+            }
+            NR==1 { print "'"$group"'_normed"; next }
+            {
+                sum=0
+                for(i in gs) {
+                    s = gs[i]
+                    if(s in col_map && s in scale) {
+                        sum += $col_map[s] * scale[s]
+                    }
+                }
+                printf "%.4f\n", sum
+            }
+            ' "$peak_matrix" > "grp_normed_${group}.col"
+            
+            paste "$new_cols_file" "grp_normed_${group}.col" > "${new_cols_file}.tmp"
+            mv "${new_cols_file}.tmp" "$new_cols_file"
+            rm -f "grp_normed_${group}.col"
+        done
+    fi
+    
+    # -------------------------------------------
+    # STEP 4: BedGraph Stats (Sum/Avg/Max) Per Sample
+    # -------------------------------------------
+    if [[ -d "$bg_dir" ]] && [[ ${#samples[@]} -gt 0 ]]; then
+        log_info "  Adding BedGraph statistics..."
+        
+        # Split peaks by strand and SORT for bedtools compatibility
+        awk -F'\t' '$6=="+"' "$peaks_bed" | sort -k1,1 -k2,2n > peaks_pos.tmp.bed
+        awk -F'\t' '$6=="-"' "$peaks_bed" | sort -k1,1 -k2,2n > peaks_neg.tmp.bed
+        
+        for sample in "${samples[@]}"; do
+            local bg_pos="${bg_dir}/${sample}_pos.bedgraph"
+            local bg_neg="${bg_dir}/${sample}_neg.bedgraph"
+            
+            if [[ ! -f "$bg_pos" || ! -f "$bg_neg" ]]; then
+                log_warning "    BedGraph not found for $sample, skipping."
+                continue
+            fi
+            
+            # Sort bedgraphs for bedtools compatibility
+            sort -k1,1 -k2,2n "$bg_pos" > "${sample}_pos_sorted.bg.tmp"
+            sort -k1,1 -k2,2n "$bg_neg" > "${sample}_neg_sorted.bg.tmp"
+            
+            for stat in sum mean max; do
+                # Map positive strand peaks to pos bedgraph
+                bedtools map -a peaks_pos.tmp.bed -b "${sample}_pos_sorted.bg.tmp" -c 4 -o "$stat" -null 0 > "bg_pos_${stat}.tmp"
+                # Map negative strand peaks to neg bedgraph
+                bedtools map -a peaks_neg.tmp.bed -b "${sample}_neg_sorted.bg.tmp" -c 4 -o "$stat" -null 0 > "bg_neg_${stat}.tmp"
+                
+                # Combine and sort to match original peak order
+                # Add line numbers for sorting
+                awk -F'\t' '{print NR"\t"$0}' "$peaks_bed" > peaks_numbered.tmp
+                awk -F'\t' 'NR==FNR {pos[$1"\t"$2"\t"$3]=$NF; next} {key=$1"\t"$2"\t"$3; print (key in pos) ? pos[key] : "0"}' "bg_pos_${stat}.tmp" peaks_pos.tmp.bed > "pos_vals.tmp"
+                awk -F'\t' 'NR==FNR {neg[$1"\t"$2"\t"$3]=$NF; next} {key=$1"\t"$2"\t"$3; print (key in neg) ? neg[key] : "0"}' "bg_neg_${stat}.tmp" peaks_neg.tmp.bed > "neg_vals.tmp"
+                
+                # Merge based on strand in original peaks
+                awk -F'\t' 'NR==FNR && $6=="+" {pos[$1"\t"$2"\t"$3]=FNR; next}
+                             NR==FNR && $6=="-" {neg[$1"\t"$2"\t"$3]=FNR; next}
+                             FNR==NR {posv[FNR]=$0; next}
+                             {negv[FNR]=$0}
+                             END {
+                                 for(i=1; i<=NR; i++) {
+                                     # placeholder
+                                 }
+                             }' "$peaks_bed" "pos_vals.tmp" "neg_vals.tmp"
+                
+                # Simpler approach: iterate through peaks and pick from correct file
+                awk -F'\t' '
+                BEGIN { 
+                    while((getline < "bg_pos_'"$stat"'.tmp") > 0) { pos[$1"\t"$2"\t"$3] = $NF }
+                    while((getline < "bg_neg_'"$stat"'.tmp") > 0) { neg[$1"\t"$2"\t"$3] = $NF }
+                }
+                NR==1 { print "'"${sample}_${stat^}"'"; next }
+                {
+                    key = $1"\t"$2"\t"$3
+                    if($6 == "+") print (key in pos) ? pos[key] : 0
+                    else print (key in neg) ? neg[key] : 0
+                }
+                ' "$peaks_bed" > "bg_${sample}_${stat}.col"
+                
+                paste "$new_cols_file" "bg_${sample}_${stat}.col" > "${new_cols_file}.tmp"
+                mv "${new_cols_file}.tmp" "$new_cols_file"
+                rm -f "bg_${sample}_${stat}.col"
+            done
+            
+            rm -f "bg_pos_"*.tmp "bg_neg_"*.tmp pos_vals.tmp neg_vals.tmp peaks_numbered.tmp
+            rm -f "${sample}_pos_sorted.bg.tmp" "${sample}_neg_sorted.bg.tmp"
+        done
+        
+        rm -f peaks_pos.tmp.bed peaks_neg.tmp.bed
+        
+        # -------------------------------------------
+        # STEP 5: Group BedGraph Stats (from combined bedgraph) - Groups Only
+        # -------------------------------------------
+        if [[ -n "$groups_file" && -f "$groups_file" ]]; then
+            log_info "  Adding group BedGraph statistics..."
+            local combined_bg_dir="${bg_dir}/COMBINED_BEDGRAPH"
+            local unique_groups=$(awk '{gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2}' "$groups_file" | sort -u)
+            
+            # Re-split and sort peaks for bedtools compatibility
+            awk -F'\t' '$6=="+"' "$peaks_bed" | sort -k1,1 -k2,2n > peaks_pos.tmp.bed
+            awk -F'\t' '$6=="-"' "$peaks_bed" | sort -k1,1 -k2,2n > peaks_neg.tmp.bed
+            
+            for group in $unique_groups; do
+                local grp_bg_pos="${combined_bg_dir}/${group}_combined_pos.bedgraph"
+                local grp_bg_neg="${combined_bg_dir}/${group}_combined_neg.bedgraph"
+                
+                if [[ ! -f "$grp_bg_pos" || ! -f "$grp_bg_neg" ]]; then
+                    log_warning "    Combined BedGraph not found for $group, skipping."
+                    continue
+                fi
+                
+                # Sort group bedgraphs for bedtools compatibility
+                sort -k1,1 -k2,2n "$grp_bg_pos" > "${group}_pos_sorted.bg.tmp"
+                sort -k1,1 -k2,2n "$grp_bg_neg" > "${group}_neg_sorted.bg.tmp"
+                
+                for stat in sum mean max; do
+                    bedtools map -a peaks_pos.tmp.bed -b "${group}_pos_sorted.bg.tmp" -c 4 -o "$stat" -null 0 > "bg_pos_${stat}.tmp"
+                    bedtools map -a peaks_neg.tmp.bed -b "${group}_neg_sorted.bg.tmp" -c 4 -o "$stat" -null 0 > "bg_neg_${stat}.tmp"
+                    
+                    awk -F'\t' '
+                    BEGIN { 
+                        while((getline < "bg_pos_'"$stat"'.tmp") > 0) { pos[$1"\t"$2"\t"$3] = $NF }
+                        while((getline < "bg_neg_'"$stat"'.tmp") > 0) { neg[$1"\t"$2"\t"$3] = $NF }
+                    }
+                    NR==1 { print "'"${group}_${stat^}"'"; next }
+                    {
+                        key = $1"\t"$2"\t"$3
+                        if($6 == "+") print (key in pos) ? pos[key] : 0
+                        else print (key in neg) ? neg[key] : 0
+                    }
+                    ' "$peaks_bed" > "bg_${group}_${stat}.col"
+                    
+                    paste "$new_cols_file" "bg_${group}_${stat}.col" > "${new_cols_file}.tmp"
+                    mv "${new_cols_file}.tmp" "$new_cols_file"
+                    rm -f "bg_${group}_${stat}.col"
+                done
+                
+                rm -f "${group}_pos_sorted.bg.tmp" "${group}_neg_sorted.bg.tmp"
+            done
+            
+            rm -f peaks_pos.tmp.bed peaks_neg.tmp.bed "bg_pos_"*.tmp "bg_neg_"*.tmp
+        fi
+    fi
+    
+    # -------------------------------------------
+    # FINAL: Paste all new columns to matrix
+    # -------------------------------------------
+    if [[ -s "$new_cols_file" ]]; then
+        paste "$peak_matrix" "$new_cols_file" > "${peak_matrix}.enhanced"
+        mv "${peak_matrix}.enhanced" "$peak_matrix"
+        log_info "Enhanced columns added to $peak_matrix"
+    fi
+    
+    rm -f "$new_cols_file"
+}
+
 # 4b. Add CTK columns to peak coverage matrix
 # Adds _del, _sub, _trunc columns for each sample/group with CTK outputs
 add_ctk_columns_to_peak_matrix() {
@@ -553,11 +876,14 @@ add_ctk_columns_to_peak_matrix() {
     local peaks_bed="$2"           # Sorted peaks BED file for bedtools
     local ctk_dir="$3"             # Directory containing CTK outputs
     local cims_fdr="${4:-0.05}"    # FDR threshold for CIMS filtering
+
     local cits_pval="${5:-0.05}"   # P-value threshold for CITS filtering
+    local groups_file="$6"         # Optional: Groups file for aggregation
     
     log_info "Adding CTK site counts to peak matrix..."
     log_info "CTK directory: $ctk_dir"
-    log_info "Thresholds: CIMS FDR < $cims_fdr, CITS p-value < $cits_pval"
+    
+
     
     # Helper function to add column from CTK file
     add_ctk_column() {
@@ -613,6 +939,75 @@ add_ctk_columns_to_peak_matrix() {
         rm -f "$temp_filtered" "$temp_coverage" temp_col.txt
     }
     
+
+    
+    # -------------------------------------------------------------------------
+    # Scenario A: Group Aggregation Mode (if groups_file provided)
+    # -------------------------------------------------------------------------
+    if [[ -n "$groups_file" ]]; then
+        log_info "Using Groups File for CTK Aggregation..."
+        
+        # Parse groups
+        local groups_map=$(mktemp)
+        parse_groups_file "$groups_file" "$groups_map"
+        local unique_groups=$(cut -f2 "$groups_map" | sort -u)
+        
+        for group in $unique_groups; do
+            # Get samples for this group
+            local samples=$(grep -P "\t${group}$" "$groups_map" | cut -f1)
+            
+            # --- Aggregate CIMS (Deletions) ---
+            local group_del_bed="${ctk_dir}/${group}_aggregated_CIMS_del.txt"
+            > "$group_del_bed"
+            for sample in $samples; do
+                # Look for sample CIMS file in CTK dir or subdirs
+                local s_file=$(find "$ctk_dir" -name "${sample}_CIMS_del.txt" 2>/dev/null | head -n 1)
+                [[ -s "$s_file" ]] && cat "$s_file" >> "$group_del_bed"
+            done
+            if [[ -s "$group_del_bed" ]]; then
+                add_ctk_column "$group_del_bed" "${group}_Del_Sum" "cims" "$cims_fdr"
+            else
+                # still add empty column for consistency?
+                add_ctk_column "$group_del_bed" "${group}_Del_Sum" "cims" "$cims_fdr"
+            fi
+            
+            # --- Aggregate CIMS (Substitutions) ---
+            local group_sub_bed="${ctk_dir}/${group}_aggregated_CIMS_sub.txt"
+            > "$group_sub_bed"
+            for sample in $samples; do
+                local s_file=$(find "$ctk_dir" -name "${sample}_CIMS_sub.txt" 2>/dev/null | head -n 1)
+                [[ -s "$s_file" ]] && cat "$s_file" >> "$group_sub_bed"
+            done
+            if [[ -s "$group_sub_bed" ]]; then
+                add_ctk_column "$group_sub_bed" "${group}_Sub_Sum" "cims" "$cims_fdr"
+            else
+                add_ctk_column "$group_sub_bed" "${group}_Sub_Sum" "cims" "$cims_fdr"
+            fi
+            
+            # --- Aggregate CITS (Truncations) ---
+            local group_cits_bed="${ctk_dir}/${group}_aggregated_CITS.txt"
+            > "$group_cits_bed"
+            for sample in $samples; do
+                local s_file=$(find "$ctk_dir" -name "${sample}_CITS.txt" 2>/dev/null | head -n 1)
+                [[ -s "$s_file" ]] && cat "$s_file" >> "$group_cits_bed"
+            done
+            if [[ -s "$group_cits_bed" ]]; then
+                add_ctk_column "$group_cits_bed" "${group}_Trunc_Sum" "cits" "$cits_pval"
+            else
+                add_ctk_column "$group_cits_bed" "${group}_Trunc_Sum" "cits" "$cits_pval"
+            fi
+            
+            # Cleanup aggregated files
+            rm -f "$group_del_bed" "$group_sub_bed" "$group_cits_bed"
+        done
+        
+        rm "$groups_map"
+        return 0
+    fi
+    
+    # -------------------------------------------------------------------------
+    # Scenario B: Default / Legacy Mode (All found in dir)
+    # -------------------------------------------------------------------------
     # Find and process CIMS deletion files
     # Check both: 1) Direct structure: ctk_dir/CIMS/  2) Group structure: ctk_dir/*/CIMS/
     local cims_found=false
@@ -803,10 +1198,14 @@ run_cims() {
             
             local filtered_count=$(grep -v "^#" "$output_file" | wc -l)
             log_info "CIMS filtered: $filtered_count sites (FDR < $cims_fdr)"
+            
+            # Cleanup unwanted CIMS intermediates
+            rm -f mutations_matched.txt deletions.bed substitutions.bed 2>/dev/null
         fi
         
     else
-        log_warning "CIMS produced empty output: $output_file"
+        echo -e "[WARNING] CIMS produced empty output: $output_file" >> "${LOG_FILE}"
+        echo -ne "${YELLOW}[WARNING] Empty Output${NC} > "
         return 1
     fi
     
@@ -864,8 +1263,10 @@ run_cits() {
         
         # Remove intermediate raw file
         rm -f "$cits_raw"
+        rm -f mutations_matched.txt deletions.bed substitutions.bed 2>/dev/null
     else
-        log_warning "CITS produced empty output"
+        echo -e "[WARNING] CITS produced empty output" >> "${LOG_FILE}"
+        echo -ne "${YELLOW}[WARNING] Empty Output${NC} > "
         return 1
     fi
     
@@ -1161,30 +1562,17 @@ run_ctk_analysis() {
 }
 
 # 7. Coverage Analysis (Bedgraph)
+# 7. Coverage Analysis (Bedgraph)
 run_coverage() {
-    local input_bed="$1"       # Previously used input BED, now we prefer BAM directly
+    local input_bed="$1"      
     local output_prefix="$2"
-    local genome_file="$3"     # Requires genome file (chrom sizes), but using -ibam allows header usage? 
-                               # genomecov -ibam uses BAM header! So genome_file technically not strictly needed for bam input mode
-                               # unless we want to be safe. But user's request is stream.
-    
+    local genome_file="$3"     
+    local bam_file="$4"       # [NEW] Explicit BAM path
+
     update_status "Bedgraph"
     log_info "generating normalized, filtered bedGraphs..."
     
-    # 1. Identify BAM file
-    # We generally assume BAM is named typical way
-    # input_bed was usually "sample.collapsed.bed"
-    # Corresponding BAM is "sample.Aligned.sortedByCoord.out.bam"
-    # We can infer it from input_bed path or similar.
-    # Actually, input_bed logic is inherited. 
-    # Let's find the BAM.
-    local bam_file="$(dirname "$input_bed")/$(basename "${input_bed%.collapsed.bed}").Aligned.sortedByCoord.out.bam"
-    
-    if [[ ! -f "$bam_file" ]]; then
-        # Try fallback naming or location
-        bam_file="$(dirname "$input_bed")/$(basename "${input_bed%.bed}").Aligned.sortedByCoord.out.bam"
-    fi
-    
+    # Validation
     if [[ ! -f "$bam_file" ]]; then
          log_error "Combined/Normalized BedGraph requires BAM input, but could not locate: $bam_file"
          return 1
@@ -1202,6 +1590,12 @@ run_coverage() {
     
     local scale=$(echo "scale=6; 1000000 / $mapped" | bc)
     log_info "  Mapped Reads: $mapped | Scale Factor: $scale"
+    
+    # Store scale factor for later use (normalized counts)
+    # Use same directory as bedgraph output (output_prefix parent) to avoid OUTPUT_ROOT scoping issues
+    local bg_dir=$(dirname "$output_prefix")
+    local scale_file="${bg_dir}/scale_factors.tsv"
+    echo -e "$(basename "$output_prefix")\t${mapped}\t${scale}" >> "$scale_file"
     
     # 3. Generate BedGraph (Filtered & Normalized)
     # Using 'cigar !~ "N"' to remove junction reads
@@ -1228,7 +1622,7 @@ run_combined_bedgraph() {
     update_status "Combined BedGraph"
     log_info "Generating combined average bedgraphs..."
     
-    mkdir -p "$output_dir/COMBINED_BEDGRAPH"
+    mkdir -p "$bedgraph_dir/COMBINED_BEDGRAPH"
     
     # Identify Groups
     # If groups file provided, use it. Else, maybe regex?
@@ -1240,13 +1634,13 @@ run_combined_bedgraph() {
     fi
     
     # Extract unique groups
-    local groups=$(awk '{print $2}' "$groups_file" | sort | uniq)
+    local groups=$(awk '{gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2}' "$groups_file" | sort | uniq)
     
     for group in $groups; do
         log_info "Processing Group: $group"
         
         # Get samples for this group
-        local samples=$(awk -v g="$group" '$2==g {print $1}' "$groups_file")
+        local samples=$(awk -v g="$group" '{gsub(/^[ \t]+|[ \t]+$/, "", $1); gsub(/^[ \t]+|[ \t]+$/, "", $2)} $2==g {print $1}' "$groups_file")
         
         # Process Positive and Negative strands separately
         for strand in "pos" "neg"; do
@@ -1269,7 +1663,7 @@ run_combined_bedgraph() {
                 # Column 1,2,3 are coords. Columns 4 to 3+N are values.
                 # Average = sum(col 4..NF) / (NF-3)
                 
-                local output_file="$output_dir/COMBINED_BEDGRAPH/${group}_combined_${strand}.bedgraph"
+                local output_file="$bedgraph_dir/COMBINED_BEDGRAPH/${group}_combined_${strand}.bedgraph"
                 
                 bedtools unionbedg -i $bg_files | \
                 awk -v N="$count" '{sum=0; for(i=4;i<=NF;i++) sum+=$i; print $1,$2,$3,sum/N}' \

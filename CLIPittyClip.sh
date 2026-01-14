@@ -124,6 +124,7 @@ CITS_GAP="25"
 RUN_MOTIF="yes"
 MOTIF_FLANK="10"
 CTK_GROUPS_FILE=""  # Optional: group samples for CIMS/CITS aggregation
+GROUPS_FILE=""      # Standard Groups File for BedGraph/Matrix aggregation
 
 # Capture Start Time (Seconds) for duration calculation
 PIPELINE_START=$(date +%s)
@@ -164,7 +165,7 @@ while [[ $# -gt 0 ]]; do
         --cits-gap) CITS_GAP="$2"; shift 2 ;;
         --motif-flank) MOTIF_FLANK="$2"; shift 2 ;;
         --no-motif) RUN_MOTIF="no"; shift ;;
-        -g|--ctk-group) CTK_GROUPS_FILE="$2"; shift 2 ;;
+        -g|--groups|--ctk-group) GROUPS_FILE="$2"; CTK_GROUPS_FILE="$2"; shift 2 ;;
         --sample) SAMPLE_SIZE="$2"; shift 2 ;;
         -b|--barcode) BARCODE_FILE="$2"; DEMUX="yes"; shift 2 ;;
         -d|--input-dir) INPUT_DIR="$2"; shift 2 ;;
@@ -301,6 +302,7 @@ if [[ -n "$CTK_GROUPS_FILE" ]]; then
         exit 1
     fi
     CTK_GROUPS_FILE="$(cd "$(dirname "$CTK_GROUPS_FILE")" && pwd)/$(basename "$CTK_GROUPS_FILE")"
+    GROUPS_FILE="$CTK_GROUPS_FILE"  # Sync absolute path to main variable
     log_info "Groups file: $CTK_GROUPS_FILE"
 fi
 
@@ -602,8 +604,26 @@ if [[ -n "$INPUT_DIR" ]]; then
     done
     
     # Combined BedGraph Generation (Directory Mode)
-    if [[ -n "$CTK_GROUPS_FILE" ]]; then
-        run_combined_bedgraph "$OUTPUT_ROOT" "$CTK_GROUPS_FILE" "$OUTPUT_ROOT/$DIR_BG"
+    # Uses GROUPS_FILE if present, otherwise creates "All Samples"
+    if [[ -n "$GROUPS_FILE" ]]; then
+        run_combined_bedgraph "$OUTPUT_ROOT" "$GROUPS_FILE" "$OUTPUT_ROOT/$DIR_BG"
+    else
+        # Fallback: Create a temporary groups file to combine ALL samples
+        console_msg "  > Generating Combined Bedgraph for all samples..."
+        TEMP_GROUPS="${OUTPUT_ROOT}/temp_all_groups.txt"
+        
+        # List all positive bedgraphs to identify samples
+        for bg in "$OUTPUT_ROOT/$DIR_BG"/*_pos.bedgraph; do
+            if [[ -f "$bg" ]]; then
+                s_name=$(basename "$bg" _pos.bedgraph)
+                echo -e "${s_name}\tALL_SAMPLES" >> "$TEMP_GROUPS"
+            fi
+        done
+        
+        if [[ -s "$TEMP_GROUPS" ]]; then
+            run_combined_bedgraph "$OUTPUT_ROOT" "$TEMP_GROUPS" "$OUTPUT_ROOT/$DIR_BG"
+            rm "$TEMP_GROUPS"
+        fi
     fi
     
     # ncRNA Filtering Summary
@@ -780,10 +800,9 @@ if [[ "$DEMUX" == "yes" ]]; then
     # Check if we need to pass CIMS/CITS flags
     EXTRA_FLAGS=""
     # Only pass CIMS/CITS to children if NOT using groups file (group CTK runs after batch)
-    if [[ -z "$CTK_GROUPS_FILE" ]]; then
-        if [[ "$RUN_CIMS" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --cims"; fi
-        if [[ "$RUN_CITS" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --cits"; fi
-    fi
+    # Always pass CIMS/CITS flags if requested (Removed legacy suppression)
+    if [[ "$RUN_CIMS" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --cims"; fi
+    if [[ "$RUN_CITS" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --cits"; fi
     if [[ "$VERBOSE" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --verbose"; fi
     if [[ "$SAMPLE_SIZE" -gt 0 ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --sample $SAMPLE_SIZE"; fi
     if [[ "$KEEP_INTERMEDIATE" == "yes" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS -k"; fi
@@ -925,9 +944,10 @@ if [[ "$DEMUX" == "yes" ]]; then
         mkdir -p "$OUTPUT_ROOT/$DIR_OTHERS/STAR_OUTPUT"
     fi
 
-    # Run Group-based CTK Analysis (if groups file provided)
-    if [[ -n "$CTK_GROUPS_FILE" ]]; then
-        run_group_ctk_analysis "$CTK_GROUPS_FILE" "$OUTPUT_ROOT" "$GENOME_INDEX" \
+    # Run Group-based CTK Analysis (OPT-IN ONLY)
+    # User requested to deactivate automatic group CTK.
+    if [[ "$RUN_GROUP_CTK" == "true" ]] && [[ -n "$GROUPS_FILE" ]]; then
+        run_group_ctk_analysis "$GROUPS_FILE" "$OUTPUT_ROOT" "$GENOME_INDEX" \
             "$CIMS_ITERATIONS" "$CIMS_FDR" "$CITS_PVALUE" "$CITS_GAP" \
             "$MOTIF_FLANK" "$RUN_MOTIF" "$RUN_CIMS" "$RUN_CITS"
     fi
@@ -975,6 +995,12 @@ if [[ "$DEMUX" == "yes" ]]; then
                 bg_neg=$(find "$analysis_dir" -name "*_neg.bedgraph")
                 if [[ -n "$bg_pos" ]]; then cp "$bg_pos" "$OUTPUT_ROOT/$DIR_BG/${sample_name}_pos.bedgraph"; fi
                 if [[ -n "$bg_neg" ]]; then cp "$bg_neg" "$OUTPUT_ROOT/$DIR_BG/${sample_name}_neg.bedgraph"; fi
+                
+                # Collect scale_factors.tsv (append to master file)
+                scale_file=$(find "$analysis_dir" -name "scale_factors.tsv" 2>/dev/null | head -n 1)
+                if [[ -f "$scale_file" ]]; then
+                    cat "$scale_file" >> "$OUTPUT_ROOT/$DIR_BG/scale_factors.tsv"
+                fi
                 
                 # Grab chrom.sizes from ONE sample (overwrite is fine)
                  # It might be in analysis dir if we extracted it, or just use user provided if needed
@@ -1084,8 +1110,8 @@ if [[ "$DEMUX" == "yes" ]]; then
             
             # Add CIMS/CITS params
             PEAK_CMD="$PEAK_CMD --cims-fdr $CIMS_FDR --cits-pval $CITS_PVALUE"
-            if [[ -n "$CTK_GROUPS_FILE" ]]; then
-                PEAK_CMD="$PEAK_CMD --ctk-group $CTK_GROUPS_FILE"
+            if [[ -n "$GROUPS_FILE" ]]; then
+                PEAK_CMD="$PEAK_CMD -g $GROUPS_FILE"
             fi
         fi
         
@@ -1105,6 +1131,17 @@ if [[ "$DEMUX" == "yes" ]]; then
 
         if [ $? -eq 0 ]; then
              console_msg "  > Peak Calling Complete."
+             
+             # Add enhanced columns to peak matrix
+             PEAK_MATRIX="$OUTPUT_ROOT/$DIR_PEAKS/COMBINED_PEAKS/COMBINED_peakCoverage.txt"
+             PEAKS_BED="$OUTPUT_ROOT/$DIR_PEAKS/COMBINED_PEAKS/peaks_Sorted.bed"
+             
+             if [[ -f "$PEAK_MATRIX" && -f "$PEAKS_BED" ]]; then
+                 console_msg "  > Adding enhanced matrix columns..."
+                 add_matrix_columns "$PEAK_MATRIX" "$PEAKS_BED" \
+                     "$OUTPUT_ROOT/$DIR_BG" "$OUTPUT_ROOT/$DIR_BG/scale_factors.tsv" \
+                     "$GROUPS_FILE"
+             fi
         else
              console_msg "  > ${RED}Peak Calling Failed (Check Log)${NC}"
         fi
@@ -1114,8 +1151,26 @@ if [[ "$DEMUX" == "yes" ]]; then
     fi
     
     # Combined BedGraph Generation
-    if [[ -n "$CTK_GROUPS_FILE" ]]; then
-        run_combined_bedgraph "$OUTPUT_ROOT" "$CTK_GROUPS_FILE" "$OUTPUT_ROOT/$DIR_BG"
+    # Uses GROUPS_FILE if present, otherwise creates "All Samples"
+    if [[ -n "$GROUPS_FILE" ]]; then
+        run_combined_bedgraph "$OUTPUT_ROOT" "$GROUPS_FILE" "$OUTPUT_ROOT/$DIR_BG"
+    else
+        # Fallback: Create a temporary groups file to combine ALL samples
+        console_msg "  > Generating Combined Bedgraph for all samples..."
+        TEMP_GROUPS="${OUTPUT_ROOT}/temp_all_groups.txt"
+        
+        # List all positive bedgraphs to identify samples
+        for bg in "$OUTPUT_ROOT/$DIR_BG"/*_pos.bedgraph; do
+            if [[ -f "$bg" ]]; then
+                s_name=$(basename "$bg" _pos.bedgraph)
+                echo -e "${s_name}\tALL_SAMPLES" >> "$TEMP_GROUPS"
+            fi
+        done
+        
+        if [[ -s "$TEMP_GROUPS" ]]; then
+            run_combined_bedgraph "$OUTPUT_ROOT" "$TEMP_GROUPS" "$OUTPUT_ROOT/$DIR_BG"
+            rm "$TEMP_GROUPS"
+        fi
     fi
 
     # ncRNA Filtering Summary (before cleanup so stats files still exist)
@@ -1143,6 +1198,18 @@ if [[ "$DEMUX" == "yes" ]]; then
         fi
     done
     console_msg "  ----------------------------------------------------------------"
+    
+    # Mapping Depth Summary (from scale_factors.tsv generated during bedgraph creation)
+    SCALE_FILE="$OUTPUT_ROOT/$DIR_BG/scale_factors.tsv"
+    if [[ -f "$SCALE_FILE" ]]; then
+        console_msg "\n[MAPPING DEPTH SUMMARY]"
+        printf "  %-25s %-15s %s\n" "Sample" "Mapped Reads" "Scale Factor"
+        console_msg "  ----------------------------------------------------------------"
+        while IFS=$'\t' read -r sample reads scale; do
+            printf "  %-25s %-15s %s\n" "$sample" "$reads" "$scale"
+        done < "$SCALE_FILE"
+        console_msg "  ----------------------------------------------------------------"
+    fi
     
     # Cleanup Analysis Folders and Temp Files
     console_msg "  > Cleaning up temporary analysis directories and files..."
@@ -1192,6 +1259,9 @@ if [[ "$DEMUX" == "yes" ]]; then
     if [[ -n "$TEMP_CONSOLE_LOG" && -f "$TEMP_CONSOLE_LOG" ]]; then
         console_msg "  > Console log: $TEMP_CONSOLE_LOG"
     fi
+    
+    # Cleanup intermediate files
+    rm -f "$OUTPUT_ROOT/$DIR_BG/scale_factors.tsv" 2>/dev/null
     
     send_notification "CLIPittyClip" "Pipeline execution finished successfully. Duration: ${H}h ${M}m ${S}s"
     exit 0
@@ -1265,7 +1335,7 @@ run_parse_alignment "${BAM_FILE}" "${BASENAME}_parsed.bed" "${MUTATION_FILE}" "$
 run_collapse_pcr "${BASENAME}_parsed.bed" "${COLLAPSED_BED}" "${UMI_LEN}"
 
 # 4. Coverage Analysis (Bedgraph)
-run_coverage "${COLLAPSED_BED}" "${BASENAME}" "$GENOME_INDEX/chrom.sizes" # Pass genome file if available
+run_coverage "${COLLAPSED_BED}" "${BASENAME}" "$GENOME_INDEX/chrom.sizes" "${BAM_FILE}" # Pass genome file if available
 
 # 5. Peak Calling (Per-Sample - Optional if using Aggregation, but good for QC)
 # 5. Peak Calling (Per-Sample - Optional if using Aggregation, but good for QC)

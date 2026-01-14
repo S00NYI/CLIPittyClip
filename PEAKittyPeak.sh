@@ -41,7 +41,7 @@ function show_usage {
     echo "  -n <str>       Base name for output (default: 'Combined')"
     echo "  -a <str>       Additional HOMER findPeaks arguments (quoted string)"
     echo "  --ctk-dir <path>   Add CIMS/CITS site counts from CTK analysis"
-    echo "  --ctk-group <file> Groups file for CTK aggregation (optional)"
+    echo "  -g, --groups <file> Groups file for aggregation metrics"
     echo "  --cims-fdr <float> CIMS FDR threshold (default: 0.05)"
     echo "  --cits-pval <float> CITS p-value threshold (default: 0.05)"
     echo "  --wizard       Launch interactive configuration wizard"
@@ -65,6 +65,7 @@ fi
 # Parse Options using while loop for better long option handling
 INPUT_BED_DIR="BED"  # Default used if -i not provided
 AGGREGATE="false"    # Default: Individual mode
+GROUPS_FILE=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -77,7 +78,7 @@ while [[ $# -gt 0 ]]; do
         -n) BASE_NAME="$2"; shift 2 ;;
         -a) ADV_HOMER_ARGS="$2"; shift 2 ;;
         --ctk-dir) CTK_DIR="$2"; shift 2 ;;
-        --ctk-group) CTK_GROUPS_FILE="$2"; shift 2 ;;
+        -g|--groups|--ctk-group) GROUPS_FILE="$2"; shift 2 ;;
         --cims-fdr) CIMS_FDR="$2"; shift 2 ;;
         --cits-pval) CITS_PVALUE="$2"; shift 2 ;;
         --wizard|--advanced) WIZARD_MODE="true"; shift ;;
@@ -162,36 +163,62 @@ call_peaks() {
         mv peaks_Sorted.bed "$out_dir/"
         
         # 4. Coverage Analysis
-        # Copy sorted bed to serve as base table
-        cp "${out_dir}/peaks_Sorted.bed" "${out_dir}/${output_name}_peakCoverage.txt"
+        local coverage_file="${out_dir}/${output_name}_peakCoverage.txt"
+        cp "${out_dir}/peaks_Sorted.bed" "$coverage_file"
         
-        # Header
-        echo -e "chr\tstart\tend\tname\tscore\tstrand" > colnames.txt
+        # Header String (TAB separated)
+        # Note: We construct this now but apply it at the very end
+        # Header String (TAB separated) - Initialize with BED fields
+        HEADER_STR="chr\tstart\tend\tname\tscore\tstrand"
         
-        # Add Peak Coverage Columns using annotatePeaks.pl
-        if [[ -f "${out_dir}/${output_name}.bed" ]]; then
-            log_info "Adding peak coverage counts..."
-            annotatePeaks.pl "${out_dir}/peaks_Sorted.bed" hg38 -noann -nogene -p "${out_dir}/${output_name}.bed" > temp_counts.txt 2>/dev/null
-            
-            # Extract count column (last column)
-            awk -F'\t' '{print $NF}' temp_counts.txt > counts.col
-            echo "${output_name}_Counts" > header.col
-            cat header.col counts.col > final_counts.col
-            # Paste to coverage file
-            paste "${out_dir}/${output_name}_peakCoverage.txt" final_counts.col > temp_paste.txt
-            mv temp_paste.txt "${out_dir}/${output_name}_peakCoverage.txt"
-            
-            # Add header name
-            echo -e "${output_name}_Counts" >> colnames.txt
-            
-            rm temp_counts.txt counts.col header.col final_counts.col 2>/dev/null
-        fi
+        # 4a. Per-Sample Coverage (Restored v2 Logic)
+        log_info "Calculating per-sample coverage (bedtools)..."
         
-        # Add CTK CIMS/CITS columns if requested
+        # Iterate over all BED files in the input directory
+        # This restores the "Read Counts per Sample" columns
+        for bed_file in "$INPUT_BED_DIR"/*.bed; do
+            if [[ -f "$bed_file" ]]; then
+                # Extract Sample Name
+                local s_name=$(basename "$bed_file" .bed)
+                s_name=${s_name%_collapsed} # Strip _collapsed if present
+                
+                # Skip if it matches the Combined output itself (to avoid self-inclusion)
+                if [[ "$s_name" == "$output_name" ]]; then continue; fi
+                
+                # bedtools coverage -s (force strandedness per user v2)
+                # -a: Peaks, -b: Sample Reads
+                bedtools coverage -s -a "${out_dir}/peaks_Sorted.bed" -b "$bed_file" > "temp_cov.txt"
+                
+                # Extract count column (Column 7 in bedtools coverage default output)
+                awk '{print $7}' "temp_cov.txt" > "col_count.txt"
+                
+                # Paste to Matrix
+                paste "$coverage_file" "col_count.txt" > "temp_paste.txt"
+                mv "temp_paste.txt" "$coverage_file"
+                
+                # Append Header Name
+                HEADER_STR="${HEADER_STR}\t${s_name}"
+                
+                # Cleanup
+                rm "temp_cov.txt" "col_count.txt" 2>/dev/null
+            fi
+        done
+        
+        # [BUG FIX] Prepend header NOW so downstream functions receive valid matrix
+        # Use simple echo instead of file
+        echo -e "$HEADER_STR" > colnames.txt
+        cat colnames.txt "$coverage_file" > temp_final.txt
+        mv temp_final.txt "$coverage_file"
+        rm colnames.txt
+        
+        # 5. [DISABLED] Group Coverage Columns (Sum/Avg) - Removed per user request
+        # if [[ -n "$GROUPS_FILE" ]]; then ... fi
+        
+        # 6. Add CTK CIMS/CITS columns if requested
         if [[ -n "$CTK_DIR" ]]; then
             log_info "Adding CTK columns..."
-            # Pass correct arguments: Matrix, PeaksBED, CTK_Dir, Thresholds
-            add_ctk_columns_to_peak_matrix "${out_dir}/${output_name}_peakCoverage.txt" "${out_dir}/peaks_Sorted.bed" "$CTK_DIR" "$CIMS_FDR" "$CITS_PVALUE"
+            # Pass correct arguments: Matrix, PeaksBED, CTK_Dir, Thresholds, AND GroupsFile
+            add_ctk_columns_to_peak_matrix "$coverage_file" "${out_dir}/peaks_Sorted.bed" "$CTK_DIR" "$CIMS_FDR" "$CITS_PVALUE" "$GROUPS_FILE"
         fi
         
         log_info "Peak calling for $output_name complete: $out_dir/"
