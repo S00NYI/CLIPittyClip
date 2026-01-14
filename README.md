@@ -253,7 +253,7 @@ Condition_B_Rep2    Condition_B
 ├── 0_DEMUX_FASTQ/           # Demultiplexed reads
 ├── 1_BAM/                   # Aligned BAM files
 ├── 2_COLLAPSED_BED/         # PCR-deduplicated BED
-├── 3_BEDGRAPH/              # Coverage tracks (Normalized CPM)
+├── 3_BEDGRAPH/              # Coverage tracks (Normalized Coverage)
 │   ├── COMBINED_BEDGRAPH/   # (Group mode) Averaged replicates
 ├── 4_PEAKS/                 # HOMER peak results
 │   ├── COMBINED_PEAKS/      # Peaks across all samples (or aggregated)
