@@ -196,8 +196,8 @@ call_peaks() {
                 paste "$coverage_file" "col_count.txt" > "temp_paste.txt"
                 mv "temp_paste.txt" "$coverage_file"
                 
-                # Append Header Name
-                HEADER_STR="${HEADER_STR}\t${s_name}"
+                # Append Header Name with TC_ prefix (Tag Count)
+                HEADER_STR="${HEADER_STR}\tTC_${s_name}"
                 
                 # Cleanup
                 rm "temp_cov.txt" "col_count.txt" 2>/dev/null

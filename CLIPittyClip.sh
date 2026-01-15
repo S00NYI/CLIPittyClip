@@ -1131,17 +1131,6 @@ if [[ "$DEMUX" == "yes" ]]; then
 
         if [ $? -eq 0 ]; then
              console_msg "  > Peak Calling Complete."
-             
-             # Add enhanced columns to peak matrix
-             PEAK_MATRIX="$OUTPUT_ROOT/$DIR_PEAKS/COMBINED_PEAKS/COMBINED_peakCoverage.txt"
-             PEAKS_BED="$OUTPUT_ROOT/$DIR_PEAKS/COMBINED_PEAKS/peaks_Sorted.bed"
-             
-             if [[ -f "$PEAK_MATRIX" && -f "$PEAKS_BED" ]]; then
-                 console_msg "  > Adding enhanced matrix columns..."
-                 add_matrix_columns "$PEAK_MATRIX" "$PEAKS_BED" \
-                     "$OUTPUT_ROOT/$DIR_BG" "$OUTPUT_ROOT/$DIR_BG/scale_factors.tsv" \
-                     "$GROUPS_FILE"
-             fi
         else
              console_msg "  > ${RED}Peak Calling Failed (Check Log)${NC}"
         fi
@@ -1150,7 +1139,7 @@ if [[ "$DEMUX" == "yes" ]]; then
         log_error "PEAKittyPeak.sh not found."
     fi
     
-    # Combined BedGraph Generation
+    # Combined BedGraph Generation (MUST happen before add_matrix_columns)
     # Uses GROUPS_FILE if present, otherwise creates "All Samples"
     if [[ -n "$GROUPS_FILE" ]]; then
         run_combined_bedgraph "$OUTPUT_ROOT" "$GROUPS_FILE" "$OUTPUT_ROOT/$DIR_BG"
@@ -1171,6 +1160,17 @@ if [[ "$DEMUX" == "yes" ]]; then
             run_combined_bedgraph "$OUTPUT_ROOT" "$TEMP_GROUPS" "$OUTPUT_ROOT/$DIR_BG"
             rm "$TEMP_GROUPS"
         fi
+    fi
+    
+    # Add enhanced columns to peak matrix (after combined bedgraphs are ready)
+    PEAK_MATRIX="$OUTPUT_ROOT/$DIR_PEAKS/COMBINED_PEAKS/COMBINED_peakCoverage.txt"
+    PEAKS_BED="$OUTPUT_ROOT/$DIR_PEAKS/COMBINED_PEAKS/peaks_Sorted.bed"
+    
+    if [[ -f "$PEAK_MATRIX" && -f "$PEAKS_BED" ]]; then
+        console_msg "  > Adding enhanced matrix columns..."
+        add_matrix_columns "$PEAK_MATRIX" "$PEAKS_BED" \
+            "$OUTPUT_ROOT/$DIR_BG" "$OUTPUT_ROOT/$DIR_BG/scale_factors.tsv" \
+            "$GROUPS_FILE"
     fi
 
     # ncRNA Filtering Summary (before cleanup so stats files still exist)

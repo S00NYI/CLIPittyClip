@@ -599,7 +599,7 @@ add_matrix_columns() {
                 # Build map of sample name -> column index (1-based, offset by 6)
                 for(i=1; i<=length(as); i++) col_map[as[i]] = i + 6
             }
-            NR==1 { print "'"$group"'_BC"; next }
+            NR==1 { print "BC_'"$group"'"; next }
             {
                 bc=0
                 for(i in gs) {
@@ -649,7 +649,7 @@ add_matrix_columns() {
             
             # Calculate normalized value: raw_count * scale_factor
             awk -F'\t' -v col="$col_idx" -v sf="$sf" '
-            NR==1 { print "'"${sample}"'_normed"; next }
+            NR==1 { print "NormedTC_'"${sample}"'"; next }
             { printf "%.4f\n", $col * sf }
             ' "$peak_matrix" > "normed_${sample}.col"
             
@@ -681,7 +681,7 @@ add_matrix_columns() {
                 split(allsamples, as, " ")
                 for(i=1; i<=length(as); i++) col_map[as[i]] = i + 6
             }
-            NR==1 { print "'"$group"'"; next }
+            NR==1 { print "TC_'"$group"'"; next }
             {
                 sum=0
                 for(i in gs) {
@@ -713,7 +713,7 @@ add_matrix_columns() {
                     scale[sname] = sf_parts[3]
                 }
             }
-            NR==1 { print "'"$group"'_normed"; next }
+            NR==1 { print "NormedTC_'"$group"'"; next }
             {
                 sum=0
                 for(i in gs) {
@@ -779,12 +779,12 @@ add_matrix_columns() {
                              }' "$peaks_bed" "pos_vals.tmp" "neg_vals.tmp"
                 
                 # Simpler approach: iterate through peaks and pick from correct file
-                awk -F'\t' '
+                awk -F'\t' -v stat_val="$stat" -v sample_val="$sample" '
                 BEGIN { 
-                    while((getline < "bg_pos_'"$stat"'.tmp") > 0) { pos[$1"\t"$2"\t"$3] = $NF }
-                    while((getline < "bg_neg_'"$stat"'.tmp") > 0) { neg[$1"\t"$2"\t"$3] = $NF }
+                    while((getline < "bg_pos_"stat_val".tmp") > 0) { pos[$1"\t"$2"\t"$3] = $NF }
+                    while((getline < "bg_neg_"stat_val".tmp") > 0) { neg[$1"\t"$2"\t"$3] = $NF }
                 }
-                NR==1 { print "'"${sample}_${stat^}"'"; next }
+                NR==1 { print "BG" toupper(substr(stat_val,1,1)) substr(stat_val,2) "_" sample_val; next }
                 {
                     key = $1"\t"$2"\t"$3
                     if($6 == "+") print (key in pos) ? pos[key] : 0
@@ -837,7 +837,7 @@ add_matrix_columns() {
                         while((getline < "bg_pos_'"$stat"'.tmp") > 0) { pos[$1"\t"$2"\t"$3] = $NF }
                         while((getline < "bg_neg_'"$stat"'.tmp") > 0) { neg[$1"\t"$2"\t"$3] = $NF }
                     }
-                    NR==1 { print "'"${group}_${stat^}"'"; next }
+                    NR==1 { print "BG" toupper(substr("'$stat'",1,1)) substr("'$stat'",2) "_'$group'"; next }
                     {
                         key = $1"\t"$2"\t"$3
                         if($6 == "+") print (key in pos) ? pos[key] : 0
@@ -865,6 +865,52 @@ add_matrix_columns() {
         mv "${peak_matrix}.enhanced" "$peak_matrix"
         log_info "Enhanced columns added to $peak_matrix"
     fi
+    
+    # -------------------------------------------
+    # REORDER: Group columns by type (prefix)
+    # Order: base -> TC_ -> NormedTC_ -> BC_ -> DEL_ -> SUB_ -> TRUNC_ -> BG*
+    # -------------------------------------------
+    log_info "Reordering columns by type..."
+    awk -F'\t' '
+    BEGIN { OFS="\t" }
+    NR==1 {
+        # Parse header and categorize columns by prefix
+        for(i=1; i<=NF; i++) {
+            h = $i
+            if(h ~ /^(chr|start|end|name|score|strand)$/) { order[i] = 1; base[i] = h }
+            else if(h ~ /^TC_/)      { order[i] = 2; tc[i] = h }
+            else if(h ~ /^NormedTC_/) { order[i] = 3; ntc[i] = h }
+            else if(h ~ /^BC_/)      { order[i] = 4; bc[i] = h }
+            else if(h ~ /^DEL_/)     { order[i] = 5; del[i] = h }
+            else if(h ~ /^SUB_/)     { order[i] = 6; sub_[i] = h }
+            else if(h ~ /^TRUNC_/)   { order[i] = 7; trunc[i] = h }
+            else if(h ~ /^BG/)       { order[i] = 8; bg[i] = h }
+            else                     { order[i] = 9; other[i] = h }
+            headers[i] = h
+        }
+        # Build column order
+        n = 0
+        for(o=1; o<=9; o++) {
+            for(i=1; i<=NF; i++) {
+                if(order[i] == o) { col_order[++n] = i }
+            }
+        }
+        total_cols = n
+        # Print reordered header
+        for(j=1; j<=total_cols; j++) {
+            printf "%s%s", headers[col_order[j]], (j<total_cols ? OFS : ORS)
+        }
+        next
+    }
+    {
+        # Print reordered data
+        for(j=1; j<=total_cols; j++) {
+            printf "%s%s", $col_order[j], (j<total_cols ? OFS : ORS)
+        }
+    }
+    ' "$peak_matrix" > "${peak_matrix}.reordered"
+    mv "${peak_matrix}.reordered" "$peak_matrix"
+    log_info "Columns reordered by type prefix"
     
     rm -f "$new_cols_file"
 }
@@ -965,10 +1011,10 @@ add_ctk_columns_to_peak_matrix() {
                 [[ -s "$s_file" ]] && cat "$s_file" >> "$group_del_bed"
             done
             if [[ -s "$group_del_bed" ]]; then
-                add_ctk_column "$group_del_bed" "${group}_Del_Sum" "cims" "$cims_fdr"
+                add_ctk_column "$group_del_bed" "DEL_${group}" "cims" "$cims_fdr"
             else
                 # still add empty column for consistency?
-                add_ctk_column "$group_del_bed" "${group}_Del_Sum" "cims" "$cims_fdr"
+                add_ctk_column "$group_del_bed" "DEL_${group}" "cims" "$cims_fdr"
             fi
             
             # --- Aggregate CIMS (Substitutions) ---
@@ -979,9 +1025,9 @@ add_ctk_columns_to_peak_matrix() {
                 [[ -s "$s_file" ]] && cat "$s_file" >> "$group_sub_bed"
             done
             if [[ -s "$group_sub_bed" ]]; then
-                add_ctk_column "$group_sub_bed" "${group}_Sub_Sum" "cims" "$cims_fdr"
+                add_ctk_column "$group_sub_bed" "SUB_${group}" "cims" "$cims_fdr"
             else
-                add_ctk_column "$group_sub_bed" "${group}_Sub_Sum" "cims" "$cims_fdr"
+                add_ctk_column "$group_sub_bed" "SUB_${group}" "cims" "$cims_fdr"
             fi
             
             # --- Aggregate CITS (Truncations) ---
@@ -992,9 +1038,9 @@ add_ctk_columns_to_peak_matrix() {
                 [[ -s "$s_file" ]] && cat "$s_file" >> "$group_cits_bed"
             done
             if [[ -s "$group_cits_bed" ]]; then
-                add_ctk_column "$group_cits_bed" "${group}_Trunc_Sum" "cits" "$cits_pval"
+                add_ctk_column "$group_cits_bed" "TRUNC_${group}" "cits" "$cits_pval"
             else
-                add_ctk_column "$group_cits_bed" "${group}_Trunc_Sum" "cits" "$cits_pval"
+                add_ctk_column "$group_cits_bed" "TRUNC_${group}" "cits" "$cits_pval"
             fi
             
             # Cleanup aggregated files
