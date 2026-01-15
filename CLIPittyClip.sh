@@ -381,11 +381,10 @@ if [[ "$CHILD_MODE" != "true" ]]; then
         console_msg "Input File: $(basename "$INPUT_FILE")"
     fi
     console_msg "Index: $GENOME_INDEX"
-    # Display adapter: show "L32" if default, or truncated sequence if custom
-    local adapter_display="L32"
+    # Display adapter: show "L32" if default, or full custom sequence
+    adapter_display="L32"
     if [[ "$ADAPTER_3" != "GTGTCAGTCACTTCCAGCGG" ]]; then
-        # Show first 15 chars of custom adapter with ellipsis
-        adapter_display="${ADAPTER_3:0:15}..."
+        adapter_display="$ADAPTER_3"
     fi
     console_msg "Threads: $THREADS | UMI: ${UMI_LEN}bp | Adapter: $adapter_display"
     console_msg "********************************************************************************"
