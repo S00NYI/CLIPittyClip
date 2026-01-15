@@ -189,6 +189,11 @@ CLIPittyClip.sh -i reads.fastq.gz -x /path/to/star_index -t 8 --cits
 CLIPittyClip.sh -i reads.fastq.gz -x /path/to/star_index -t 8 --ctk
 # OR equivalently:
 CLIPittyClip.sh -i reads.fastq.gz -x /path/to/star_index -t 8 --cims --cits
+
+# eCLIP analysis (ENCODE protocol)
+# - 10bp UMI, custom eCLIP adapter, CIMS+CITS enabled
+CLIPittyClip.sh -d /path/to/samples/ -x /path/to/star_index -t 8 -u 10 \
+    -a "AAGCTGAGATCGGAAGAGCGTCGTGTAG" --cims --cits
 ```
 
 ## Input Modes
