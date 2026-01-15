@@ -571,39 +571,83 @@ if [[ -n "$INPUT_DIR" ]]; then
         if [[ -d "$sample_out" ]]; then
             console_msg "  > Collecting: $sample_name"
             
-            # Move BAMs
-            mv "$sample_out"/1_BAM/*.bam* "$OUTPUT_ROOT/$DIR_BAM/" 2>/dev/null
+            # Use find-based collection (matches demux mode's working approach)
+            # Child processes create flat structure in _analysis/, not nested folders
             
-            # Move CIMS/CITS (if they exist)
-            if [[ -d "$sample_out/5_CIMS" ]]; then
-                 mv "$sample_out"/5_CIMS/* "$OUTPUT_ROOT/$DIR_CIMS/" 2>/dev/null
-            else
-                 # If child process produced flat files (likely)
-                 mv "$sample_out"/*_CIMS.txt "$OUTPUT_ROOT/$DIR_CIMS/" 2>/dev/null
+            # 1. BAM files
+            bam_file=$(find "$sample_out" -name "*mapped.Aligned.sortedByCoord.out.bam" 2>/dev/null | head -n 1)
+            if [[ -n "$bam_file" ]]; then
+                cp "$bam_file" "$OUTPUT_ROOT/$DIR_BAM/${sample_name}.bam"
+                cp "${bam_file}.bai" "$OUTPUT_ROOT/$DIR_BAM/${sample_name}.bam.bai" 2>/dev/null
             fi
             
-            if [[ -d "$sample_out/6_CITS" ]]; then
-                 mv "$sample_out"/6_CITS/* "$OUTPUT_ROOT/$DIR_CITS/" 2>/dev/null
-            else
-                 mv "$sample_out"/*_CITS.bed "$OUTPUT_ROOT/$DIR_CITS/" 2>/dev/null
+            # 2. Collapsed BED files
+            bed_file=$(find "$sample_out" -name "*_collapsed.bed" 2>/dev/null | head -n 1)
+            if [[ -n "$bed_file" ]]; then
+                cp "$bed_file" "$OUTPUT_ROOT/$DIR_BED/${sample_name}.bed"
             fi
-            # Move BEDs
-            mv "$sample_out"/2_COLLAPSED_BED/*.bed "$OUTPUT_ROOT/$DIR_BED/" 2>/dev/null
-            # Move Bedgraphs
-            mv "$sample_out"/3_BEDGRAPH/*.bedgraph "$OUTPUT_ROOT/$DIR_BG/" 2>/dev/null
-            cp "$sample_out"/3_BEDGRAPH/chrom.sizes "$OUTPUT_ROOT/$DIR_BG/" 2>/dev/null
-            # Move Peak folders
-            mv "$sample_out"/4_PEAKS/* "$OUTPUT_ROOT/$DIR_PEAKS/SAMPLE_PEAKS/${sample_name}_peaks/" 2>/dev/null || true
-            # Move Reports
-            mv "$sample_out"/REPORTS/FASTP_REPORT/* "$OUTPUT_ROOT/$DIR_REPORTS/FASTP_REPORT/" 2>/dev/null
-            mv "$sample_out"/REPORTS/*_pipeline.log "$OUTPUT_ROOT/$DIR_REPORTS/" 2>/dev/null
             
-            # Move ncRNA Mapping outputs
+            # 3. Bedgraph files & chrom.sizes
+            bg_pos=$(find "$sample_out" -name "*_pos.bedgraph" 2>/dev/null | head -n 1)
+            bg_neg=$(find "$sample_out" -name "*_neg.bedgraph" 2>/dev/null | head -n 1)
+            if [[ -n "$bg_pos" ]]; then cp "$bg_pos" "$OUTPUT_ROOT/$DIR_BG/${sample_name}_pos.bedgraph"; fi
+            if [[ -n "$bg_neg" ]]; then cp "$bg_neg" "$OUTPUT_ROOT/$DIR_BG/${sample_name}_neg.bedgraph"; fi
+            
+            # Collect scale_factors.tsv (append to master file)
+            scale_file=$(find "$sample_out" -name "scale_factors.tsv" 2>/dev/null | head -n 1)
+            if [[ -f "$scale_file" ]]; then
+                cat "$scale_file" >> "$OUTPUT_ROOT/$DIR_BG/scale_factors.tsv"
+            fi
+            
+            # Grab chrom.sizes
+            extracted_chroms=$(find "$sample_out" -name "chrom.sizes" 2>/dev/null | head -n 1)
+            if [[ -f "$extracted_chroms" ]]; then
+                cp "$extracted_chroms" "$OUTPUT_ROOT/$DIR_BG/chrom.sizes"
+            fi
+            
+            # 4. Peak folder
+            peak_dir="${sample_out}/${sample_name}_peaks"
+            if [[ -d "$peak_dir" ]]; then
+                cp -r "$peak_dir" "$OUTPUT_ROOT/$DIR_PEAKS/SAMPLE_PEAKS/"
+            fi
+            
+            # Peak calling log
+            peak_log="${peak_dir}_homer.log"
+            if [[ -f "$peak_log" ]]; then
+                cp "$peak_log" "$OUTPUT_ROOT/$DIR_IND_PEAK_LOGS/${sample_name}_PeakCalling.log"
+            fi
+            
+            # 5. CTK Analysis (CIMS/CITS) - create per-sample subdirectory to avoid overwrites
+            if [[ -n "$DIR_CTK" ]]; then
+                for ctk_folder in "CTK_Analysis" "CIMS_Analysis" "CITS_Analysis"; do
+                    if [[ -d "$sample_out/$ctk_folder" ]]; then
+                        # Create sample-specific subdirectory
+                        mkdir -p "$OUTPUT_ROOT/$DIR_CTK/${sample_name}"
+                        cp -r "$sample_out/$ctk_folder/"* "$OUTPUT_ROOT/$DIR_CTK/${sample_name}/" 2>/dev/null
+                        break
+                    fi
+                done
+            fi
+            
+            # 6. Reports & Logs
+            cp "$sample_out"/*_fastp.html "$OUTPUT_ROOT/$DIR_REPORTS/FASTP_REPORT/" 2>/dev/null
+            cp "$sample_out"/*_fastp.json "$OUTPUT_ROOT/$DIR_REPORTS/FASTP_REPORT/" 2>/dev/null
+            
+            # Aligner-specific logs
+            if [[ "$ALIGNER" != "bowtie2" ]]; then
+                cp "$sample_out"/*Log.final.out "$OUTPUT_ROOT/$DIR_REPORTS/ALIGNER_LOGS/" 2>/dev/null
+                cp "$sample_out"/*Log.out "$OUTPUT_ROOT/$DIR_REPORTS/ALIGNER_LOGS/DETAILED_LOGS_CAN_BE_DELETED/" 2>/dev/null
+            fi
+            
+            # ncRNA Mapping outputs
             if [[ -d "$sample_out/OTHERS/ncRNA_Mapping" ]]; then
                 mkdir -p "$OUTPUT_ROOT/$DIR_OTHERS/ncRNA_Mapping"
-                mv "$sample_out"/OTHERS/ncRNA_Mapping/*_ncrna_stats.txt "$OUTPUT_ROOT/$DIR_OTHERS/ncRNA_Mapping/" 2>/dev/null
-                mv "$sample_out"/OTHERS/ncRNA_Mapping/*_ncrna.bam* "$OUTPUT_ROOT/$DIR_OTHERS/ncRNA_Mapping/" 2>/dev/null
+                cp "$sample_out"/OTHERS/ncRNA_Mapping/*_ncrna_stats.txt "$OUTPUT_ROOT/$DIR_OTHERS/ncRNA_Mapping/" 2>/dev/null
+                cp "$sample_out"/OTHERS/ncRNA_Mapping/*_ncrna.bam* "$OUTPUT_ROOT/$DIR_OTHERS/ncRNA_Mapping/" 2>/dev/null
             fi
+            
+            # Pipeline log
+            cp "$sample_out"/*.log "$OUTPUT_ROOT/$DIR_REPORTS/SAMPLES/${sample_name}_detailed.log" 2>/dev/null
             
             # Cleanup sample dir (keep if -k)
             if [[ "$KEEP_INTERMEDIATE" != "yes" ]]; then
@@ -613,26 +657,10 @@ if [[ -n "$INPUT_DIR" ]]; then
     done
     
     # Combined BedGraph Generation (Directory Mode)
-    # Uses GROUPS_FILE if present, otherwise creates "All Samples"
+    # Only runs when --groups/-g is explicitly provided
     if [[ -n "$GROUPS_FILE" ]]; then
+        console_msg "  > Generating Combined Bedgraph by groups..."
         run_combined_bedgraph "$OUTPUT_ROOT" "$GROUPS_FILE" "$OUTPUT_ROOT/$DIR_BG"
-    else
-        # Fallback: Create a temporary groups file to combine ALL samples
-        console_msg "  > Generating Combined Bedgraph for all samples..."
-        TEMP_GROUPS="${OUTPUT_ROOT}/temp_all_groups.txt"
-        
-        # List all positive bedgraphs to identify samples
-        for bg in "$OUTPUT_ROOT/$DIR_BG"/*_pos.bedgraph; do
-            if [[ -f "$bg" ]]; then
-                s_name=$(basename "$bg" _pos.bedgraph)
-                echo -e "${s_name}\tALL_SAMPLES" >> "$TEMP_GROUPS"
-            fi
-        done
-        
-        if [[ -s "$TEMP_GROUPS" ]]; then
-            run_combined_bedgraph "$OUTPUT_ROOT" "$TEMP_GROUPS" "$OUTPUT_ROOT/$DIR_BG"
-            rm "$TEMP_GROUPS"
-        fi
     fi
     
     # ncRNA Filtering Summary
@@ -645,8 +673,8 @@ if [[ -n "$INPUT_DIR" ]]; then
             sample_name=$(basename "$sample")
             sample_name="${sample_name%.fastq.gz}"
             sample_name="${sample_name%.fq.gz}"
-            sample_out="${sample_name}_analysis"
-            ncrna_stats="${sample_out}/OTHERS/ncRNA_Mapping/${sample_name}_ncrna_stats.txt"
+            # Read from aggregated location (sample_out was deleted after collection)
+            ncrna_stats="${OUTPUT_ROOT}/${DIR_OTHERS}/ncRNA_Mapping/${sample_name}_ncrna_stats.txt"
             
             if [[ -f "$ncrna_stats" ]]; then
                 align_rate=$(grep "overall alignment rate" "$ncrna_stats" | grep -oE "[0-9]+\.[0-9]+%" || echo "N/A")
@@ -684,13 +712,25 @@ if [[ -n "$INPUT_DIR" ]]; then
     
     eval "$PEAK_CMD" > "$PEAK_LOG" 2>&1
     
-    # Move combined results
-    if [[ -d "PEAKS" ]]; then
-        mv PEAKS/* "$OUTPUT_ROOT/$DIR_PEAKS/COMBINED_PEAKS/" 2>/dev/null
-        rm -rf PEAKS
+    # Move combined results (PEAKittyPeak creates ${BASE_NAME}_peaks/, not PEAKS/)
+    if [[ -d "Combined_peaks" ]]; then
+        mv Combined_peaks/* "$OUTPUT_ROOT/$DIR_PEAKS/COMBINED_PEAKS/" 2>/dev/null
+        rm -rf Combined_peaks
     fi
     
     console_msg "  > Combined peaks: $OUTPUT_ROOT/$DIR_PEAKS/COMBINED_PEAKS/"
+    
+    # Cleanup: Move logs and remove intermediate files
+    # Move main log file into output
+    if [[ -f "$LOG_FILE" ]]; then
+        mv "$LOG_FILE" "$OUTPUT_ROOT/$DIR_REPORTS/" 2>/dev/null
+    fi
+    
+    # Clean up any residual CLIPittyClip log files
+    mv CLIPittyClip_*.log "$OUTPUT_ROOT/$DIR_REPORTS/" 2>/dev/null
+    
+    # Remove sampled fastq files (created when --sample is used)
+    rm -f *_sampled_*.fastq.gz 2>/dev/null
     
     # Final Summary
     PIPELINE_END=$(date +%s)
@@ -703,9 +743,10 @@ if [[ -n "$INPUT_DIR" ]]; then
     console_msg "  > Duration: ${H}h ${M}m ${S}s"
     console_msg "  > Output: $OUTPUT_ROOT/"
     
-    # Console log already named and captured (see post-parsing initialization)
+    # Move console log into output for cleaner parent directory
     if [[ -n "$TEMP_CONSOLE_LOG" && -f "$TEMP_CONSOLE_LOG" ]]; then
-        console_msg "  > Console log: $TEMP_CONSOLE_LOG"
+        mv "$TEMP_CONSOLE_LOG" "$OUTPUT_ROOT/$DIR_REPORTS/${TEMP_CONSOLE_LOG}" 2>/dev/null
+        console_msg "  > Console log: $OUTPUT_ROOT/$DIR_REPORTS/${TEMP_CONSOLE_LOG}"
     fi
     
     send_notification "CLIPittyClip" "Directory batch analysis complete: $total_samples samples"
