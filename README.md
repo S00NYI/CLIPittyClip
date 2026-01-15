@@ -212,7 +212,8 @@ Run `CLIPittyClip.sh --help` for full usage. Key options:
 | `-u <int>` | UMI length (e.g., 7) |
 | `--aligner` | `star` (default) or `bowtie2` |
 | `-b <path>` | Barcode file for demultiplexing |
-| `--mismatches` | Max barcode mismatches (default: 1) |
+| `--demux-mismatches` | Max barcode mismatches (default: 1) |
+| `--align-mismatches` | Max alignment mismatches (default: 2, STAR only) |
 | `--skip-ncrna` | Disable ncRNA pre-filtering (on by default) |
 | `--cims` | Enable CIMS analysis |
 | `--cits` | Enable CITS analysis |

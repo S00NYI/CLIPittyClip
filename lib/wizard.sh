@@ -508,7 +508,7 @@ run_wizard_mapittymap() {
     # Initialize defaults
     WIZ_ALIGNER="star"
     WIZ_THREADS="1"
-    WIZ_MISMATCHES="2"
+    WIZ_ALIGN_MISMATCHES="2"
     WIZ_OUTPUT_NAME=""
     
     if [[ "$WIZ_SETTINGS_MODE" == "2" ]]; then
@@ -526,7 +526,7 @@ run_wizard_mapittymap() {
         if [[ "$WIZ_ALIGNER_SEL" == "2" ]]; then WIZ_ALIGNER="bowtie2"; fi
         
         prompt_value "  Enter number of threads" "1" WIZ_THREADS "int"
-        prompt_value "  Enter max mismatches" "2" WIZ_MISMATCHES "int"
+        prompt_value "  Enter max alignment mismatches" "2" WIZ_ALIGN_MISMATCHES "int"
         
         local default_name=$(basename "$WIZ_INPUT_FILE" .fastq.gz)
         prompt_value "  Enter output name" "$default_name" WIZ_OUTPUT_NAME
@@ -535,7 +535,7 @@ run_wizard_mapittymap() {
         if [[ "$WIZ_ALIGNER" == "star" ]]; then
             echo -e "  ${WIZ_YELLOW}Current STAR defaults:${WIZ_NC}"
             echo "    --outFilterMultimapNmax 10"
-            echo "    --outFilterMismatchNmax $WIZ_MISMATCHES"
+            echo "    --outFilterMismatchNmax $WIZ_ALIGN_MISMATCHES"
             echo "    --alignEndsType EndToEnd"
             echo ""
             echo -e "  ${WIZ_GREEN}Common STAR options:${WIZ_NC}"
@@ -575,7 +575,7 @@ run_wizard_mapittymap() {
     echo "  ├─────────────────────────────────────────────────────────────┤"
     printf "  │ %-20s %-38s │\n" "Aligner:" "$(echo "$WIZ_ALIGNER" | tr '[:lower:]' '[:upper:]')"
     printf "  │ %-20s %-38s │\n" "Threads:" "$WIZ_THREADS"
-    printf "  │ %-20s %-38s │\n" "Max Mismatches:" "$WIZ_MISMATCHES"
+    printf "  │ %-20s %-38s │\n" "Max Mismatches:" "$WIZ_ALIGN_MISMATCHES"
     if [[ -n "$WIZ_OUTPUT_NAME" ]]; then
         printf "  │ %-20s %-38s │\n" "Output Name:" "$WIZ_OUTPUT_NAME"
     fi
@@ -594,7 +594,7 @@ run_wizard_mapittymap() {
     
     # Export variables for main script
     export WIZ_INPUT_FILE WIZ_GENOME_INDEX
-    export WIZ_ALIGNER WIZ_THREADS WIZ_MISMATCHES WIZ_OUTPUT_NAME WIZ_ALIGNER_ARGS
+    export WIZ_ALIGNER WIZ_THREADS WIZ_ALIGN_MISMATCHES WIZ_OUTPUT_NAME WIZ_ALIGNER_ARGS
     
     echo -e "${WIZ_GREEN}Starting mapping...${WIZ_NC}"
     return 0

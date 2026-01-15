@@ -63,7 +63,8 @@ function show_usage {
     echo ""
     echo "DEMULTIPLEXING OPTIONS (for -i mode):"
     echo "  -b, --barcode <path>   Barcode file for demultiplexing"
-    echo "  --mismatches <int>     Max barcode mismatches (default: 1)"
+    echo "  --demux-mismatches <int> Max barcode mismatches (default: 1)"
+    echo "  --align-mismatches <int> Max alignment mismatches (default: 2, STAR only)"
     echo ""
     echo "ANALYSIS OPTIONS:"
     echo "  --run-ctk          Enable full CTK CIMS+CITS analysis"
@@ -115,6 +116,8 @@ NOTIFY_MODE="false"
 WIZARD_MODE="false"
 SKIP_NCRNA="false"  # ncRNA filtering is ON by default
 ALIGNER="star" # Default match
+DEMUX_MISMATCHES="1"   # Default for barcode demultiplexing
+ALIGN_MISMATCHES="2"   # Default for STAR --outFilterMismatchNmax
 
 # CTK CIMS/CITS Parameters (with defaults)
 CIMS_ITERATIONS="10"
@@ -169,7 +172,8 @@ while [[ $# -gt 0 ]]; do
         --sample) SAMPLE_SIZE="$2"; shift 2 ;;
         -b|--barcode) BARCODE_FILE="$2"; DEMUX="yes"; shift 2 ;;
         -d|--input-dir) INPUT_DIR="$2"; shift 2 ;;
-        --mismatches) MISMATCHES="$2"; shift 2 ;;
+        --demux-mismatches) DEMUX_MISMATCHES="$2"; shift 2 ;;
+        --align-mismatches) ALIGN_MISMATCHES="$2"; shift 2 ;;
         --no-dedup) DEDUP_MODE="false"; shift ;;
         --dedup) DEDUP_MODE="true"; shift ;; # Keep for compat
         --skip-ncrna) SKIP_NCRNA="true"; shift ;;
@@ -315,7 +319,7 @@ log_info "------------------------------------------------------------------"
 
 # Define defaults for display (matching lib/modules.sh architecture)
 DEF_FASTP="--length_required 16 --average_qual 30"
-DEF_STAR="--outFilterMultimapNmax 10 --outFilterMismatchNmax ${MISMATCHES:-2} --alignEndsType EndToEnd --outSAMattributes ... MD"
+DEF_STAR="--outFilterMultimapNmax 10 --outFilterMismatchNmax ${ALIGN_MISMATCHES} --alignEndsType EndToEnd --outSAMattributes ... MD"
 DEF_BT2="--md --end-to-end (Standard Sensitivity)"
 DEF_HOMER="-style factor -L 2 -localSize 10000 -minDist ${PEAK_DIST:-50}"
 
@@ -730,7 +734,7 @@ if [[ "$DEMUX" == "yes" ]]; then
     # 1b. Demultiplexing
     console_msg "\n[DEMULTIPLEXING]"
     print_section_item "Barcodes: $(basename "$BARCODE_FILE")"
-    print_section_item "Mismatches Allowed: $MISMATCHES"
+    print_section_item "Mismatches Allowed: $DEMUX_MISMATCHES"
     
     # Run demultiplexing (with dedup disabled since we already did it)
     run_demultiplexing "$WORK_INPUT" "$BARCODE_FILE" "$SAMPLE_SIZE" "false"

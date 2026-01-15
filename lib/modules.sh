@@ -47,7 +47,7 @@ function run_demultiplexing {
     local barcode_file="$2"
     local run_sample_size="$3"
     # Note: dedup_mode parameter ignored - dedup is now handled by caller
-    local mismatches="${MISMATCHES:-1}" # Default to 1 if unset/passed global
+    local mismatches="${DEMUX_MISMATCHES:-1}" # Default to 1 if unset/passed global
 
     log_info "Starting Demultiplexing with cutadapt..."
     log_info "Barcode File: $barcode_file"
