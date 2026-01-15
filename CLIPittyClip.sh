@@ -126,7 +126,8 @@ CITS_PVALUE="0.05"
 CITS_GAP="25"
 RUN_MOTIF="yes"
 MOTIF_FLANK="10"
-CTK_GROUPS_FILE=""  # Optional: group samples for CIMS/CITS aggregation
+CTK_GROUPS_FILE=""  # Optional: group samples for CIMS/CITS aggregation (set by --ctk-group)
+CTK_GROUP_MODE="false"  # Explicit flag for group CTK analysis
 GROUPS_FILE=""      # Standard Groups File for BedGraph/Matrix aggregation
 
 # Capture Start Time (Seconds) for duration calculation
@@ -168,7 +169,8 @@ while [[ $# -gt 0 ]]; do
         --cits-gap) CITS_GAP="$2"; shift 2 ;;
         --motif-flank) MOTIF_FLANK="$2"; shift 2 ;;
         --no-motif) RUN_MOTIF="no"; shift ;;
-        -g|--groups|--ctk-group) GROUPS_FILE="$2"; CTK_GROUPS_FILE="$2"; shift 2 ;;
+        -g|--groups) GROUPS_FILE="$2"; shift 2 ;;  # For bedgraph/matrix grouping only
+        --ctk-group) CTK_GROUP_MODE="true"; shift ;;  # Enable group CTK analysis
         --sample) SAMPLE_SIZE="$2"; shift 2 ;;
         -b|--barcode) BARCODE_FILE="$2"; DEMUX="yes"; shift 2 ;;
         -d|--input-dir) INPUT_DIR="$2"; shift 2 ;;
@@ -295,19 +297,22 @@ fi
 GENOME_INDEX="$(cd "$GENOME_INDEX" && pwd)"
 
 # Validate groups file (requires --cims or --cits)
-if [[ -n "$CTK_GROUPS_FILE" ]]; then
-    if [[ "$RUN_CIMS" != "true" ]] && [[ "$RUN_CITS" != "true" ]]; then
-        log_error "-g/--groups requires --cims and/or --cits"
-        show_usage
+if [[ -n "$GROUPS_FILE" ]]; then
+    if [[ "$RUN_CIMS" != "true" ]] && [[ "$RUN_CITS" != "true" ]] && [[ "$CTK_GROUP_MODE" == "true" ]]; then
+        log_warning "--ctk-group requires --cims and/or --cits. Group CTK will be disabled."
+        CTK_GROUP_MODE="false"
+    fi
+    if [[ ! -f "$GROUPS_FILE" ]]; then
+        log_error "Groups file not found: $GROUPS_FILE"
         exit 1
     fi
-    if [[ ! -f "$CTK_GROUPS_FILE" ]]; then
-        log_error "Groups file not found: $CTK_GROUPS_FILE"
-        exit 1
+    GROUPS_FILE="$(cd "$(dirname "$GROUPS_FILE")" && pwd)/$(basename "$GROUPS_FILE")"
+    # Only set CTK_GROUPS_FILE if group CTK mode is explicitly enabled
+    if [[ "$CTK_GROUP_MODE" == "true" ]]; then
+        CTK_GROUPS_FILE="$GROUPS_FILE"
+        log_info "Group CTK analysis enabled with groups file: $CTK_GROUPS_FILE"
     fi
-    CTK_GROUPS_FILE="$(cd "$(dirname "$CTK_GROUPS_FILE")" && pwd)/$(basename "$CTK_GROUPS_FILE")"
-    GROUPS_FILE="$CTK_GROUPS_FILE"  # Sync absolute path to main variable
-    log_info "Groups file: $CTK_GROUPS_FILE"
+    log_info "Groups file: $GROUPS_FILE"
 fi
 
 # ------------------------------------------------------------------
@@ -720,19 +725,7 @@ if [[ -n "$INPUT_DIR" ]]; then
     
     console_msg "  > Combined peaks: $OUTPUT_ROOT/$DIR_PEAKS/COMBINED_PEAKS/"
     
-    # Cleanup: Move logs and remove intermediate files
-    # Move main log file into output
-    if [[ -f "$LOG_FILE" ]]; then
-        mv "$LOG_FILE" "$OUTPUT_ROOT/$DIR_REPORTS/" 2>/dev/null
-    fi
-    
-    # Clean up any residual CLIPittyClip log files
-    mv CLIPittyClip_*.log "$OUTPUT_ROOT/$DIR_REPORTS/" 2>/dev/null
-    
-    # Remove sampled fastq files (created when --sample is used)
-    rm -f *_sampled_*.fastq.gz 2>/dev/null
-    
-    # Final Summary
+    # Final Summary (print BEFORE moving logs so messages get captured)
     PIPELINE_END=$(date +%s)
     DURATION=$((PIPELINE_END - PIPELINE_START))
     H=$((DURATION/3600))
@@ -742,12 +735,28 @@ if [[ -n "$INPUT_DIR" ]]; then
     console_msg "\n[COMPLETE]"
     console_msg "  > Duration: ${H}h ${M}m ${S}s"
     console_msg "  > Output: $OUTPUT_ROOT/"
+    console_msg "  > Console log: $OUTPUT_ROOT/$DIR_REPORTS/${TEMP_CONSOLE_LOG:-CLIPittyClip.log}"
+    
+    # Cleanup: Move logs and remove intermediate files (AFTER final messages)
+    # Move main log file into output
+    if [[ -f "$LOG_FILE" ]]; then
+        mv "$LOG_FILE" "$OUTPUT_ROOT/$DIR_REPORTS/" 2>/dev/null
+    fi
+    
+    # Clean up any residual CLIPittyClip log files
+    mv CLIPittyClip_*.log "$OUTPUT_ROOT/$DIR_REPORTS/" 2>/dev/null
     
     # Move console log into output for cleaner parent directory
     if [[ -n "$TEMP_CONSOLE_LOG" && -f "$TEMP_CONSOLE_LOG" ]]; then
         mv "$TEMP_CONSOLE_LOG" "$OUTPUT_ROOT/$DIR_REPORTS/${TEMP_CONSOLE_LOG}" 2>/dev/null
-        console_msg "  > Console log: $OUTPUT_ROOT/$DIR_REPORTS/${TEMP_CONSOLE_LOG}"
     fi
+    
+    # Remove sampled fastq files (created when --sample is used)
+    rm -f *_sampled_*.fastq.gz 2>/dev/null
+    
+    # Remove CITS.pl temporary directories and .tmp files (from failed/empty CTK runs)
+    rm -rf CITS.pl_* 2>/dev/null
+    rm -f *.tmp 2>/dev/null
     
     send_notification "CLIPittyClip" "Directory batch analysis complete: $total_samples samples"
     
