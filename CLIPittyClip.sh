@@ -296,6 +296,17 @@ fi
 
 GENOME_INDEX="$(cd "$GENOME_INDEX" && pwd)"
 
+# Thread validation: cap to available cores - 1 (leave 1 for system)
+MAX_AVAILABLE_THREADS=$(nproc 2>/dev/null || echo 4)
+MAX_SAFE_THREADS=$(( MAX_AVAILABLE_THREADS - 1 ))
+[[ $MAX_SAFE_THREADS -lt 1 ]] && MAX_SAFE_THREADS=1
+
+if [[ $THREADS -gt $MAX_SAFE_THREADS ]]; then
+    log_warning "Requested $THREADS threads but only $MAX_AVAILABLE_THREADS cores available."
+    log_warning "Capping to $MAX_SAFE_THREADS threads (leaving 1 for system stability)."
+    THREADS=$MAX_SAFE_THREADS
+fi
+
 # Validate groups file (requires --cims or --cits)
 if [[ -n "$GROUPS_FILE" ]]; then
     if [[ "$RUN_CIMS" != "true" ]] && [[ "$RUN_CITS" != "true" ]] && [[ "$CTK_GROUP_MODE" == "true" ]]; then

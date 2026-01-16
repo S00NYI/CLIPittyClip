@@ -491,7 +491,7 @@ run_mapping_bowtie2() {
     log_info "Mapping complete. Output: $bam_file"
 }
 
-# 3. PCR Duplicate Removal
+# 3. PCR Duplicate Removal (Chromosome Chunking to prevent OOM)
 run_collapse_pcr() {
     local input_bed="$1"
     local output_bed="$2"
@@ -509,15 +509,61 @@ run_collapse_pcr() {
         log_info "No UMI: using position-only collapse"
     fi
     
-    local cmd="$CONDA_PREFIX/bin/perl $(which tag2collapse.pl) --keep-tag-name --keep-max-score ${barcode_flag} \
-        \"${input_bed}\" \"${output_bed}\""
-
-    execute_cmd "$cmd"
-
-    if [ $? -eq 0 ]; then
-        log_info "Collapsing complete."
+    # Create temp directory for chunks
+    local chunk_dir=$(mktemp -d "${TMPDIR:-/tmp}/collapse_chunks.XXXXXX")
+    log_info "Using chromosome-based chunking (temp dir: $chunk_dir)"
+    
+    # Split input BED by chromosome
+    log_info "Splitting BED file by chromosome..."
+    awk -v dir="$chunk_dir" '{print > dir"/chunk_"$1".bed"}' "$input_bed"
+    
+    local chunk_count=$(ls "$chunk_dir"/chunk_*.bed 2>/dev/null | wc -l)
+    log_info "Created $chunk_count chromosome chunks"
+    
+    if [[ $chunk_count -eq 0 ]]; then
+        log_error "No chunks created. Input BED may be empty."
+        rm -rf "$chunk_dir"
+        exit 1
+    fi
+    
+    # Get paths for tag2collapse
+    local perl_bin="$CONDA_PREFIX/bin/perl"
+    local collapse_script="$(which tag2collapse.pl)"
+    
+    # Process each chunk sequentially (safe and reliable)
+    log_info "Processing $chunk_count chunks..."
+    local failed=0
+    for chunk in "$chunk_dir"/chunk_*.bed; do
+        local chunk_base=$(basename "$chunk" .bed)
+        local output_chunk="${chunk_dir}/${chunk_base}_collapsed.bed"
+        
+        # Run tag2collapse on this chunk (stdout to log, stderr suppressed)
+        "$perl_bin" "$collapse_script" --keep-tag-name --keep-max-score $barcode_flag "$chunk" "$output_chunk" >> "${LOG_FILE:-/dev/null}" 2>/dev/null
+        
+        if [[ ! -s "$output_chunk" ]]; then
+            log_warning "Chunk $chunk_base produced no output"
+            ((failed++))
+        fi
+    done
+    
+    if [[ $failed -eq $chunk_count ]]; then
+        log_error "All chunks failed. PCR duplicate removal failed."
+        rm -rf "$chunk_dir"
+        exit 1
+    fi
+    
+    # Merge all collapsed chunks
+    log_info "Merging collapsed chunks..."
+    cat "$chunk_dir"/*_collapsed.bed > "$output_bed" 2>/dev/null
+    
+    # Cleanup
+    rm -rf "$chunk_dir"
+    
+    if [[ -s "$output_bed" ]]; then
+        local output_count=$(wc -l < "$output_bed")
+        log_info "Collapsing complete. Output: $output_count tags"
     else
-        log_error "PCR duplicate removal failed."
+        log_error "PCR duplicate removal failed. Output file is empty."
         exit 1
     fi
 }
