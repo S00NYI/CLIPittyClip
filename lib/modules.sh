@@ -8,6 +8,11 @@ source "$(dirname "${BASH_SOURCE[0]}")/utils.sh"
 # Group File Parsing for CIMS/CITS Aggregation
 # ═══════════════════════════════════════════════════════════════════════════
 
+# Check if GNU parallel is installed
+has_gnu_parallel() {
+    command -v parallel &>/dev/null && parallel --version 2>&1 | head -1 | grep -q "GNU parallel"
+}
+
 # parse_groups_file - Parse groups.txt and output sample→group mapping
 # Input: groups_file path, output_map temp file path
 # Format: sample_name<TAB>group_name (lines starting with # are comments)
@@ -491,7 +496,7 @@ run_mapping_bowtie2() {
     log_info "Mapping complete. Output: $bam_file"
 }
 
-# 3. PCR Duplicate Removal (Chromosome Chunking to prevent OOM)
+# 3. PCR Duplicate Removal (using -c for chromosome-based processing to prevent OOM)
 run_collapse_pcr() {
     local input_bed="$1"
     local output_bed="$2"
@@ -509,61 +514,24 @@ run_collapse_pcr() {
         log_info "No UMI: using position-only collapse"
     fi
     
-    # Create temp directory for chunks
-    local chunk_dir=$(mktemp -d "${TMPDIR:-/tmp}/collapse_chunks.XXXXXX")
-    log_info "Using chromosome-based chunking (temp dir: $chunk_dir)"
+    # Create temp cache directory path for -c option (tag2collapse.pl creates it)
+    local cache_dir=$(mktemp -u "${TMPDIR:-/tmp}/collapse_cache.XXXXXX")
     
-    # Split input BED by chromosome
-    log_info "Splitting BED file by chromosome..."
-    awk -v dir="$chunk_dir" '{print > dir"/chunk_"$1".bed"}' "$input_bed"
+    # Use -c with cache directory for memory-efficient chromosome-based processing
+    local cmd="$CONDA_PREFIX/bin/perl $(which tag2collapse.pl) -c \"${cache_dir}\" --keep-tag-name --keep-max-score ${barcode_flag} \
+        \"${input_bed}\" \"${output_bed}\""
+
+    execute_cmd "$cmd"
+    local exit_code=$?
     
-    local chunk_count=$(ls "$chunk_dir"/chunk_*.bed 2>/dev/null | wc -l)
-    log_info "Created $chunk_count chromosome chunks"
-    
-    if [[ $chunk_count -eq 0 ]]; then
-        log_error "No chunks created. Input BED may be empty."
-        rm -rf "$chunk_dir"
-        exit 1
-    fi
-    
-    # Get paths for tag2collapse
-    local perl_bin="$CONDA_PREFIX/bin/perl"
-    local collapse_script="$(which tag2collapse.pl)"
-    
-    # Process each chunk sequentially (safe and reliable)
-    log_info "Processing $chunk_count chunks..."
-    local failed=0
-    for chunk in "$chunk_dir"/chunk_*.bed; do
-        local chunk_base=$(basename "$chunk" .bed)
-        local output_chunk="${chunk_dir}/${chunk_base}_collapsed.bed"
-        
-        # Run tag2collapse on this chunk (stdout to log, stderr suppressed)
-        "$perl_bin" "$collapse_script" --keep-tag-name --keep-max-score $barcode_flag "$chunk" "$output_chunk" >> "${LOG_FILE:-/dev/null}" 2>/dev/null
-        
-        if [[ ! -s "$output_chunk" ]]; then
-            log_warning "Chunk $chunk_base produced no output"
-            ((failed++))
-        fi
-    done
-    
-    if [[ $failed -eq $chunk_count ]]; then
-        log_error "All chunks failed. PCR duplicate removal failed."
-        rm -rf "$chunk_dir"
-        exit 1
-    fi
-    
-    # Merge all collapsed chunks
-    log_info "Merging collapsed chunks..."
-    cat "$chunk_dir"/*_collapsed.bed > "$output_bed" 2>/dev/null
-    
-    # Cleanup
-    rm -rf "$chunk_dir"
-    
-    if [[ -s "$output_bed" ]]; then
+    # Cleanup cache directory
+    rm -rf "$cache_dir"
+
+    if [ $exit_code -eq 0 ] && [[ -s "$output_bed" ]]; then
         local output_count=$(wc -l < "$output_bed")
         log_info "Collapsing complete. Output: $output_count tags"
     else
-        log_error "PCR duplicate removal failed. Output file is empty."
+        log_error "PCR duplicate removal failed."
         exit 1
     fi
 }
@@ -1238,7 +1206,7 @@ run_ctk_preprocessing() {
     log_info "CTK preprocessing complete. Output: $output_dir"
 }
 
-# 5. CIMS Analysis (CTK)
+# 5. CIMS Analysis (CTK) - with parallel chromosome processing
 # Detects crosslinking-induced mutation sites
 # Input: collapsed BED + mutation file (deletions or substitutions)
 # Output: CIMS.txt with significant mutation sites
@@ -1248,9 +1216,8 @@ run_cims() {
     local output_file="$3"
     local cims_iterations="${4:-10}"  # Default: 10 iterations
     local cims_fdr="${5:-0.001}"      # Default: FDR 0.001
+    local threads="${THREADS:-4}"     # Use global THREADS or default
     
-    # Status update moved to caller (run_ctk_analysis)
-    # update_status "CIMS Analysis"
     log_info "Running CIMS analysis..."
     log_info "Input tags: $input_collapsed_bed"
     log_info "Input mutations: $mutation_bed"
@@ -1269,13 +1236,73 @@ run_cims() {
     # Set up CTK environment
     export PERL5LIB="${CONDA_PREFIX}/lib/czplib:$PERL5LIB"
     
-    # Run CIMS.pl
-    local cmd="CIMS.pl -v -n $cims_iterations '$input_collapsed_bed' '$mutation_bed' '$output_file'"
+    # Check if parallel processing is available and beneficial
+    local use_parallel="false"
+    local chr_count=$(cut -f1 "$input_collapsed_bed" | sort -u | wc -l)
     
-    execute_cmd "$cmd"
-    local cims_exit=$?
+    if has_gnu_parallel && [[ $chr_count -gt 1 ]]; then
+        use_parallel="true"
+        log_info "Using parallel processing ($chr_count chromosomes, $threads threads)"
+    fi
     
-    # CIMS.pl may exit with error on sparse data but still produce valid output
+    if [[ "$use_parallel" == "true" ]]; then
+        # Parallel mode: split by chromosome, process in parallel, merge
+        local chunk_dir=$(mktemp -d "${TMPDIR:-/tmp}/cims_parallel.XXXXXX")
+        
+        # Split collapsed BED by chromosome
+        awk -v dir="$chunk_dir" '{print > dir"/chr_"$1".bed"}' "$input_collapsed_bed"
+        
+        # Create processing script
+        local process_script="$chunk_dir/run_cims_chunk.sh"
+        cat > "$process_script" << 'CIMS_SCRIPT'
+#!/bin/bash
+chunk_file="$1"
+mutation_file="$2"
+iterations="$3"
+output_dir="$4"
+chunk_name=$(basename "$chunk_file" .bed)
+output_chunk="${output_dir}/${chunk_name}.cims.txt"
+export PERL5LIB="${CONDA_PREFIX}/lib/czplib:$PERL5LIB"
+CIMS.pl -n "$iterations" "$chunk_file" "$mutation_file" "$output_chunk" >/dev/null 2>&1
+CIMS_SCRIPT
+        chmod +x "$process_script"
+        
+        # Run parallel with memory safety
+        local parallel_jobs=$(( threads < chr_count ? threads : chr_count ))
+        ls "$chunk_dir"/chr_*.bed 2>/dev/null | \
+            parallel --memfree 2G -j "$parallel_jobs" \
+            "$process_script" {} "$mutation_bed" "$cims_iterations" "$chunk_dir"
+        
+        # Merge results (skip empty files, keep header from first)
+        local first_file="true"
+        > "$output_file"
+        for result in "$chunk_dir"/*.cims.txt; do
+            if [[ -s "$result" ]]; then
+                if [[ "$first_file" == "true" ]]; then
+                    cat "$result" >> "$output_file"
+                    first_file="false"
+                else
+                    # Skip header line for subsequent files
+                    tail -n +2 "$result" >> "$output_file"
+                fi
+            fi
+        done
+        
+        # Cleanup
+        rm -rf "$chunk_dir"
+    else
+        # Sequential mode (fallback)
+        if [[ "$use_parallel" == "false" ]] && has_gnu_parallel; then
+            log_info "Single chromosome detected, using sequential processing"
+        elif ! has_gnu_parallel; then
+            log_info "GNU parallel not available, using sequential processing"
+        fi
+        
+        local cmd="CIMS.pl -v -n $cims_iterations '$input_collapsed_bed' '$mutation_bed' '$output_file'"
+        execute_cmd "$cmd"
+    fi
+    
+    # Process results
     if [[ -s "$output_file" ]]; then
         local raw_count=$(grep -v "^#" "$output_file" | wc -l)
         log_info "CIMS complete: $raw_count total sites in $output_file"
@@ -1294,7 +1321,6 @@ run_cims() {
             # Cleanup unwanted CIMS intermediates
             rm -f mutations_matched.txt deletions.bed substitutions.bed 2>/dev/null
         fi
-        
     else
         echo -e "[WARNING] CIMS produced empty output: $output_file" >> "${LOG_FILE}"
         echo -ne "${YELLOW}[WARNING] Empty Output${NC} > "
@@ -1304,7 +1330,7 @@ run_cims() {
     return 0
 }
 
-# 6. CITS Analysis (CTK)
+# 6. CITS Analysis (CTK) - with parallel chromosome processing
 # Detects crosslinking-induced truncation sites
 # Input: collapsed BED + deletion file (used to EXCLUDE read-through tags)
 # Output: CITS.txt with significant truncation sites (single-nucleotide singletons)
@@ -1314,9 +1340,8 @@ run_cits() {
     local output_file="$3"            # Should be .txt extension
     local cits_pvalue="${4:-0.001}"   # Default: p-value 0.001
     local cits_gap="${5:-25}"         # Default: gap 25 for clustering
+    local threads="${THREADS:-4}"     # Use global THREADS or default
     
-    # Status update moved to caller (run_ctk_analysis)
-    # update_status "CITS Analysis"
     log_info "Running CITS analysis..."
     log_info "Input tags: $input_collapsed_bed"
     log_info "Deletion file (to exclude): $deletion_bed"
@@ -1334,13 +1359,69 @@ run_cits() {
     # Set up CTK environment
     export PERL5LIB="${CONDA_PREFIX}/lib/czplib:$PERL5LIB"
     
-    # Run CITS.pl - outputs intermediate file first
+    # Check if parallel processing is available and beneficial
+    local use_parallel="false"
+    local chr_count=$(cut -f1 "$input_collapsed_bed" | sort -u | wc -l)
+    
+    if has_gnu_parallel && [[ $chr_count -gt 1 ]]; then
+        use_parallel="true"
+        log_info "Using parallel processing ($chr_count chromosomes, $threads threads)"
+    fi
+    
     local cits_raw="${output_file%.txt}_raw.bed"
-    local cmd="CITS.pl -p $cits_pvalue --gap $cits_gap -v '$input_collapsed_bed' '$deletion_bed' '$cits_raw'"
     
-    execute_cmd "$cmd"
-    local cits_exit=$?
+    if [[ "$use_parallel" == "true" ]]; then
+        # Parallel mode: split by chromosome, process in parallel, merge
+        local chunk_dir=$(mktemp -d "${TMPDIR:-/tmp}/cits_parallel.XXXXXX")
+        
+        # Split collapsed BED by chromosome
+        awk -v dir="$chunk_dir" '{print > dir"/chr_"$1".bed"}' "$input_collapsed_bed"
+        
+        # Create processing script
+        local process_script="$chunk_dir/run_cits_chunk.sh"
+        cat > "$process_script" << 'CITS_SCRIPT'
+#!/bin/bash
+chunk_file="$1"
+deletion_file="$2"
+pvalue="$3"
+gap="$4"
+output_dir="$5"
+chunk_name=$(basename "$chunk_file" .bed)
+output_chunk="${output_dir}/${chunk_name}.cits.bed"
+export PERL5LIB="${CONDA_PREFIX}/lib/czplib:$PERL5LIB"
+CITS.pl -p "$pvalue" --gap "$gap" "$chunk_file" "$deletion_file" "$output_chunk" >/dev/null 2>&1
+CITS_SCRIPT
+        chmod +x "$process_script"
+        
+        # Run parallel with memory safety
+        local parallel_jobs=$(( threads < chr_count ? threads : chr_count ))
+        ls "$chunk_dir"/chr_*.bed 2>/dev/null | \
+            parallel --memfree 2G -j "$parallel_jobs" \
+            "$process_script" {} "$deletion_bed" "$cits_pvalue" "$cits_gap" "$chunk_dir"
+        
+        # Merge results
+        > "$cits_raw"
+        for result in "$chunk_dir"/*.cits.bed; do
+            if [[ -s "$result" ]]; then
+                cat "$result" >> "$cits_raw"
+            fi
+        done
+        
+        # Cleanup
+        rm -rf "$chunk_dir"
+    else
+        # Sequential mode (fallback)
+        if [[ "$use_parallel" == "false" ]] && has_gnu_parallel; then
+            log_info "Single chromosome detected, using sequential processing"
+        elif ! has_gnu_parallel; then
+            log_info "GNU parallel not available, using sequential processing"
+        fi
+        
+        local cmd="CITS.pl -p $cits_pvalue --gap $cits_gap -v '$input_collapsed_bed' '$deletion_bed' '$cits_raw'"
+        execute_cmd "$cmd"
+    fi
     
+    # Process results
     if [[ -s "$cits_raw" ]]; then
         local raw_count=$(wc -l < "$cits_raw")
         log_info "CITS raw output: $raw_count sites"
