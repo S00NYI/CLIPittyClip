@@ -31,3 +31,4 @@ dependencies:
   - fastp
   - seqkit
   - homer
+  - parallel
