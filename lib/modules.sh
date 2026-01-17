@@ -517,8 +517,8 @@ run_collapse_pcr() {
     # Create temp cache directory path for -c option (tag2collapse.pl creates it)
     local cache_dir=$(mktemp -u "${TMPDIR:-/tmp}/collapse_cache.XXXXXX")
     
-    # Use -c with cache directory for memory-efficient chromosome-based processing
-    local cmd="$CONDA_PREFIX/bin/perl $(which tag2collapse.pl) -c \"${cache_dir}\" --keep-tag-name --keep-max-score ${barcode_flag} \
+    # Use -big (memory-mapped BIG format) and -c (chromosome-based) for max memory efficiency
+    local cmd="$CONDA_PREFIX/bin/perl $(which tag2collapse.pl) -big -c \"${cache_dir}\" --keep-tag-name --keep-max-score ${barcode_flag} \
         \"${input_bed}\" \"${output_bed}\""
 
     execute_cmd "$cmd"
