@@ -199,14 +199,21 @@ CLIPittyClip.sh --eclip -d /path/to/samples/ -x /path/to/star_index -t 8 --cims 
 For pre-processed ENCODE eCLIP data, use `--eclip` mode:
 
 ```bash
+# eCLIP preprocessing only
+CLIPittyClip.sh --eclip -d /path/to/eclip_fastqs/ -x /path/to/star_index -t 8
+
+# eCLIP with CIMS/CITS analysis (optional, add flags as needed)
 CLIPittyClip.sh --eclip -d /path/to/eclip_fastqs/ -x /path/to/star_index -t 8 --cims --cits
 ```
 
-**What `--eclip` does:**
+**What `--eclip` does (preprocessing only):**
 - **Skips UMI extraction** - UMI is already in read header (ENCODE format: `@NCCTGAATGA:...`)
 - **Uses 9 standard eCLIP adapters** - Automatically trims all adapter variants
 - **Reformats headers for CTK** - Converts to CTK-compatible format for tag2collapse
-- **Dynamic thread scaling** - Automatically limits parallel jobs based on available RAM
+
+> **Note:** `--eclip` only affects preprocessing. CIMS/CITS analysis requires separate `--cims` and/or `--cits` flags.
+
+> **Note:** Dynamic thread scaling for CIMS/CITS (based on available RAM) applies to all modes, not just eCLIP.
 
 **When to use:**
 - ENCODE eCLIP data downloaded from `encodeproject.org`
