@@ -190,11 +190,32 @@ CLIPittyClip.sh -i reads.fastq.gz -x /path/to/star_index -t 8 --ctk
 # OR equivalently:
 CLIPittyClip.sh -i reads.fastq.gz -x /path/to/star_index -t 8 --cims --cits
 
-# eCLIP analysis (ENCODE protocol)
-# - 10bp UMI, custom eCLIP adapter, CIMS+CITS enabled
-CLIPittyClip.sh -d /path/to/samples/ -x /path/to/star_index -t 8 -u 10 \
-    -a "AAGCTGAGATCGGAAGAGCGTCGTGTAG" --cims --cits
+# ENCODE eCLIP analysis (pre-processed files with UMI in header)
+CLIPittyClip.sh --eclip -d /path/to/samples/ -x /path/to/star_index -t 8 --cims --cits
 ```
+
+## ENCODE eCLIP Mode
+
+For pre-processed ENCODE eCLIP data, use `--eclip` mode:
+
+```bash
+CLIPittyClip.sh --eclip -d /path/to/eclip_fastqs/ -x /path/to/star_index -t 8 --cims --cits
+```
+
+**What `--eclip` does:**
+- **Skips UMI extraction** - UMI is already in read header (ENCODE format: `@NCCTGAATGA:...`)
+- **Uses 9 standard eCLIP adapters** - Automatically trims all adapter variants
+- **Reformats headers for CTK** - Converts to CTK-compatible format for tag2collapse
+- **Dynamic thread scaling** - Automatically limits parallel jobs based on available RAM
+
+**When to use:**
+- ENCODE eCLIP data downloaded from `encodeproject.org`
+- Files with UMI already moved to read ID (format: `@UMI:REST_OF_ID`)
+- Pre-demultiplexed eCLIP samples
+
+**Ignored options in eCLIP mode:**
+- `-u` (UMI length) - Detected from header
+- `-a` (adapter) - Uses all 9 eCLIP adapters
 
 ## Input Modes
 
@@ -220,6 +241,7 @@ Run `CLIPittyClip.sh --help` for full usage. Key options:
 | `--demux-mismatches` | Max barcode mismatches (default: 1) |
 | `--align-mismatches` | Max alignment mismatches (default: 2, STAR only) |
 | `--skip-ncrna` | Disable ncRNA pre-filtering (on by default) |
+| `--eclip` | ENCODE eCLIP mode (UMI in header, 9 adapters) |
 | `--cims` | Enable CIMS analysis |
 | `--cits` | Enable CITS analysis |
 | `--cims-fdr` | CIMS FDR threshold (default: 0.05) |

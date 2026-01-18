@@ -60,6 +60,7 @@ function show_usage {
     echo "  -a <str>           3' adapter sequence (default: L32)"
     echo "  --dedup            Enable FASTQ deduplication (default: ON)"
     echo "  --no-dedup         Disable FASTQ deduplication"
+    echo "  --eclip            ENCODE eCLIP mode: UMI in header, uses all eCLIP adapters"
     echo ""
     echo "DEMULTIPLEXING OPTIONS (for -i mode):"
     echo "  -b, --barcode <path>   Barcode file for demultiplexing"
@@ -115,7 +116,8 @@ DEDUP_MODE="true" # Always on by default per user request
 NOTIFY_MODE="false"
 WIZARD_MODE="false"
 SKIP_NCRNA="false"  # ncRNA filtering is ON by default
-ALIGNER="star" # Default match
+ALIGNER="star" # Default aligner
+ECLIP_MODE="false"  # ENCODE eCLIP mode (UMI in header, multiple adapters)
 DEMUX_MISMATCHES="1"   # Default for barcode demultiplexing
 ALIGN_MISMATCHES="2"   # Default for STAR --outFilterMismatchNmax
 
@@ -179,6 +181,7 @@ while [[ $# -gt 0 ]]; do
         --no-dedup) DEDUP_MODE="false"; shift ;;
         --dedup) DEDUP_MODE="true"; shift ;; # Keep for compat
         --skip-ncrna) SKIP_NCRNA="true"; shift ;;
+        --eclip) ECLIP_MODE="true"; shift ;;
         --notification) NOTIFY_MODE="true"; shift ;;
         --child) CHILD_MODE="true"; shift ;;
         --wizard|--advanced)
@@ -397,12 +400,31 @@ if [[ "$CHILD_MODE" != "true" ]]; then
         console_msg "Input File: $(basename "$INPUT_FILE")"
     fi
     console_msg "Index: $GENOME_INDEX"
-    # Display adapter: show "L32" if default, or full custom sequence
-    adapter_display="L32"
-    if [[ "$ADAPTER_3" != "GTGTCAGTCACTTCCAGCGG" ]]; then
-        adapter_display="$ADAPTER_3"
+    
+    # eCLIP Mode Banner
+    if [[ "$ECLIP_MODE" == "true" ]]; then
+        console_msg "╔══════════════════════════════════════════════════════════════════╗"
+        console_msg "║                     eCLIP MODE ENABLED                           ║"
+        console_msg "╠══════════════════════════════════════════════════════════════════╣"
+        console_msg "║  • UMI extraction: DISABLED (UMI already in read header)         ║"
+        console_msg "║  • Adapter trimming: Using 9 standard eCLIP adapters             ║"
+        console_msg "║  • Header reformat: Converting to CTK-compatible format          ║"
+        console_msg "╚══════════════════════════════════════════════════════════════════╝"
+        if [[ "$UMI_LEN" -gt 0 ]]; then
+            console_msg "[WARNING] eCLIP mode: -u ${UMI_LEN} will be ignored (UMI in header)"
+        fi
+        if [[ "$ADAPTER_3" != "GTGTCAGTCACTTCCAGCGG" ]]; then
+            console_msg "[WARNING] eCLIP mode: -a will be ignored (using eCLIP adapters)"
+        fi
+        console_msg "Threads: $THREADS | Mode: eCLIP (ENCODE pre-processed)"
+    else
+        # Display adapter: show "L32" if default, or full custom sequence
+        adapter_display="L32"
+        if [[ "$ADAPTER_3" != "GTGTCAGTCACTTCCAGCGG" ]]; then
+            adapter_display="$ADAPTER_3"
+        fi
+        console_msg "Threads: $THREADS | UMI: ${UMI_LEN}bp | Adapter: $adapter_display"
     fi
-    console_msg "Threads: $THREADS | UMI: ${UMI_LEN}bp | Adapter: $adapter_display"
     console_msg "********************************************************************************"
     
     # Log Start (File Only)
@@ -484,6 +506,7 @@ if [[ -n "$INPUT_DIR" ]]; then
     if [[ "$KEEP_INTERMEDIATE" == "yes" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS -k"; fi
     if [[ "$SAMPLE_SIZE" -gt 0 ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --sample $SAMPLE_SIZE"; fi
     EXTRA_FLAGS="$EXTRA_FLAGS --aligner $ALIGNER"
+    if [[ "$ECLIP_MODE" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --eclip"; fi
     EXTRA_FLAGS="$EXTRA_FLAGS --no-dedup"  # Assume pre-processed, skip dedup
     EXTRA_FLAGS="$EXTRA_FLAGS --child"
     
@@ -879,6 +902,7 @@ if [[ "$DEMUX" == "yes" ]]; then
     
     # Pass Aligner choice
     EXTRA_FLAGS="$EXTRA_FLAGS --aligner $ALIGNER"
+    if [[ "$ECLIP_MODE" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --eclip"; fi
     
     # We already deduped the pooled file before demux (if DEDUP_MODE was true).
     # So we explicitly tell child processes NOT to dedup again to save time.
@@ -1363,7 +1387,7 @@ LOG_FILE="${BASENAME}_analysis.log" # redirect log to inside analysis dir
 log_info "Working directory: $(pwd)"
 
 # 1. Preprocessing
-run_preprocessing "$INPUT_FILE" "$BASENAME" "$UMI_LEN" "$ADAPTER_3" "$THREADS" "$SAMPLE_SIZE" "$DEDUP_MODE"
+run_preprocessing "$INPUT_FILE" "$BASENAME" "$UMI_LEN" "$ADAPTER_3" "$THREADS" "$SAMPLE_SIZE" "$DEDUP_MODE" "$ECLIP_MODE"
 
 # 1b. ncRNA Pre-filtering (if enabled and index exists)
 CLEANED_FASTQ="${BASENAME}_cleaned.fastq.gz"

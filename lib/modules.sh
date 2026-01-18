@@ -13,6 +13,49 @@ has_gnu_parallel() {
     command -v parallel &>/dev/null && parallel --version 2>&1 | head -1 | grep -q "GNU parallel"
 }
 
+# Calculate optimal number of parallel jobs based on available RAM and file size
+# Arguments: $1 = user_threads, $2 = input_file, $3 = min_ram_per_job_gb (default: 2)
+# Output: echoes optimal job count
+calculate_optimal_parallel_jobs() {
+    local user_threads="$1"
+    local input_file="$2"
+    local min_ram_per_job="${3:-2}"  # Default: 2GB per job minimum
+    
+    # Get available RAM in GB (use 'available' column from free)
+    local available_ram_gb
+    available_ram_gb=$(free -g 2>/dev/null | awk '/^Mem:/ {print $7}')
+    
+    # Fallback if free -g fails
+    if [[ -z "$available_ram_gb" ]] || [[ "$available_ram_gb" -eq 0 ]]; then
+        available_ram_gb=8  # Conservative default
+    fi
+    
+    # Get file size and estimate RAM per job
+    # Rule of thumb: jobs processing large files need more RAM
+    local file_lines=0
+    if [[ -f "$input_file" ]]; then
+        file_lines=$(wc -l < "$input_file" 2>/dev/null || echo 0)
+    fi
+    
+    # Estimate: for files with >1M lines, use more RAM per job
+    local ram_per_job=$min_ram_per_job
+    if [[ "$file_lines" -gt 1000000 ]]; then
+        ram_per_job=4  # Large files need 4GB per job
+    elif [[ "$file_lines" -gt 5000000 ]]; then
+        ram_per_job=6  # Very large files need 6GB per job
+    fi
+    
+    # Calculate RAM-based job limit
+    local ram_based_jobs=$((available_ram_gb / ram_per_job))
+    ram_based_jobs=$((ram_based_jobs > 0 ? ram_based_jobs : 1))  # At least 1
+    
+    # Final = minimum of user threads and RAM-based limit
+    local optimal_jobs=$((user_threads < ram_based_jobs ? user_threads : ram_based_jobs))
+    optimal_jobs=$((optimal_jobs > 0 ? optimal_jobs : 1))  # At least 1
+    
+    echo "$optimal_jobs"
+}
+
 # parse_groups_file - Parse groups.txt and output sample→group mapping
 # Input: groups_file path, output_map temp file path
 # Format: sample_name<TAB>group_name (lines starting with # are comments)
@@ -126,6 +169,56 @@ function run_demultiplexing {
     fi
 }
 
+# Reformat eCLIP headers from ENCODE format to CTK format
+# ENCODE format: @NCCTGAATGA:K00180:234:... (UMI at start of read ID)
+# CTK format:    @K00180:234:...#1#NCCTGAATGA (UMI at end with #1# delimiter)
+reformat_eclip_headers() {
+    local input_fastq="$1"
+    local output_fastq="$2"
+    
+    log_info "Reformatting eCLIP headers to CTK format..."
+    
+    # Use awk to reformat headers while preserving all other lines
+    zcat "$input_fastq" | awk '
+    {
+        if (NR % 4 == 1) {
+            # Header line: @UMI:REST_OF_ID COMMENT
+            # Split on space to separate ID from comment
+            n = split($0, parts, " ")
+            id_part = parts[1]
+            comment = ""
+            if (n > 1) {
+                for (i=2; i<=n; i++) comment = comment " " parts[i]
+            }
+            
+            # Parse ID: @UMI:REST
+            # Remove leading @
+            id_no_at = substr(id_part, 2)
+            
+            # Split on first colon to get UMI
+            colon_pos = index(id_no_at, ":")
+            if (colon_pos > 0) {
+                umi = substr(id_no_at, 1, colon_pos-1)
+                rest = substr(id_no_at, colon_pos+1)
+                # CTK format: @REST#1#UMI
+                print "@" rest "#1#" umi comment
+            } else {
+                # No colon found, print as-is
+                print $0
+            }
+        } else {
+            print $0
+        }
+    }' | gzip > "$output_fastq"
+    
+    if [[ -s "$output_fastq" ]]; then
+        log_info "Header reformatting complete: $output_fastq"
+    else
+        log_error "Header reformatting failed - output is empty"
+        return 1
+    fi
+}
+
 # 1. Preprocessing with fastp
 run_preprocessing() {
     local input_file="$1"
@@ -135,9 +228,19 @@ run_preprocessing() {
     local threads="$5"
     local sample_size="$6"
     local dedup_mode="$7"
+    local eclip_mode="${8:-false}"  # eCLIP mode: UMI in header, use adapter FASTA
     
     update_status_first "Preprocessing"
     log_info "Starting preprocessing with fastp..."
+    
+    # Get path to eCLIP adapter FASTA (same dir as this script)
+    local script_dir="$(dirname "${BASH_SOURCE[0]}")"
+    local eclip_adapters_fasta="${script_dir}/eclip_adapters.fa"
+    
+    if [[ "$eclip_mode" == "true" ]]; then
+        log_info "eCLIP mode: UMI already in header, skipping UMI extraction from sequence"
+        log_info "eCLIP mode: Using 9 standard eCLIP adapters from ${eclip_adapters_fasta}"
+    fi
     
     # Define Fastp Command Function
     run_fastp_cmd() {
@@ -148,9 +251,19 @@ run_preprocessing() {
             --average_qual 30 \
             --html ${output_prefix}_fastp.html \
             --json ${output_prefix}_fastp.json"
-            
-        if [ -n "$adapter3" ]; then cmd+=" --adapter_sequence ${adapter3}"; fi
-        if [ "$umi_len" -gt 0 ]; then cmd+=" --umi --umi_loc=read1 --umi_len=${umi_len} --umi_delim=#"; fi
+        # Adapter handling - eCLIP uses FASTA with multiple adapters
+        if [[ "$eclip_mode" == "true" ]]; then
+            if [[ -f "$eclip_adapters_fasta" ]]; then
+                cmd+=" --adapter_fasta ${eclip_adapters_fasta}"
+            else
+                log_warning "eCLIP adapter file not found: ${eclip_adapters_fasta}"
+            fi
+            # DO NOT add --umi flags - UMI is already in header for eCLIP
+        else
+            # Standard mode: single adapter and UMI extraction
+            if [ -n "$adapter3" ]; then cmd+=" --adapter_sequence ${adapter3}"; fi
+            if [ "$umi_len" -gt 0 ]; then cmd+=" --umi --umi_loc=read1 --umi_len=${umi_len} --umi_delim=#"; fi
+        fi
         if [ "$sample_size" -gt 0 ]; then cmd+=" --reads_to_process $sample_size"; fi
         
         # Note: DEDUP is handled externally via seqkit before fastp if requested.
@@ -230,6 +343,22 @@ run_preprocessing() {
 
     if [ $exit_code -eq 0 ]; then
         log_info "Preprocessing complete."
+        
+        # eCLIP mode: Reformat headers to CTK format for tag2collapse compatibility
+        if [[ "$eclip_mode" == "true" ]]; then
+            local cleaned_fastq="${output_prefix}_cleaned.fastq.gz"
+            local reformatted_fastq="${output_prefix}_cleaned_reformatted.fastq.gz"
+            
+            reformat_eclip_headers "$cleaned_fastq" "$reformatted_fastq"
+            
+            if [[ -s "$reformatted_fastq" ]]; then
+                # Replace original with reformatted
+                mv "$reformatted_fastq" "$cleaned_fastq"
+                log_info "eCLIP: Headers reformatted to CTK format"
+            else
+                log_warning "eCLIP header reformatting failed, continuing with original format"
+            fi
+        fi
     else
         log_error "fastp failed even after repair attempt."
         exit 1
@@ -1262,15 +1391,22 @@ iterations="$3"
 output_dir="$4"
 chunk_name=$(basename "$chunk_file" .bed)
 output_chunk="${output_dir}/${chunk_name}.cims.txt"
+cache_dir=$(mktemp -u "${TMPDIR:-/tmp}/cims_cache.XXXXXX")
 export PERL5LIB="${CONDA_PREFIX}/lib/czplib:$PERL5LIB"
-CIMS.pl -n "$iterations" "$chunk_file" "$mutation_file" "$output_chunk" >/dev/null 2>&1
+CIMS.pl -big -c "$cache_dir" -n "$iterations" "$chunk_file" "$mutation_file" "$output_chunk" >/dev/null 2>&1
+rm -rf "$cache_dir" 2>/dev/null
 CIMS_SCRIPT
         chmod +x "$process_script"
         
-        # Run parallel with memory safety
-        local parallel_jobs=$(( threads < chr_count ? threads : chr_count ))
+        # Calculate optimal parallel jobs based on RAM and file size
+        local optimal_jobs=$(calculate_optimal_parallel_jobs "$threads" "$input_collapsed_bed")
+        local parallel_jobs=$(( optimal_jobs < chr_count ? optimal_jobs : chr_count ))
+        
+        # Show thread usage in console
+        echo -ne "${CYAN}CIMS ($parallel_jobs/${threads} threads)${NC} > " >&2
+        
         ls "$chunk_dir"/chr_*.bed 2>/dev/null | \
-            parallel --memfree 2G -j "$parallel_jobs" \
+            parallel --memfree 4G -j "$parallel_jobs" \
             "$process_script" {} "$mutation_bed" "$cims_iterations" "$chunk_dir"
         
         # Merge results (skip empty files, keep header from first)
@@ -1297,9 +1433,11 @@ CIMS_SCRIPT
         elif ! has_gnu_parallel; then
             log_info "GNU parallel not available, using sequential processing"
         fi
-        
-        local cmd="CIMS.pl -v -n $cims_iterations '$input_collapsed_bed' '$mutation_bed' '$output_file'"
+        # Use -big -c for memory efficiency in sequential mode
+        local cache_dir=$(mktemp -u "${TMPDIR:-/tmp}/cims_cache.XXXXXX")
+        local cmd="CIMS.pl -big -c '$cache_dir' -v -n $cims_iterations '$input_collapsed_bed' '$mutation_bed' '$output_file'"
         execute_cmd "$cmd"
+        rm -rf "$cache_dir" 2>/dev/null
     fi
     
     # Process results
@@ -1388,15 +1526,22 @@ gap="$4"
 output_dir="$5"
 chunk_name=$(basename "$chunk_file" .bed)
 output_chunk="${output_dir}/${chunk_name}.cits.bed"
+cache_dir=$(mktemp -u "${TMPDIR:-/tmp}/cits_cache.XXXXXX")
 export PERL5LIB="${CONDA_PREFIX}/lib/czplib:$PERL5LIB"
-CITS.pl -p "$pvalue" --gap "$gap" "$chunk_file" "$deletion_file" "$output_chunk" >/dev/null 2>&1
+CITS.pl -big -c "$cache_dir" -p "$pvalue" --gap "$gap" "$chunk_file" "$deletion_file" "$output_chunk" >/dev/null 2>&1
+rm -rf "$cache_dir" 2>/dev/null
 CITS_SCRIPT
         chmod +x "$process_script"
         
-        # Run parallel with memory safety
-        local parallel_jobs=$(( threads < chr_count ? threads : chr_count ))
+        # Calculate optimal parallel jobs based on RAM and file size
+        local optimal_jobs=$(calculate_optimal_parallel_jobs "$threads" "$input_collapsed_bed")
+        local parallel_jobs=$(( optimal_jobs < chr_count ? optimal_jobs : chr_count ))
+        
+        # Show thread usage in console
+        echo -ne "${CYAN}CITS ($parallel_jobs/${threads} threads)${NC} > " >&2
+        
         ls "$chunk_dir"/chr_*.bed 2>/dev/null | \
-            parallel --memfree 2G -j "$parallel_jobs" \
+            parallel --memfree 4G -j "$parallel_jobs" \
             "$process_script" {} "$deletion_bed" "$cits_pvalue" "$cits_gap" "$chunk_dir"
         
         # Merge results
@@ -1416,9 +1561,11 @@ CITS_SCRIPT
         elif ! has_gnu_parallel; then
             log_info "GNU parallel not available, using sequential processing"
         fi
-        
-        local cmd="CITS.pl -p $cits_pvalue --gap $cits_gap -v '$input_collapsed_bed' '$deletion_bed' '$cits_raw'"
+        # Use -big -c for memory efficiency in sequential mode
+        local cache_dir=$(mktemp -u "${TMPDIR:-/tmp}/cits_cache.XXXXXX")
+        local cmd="CITS.pl -big -c '$cache_dir' -p $cits_pvalue --gap $cits_gap -v '$input_collapsed_bed' '$deletion_bed' '$cits_raw'"
         execute_cmd "$cmd"
+        rm -rf "$cache_dir" 2>/dev/null
     fi
     
     # Process results
