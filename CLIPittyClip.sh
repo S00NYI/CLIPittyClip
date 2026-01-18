@@ -122,7 +122,7 @@ DEMUX_MISMATCHES="1"   # Default for barcode demultiplexing
 ALIGN_MISMATCHES="2"   # Default for STAR --outFilterMismatchNmax
 
 # CTK CIMS/CITS Parameters (with defaults)
-CIMS_ITERATIONS="10"
+CIMS_ITERATIONS="5"
 CIMS_FDR="0.05"
 CITS_PVALUE="0.05"
 CITS_GAP="25"

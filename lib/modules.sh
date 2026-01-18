@@ -200,8 +200,8 @@ reformat_eclip_headers() {
             if (colon_pos > 0) {
                 umi = substr(id_no_at, 1, colon_pos-1)
                 rest = substr(id_no_at, colon_pos+1)
-                # CTK format: @REST#1#UMI
-                print "@" rest "#1#" umi comment
+                # CTK format: @REST#UMI (single # like standard CLIP)
+                print "@" rest "#" umi comment
             } else {
                 # No colon found, print as-is
                 print $0
@@ -1378,8 +1378,10 @@ run_cims() {
         # Parallel mode: split by chromosome, process in parallel, merge
         local chunk_dir=$(mktemp -d "${TMPDIR:-/tmp}/cims_parallel.XXXXXX")
         
-        # Split collapsed BED by chromosome
-        awk -v dir="$chunk_dir" '{print > dir"/chr_"$1".bed"}' "$input_collapsed_bed"
+        # Split collapsed BED by chromosome (standard chromosomes only: chr1-22, X, Y, M)
+        # This filters out contigs like KI270737.1, GL000220.1, etc.
+        grep -E '^chr([1-9]|1[0-9]|2[0-2]|X|Y|M)[[:space:]]' "$input_collapsed_bed" | \
+            awk -v dir="$chunk_dir" '{print > dir"/chr_"$1".bed"}'
         
         # Create processing script
         local process_script="$chunk_dir/run_cims_chunk.sh"
@@ -1510,8 +1512,10 @@ run_cits() {
         # Parallel mode: split by chromosome, process in parallel, merge
         local chunk_dir=$(mktemp -d "${TMPDIR:-/tmp}/cits_parallel.XXXXXX")
         
-        # Split collapsed BED by chromosome
-        awk -v dir="$chunk_dir" '{print > dir"/chr_"$1".bed"}' "$input_collapsed_bed"
+        # Split collapsed BED by chromosome (standard chromosomes only: chr1-22, X, Y, M)
+        # This filters out contigs like KI270737.1, GL000220.1, etc.
+        grep -E '^chr([1-9]|1[0-9]|2[0-2]|X|Y|M)[[:space:]]' "$input_collapsed_bed" | \
+            awk -v dir="$chunk_dir" '{print > dir"/chr_"$1".bed"}'
         
         # Create processing script
         local process_script="$chunk_dir/run_cits_chunk.sh"
@@ -1838,12 +1842,12 @@ run_ctk_analysis() {
         # Run motif on CIMS results (if enabled) - per-sample
         if [[ "$run_motif" == "yes" ]]; then
             if [[ -s "$cims_del_file" ]]; then
-                run_motif_analysis "$cims_del_file" "${output_dir}/CIMS/CIMS_del_motif" \
+                run_motif_analysis "$cims_del_file" "${output_dir}/CIMS/${sample_name}_CIMS_del_motif" \
                     "$genome_fasta" "$motif_flank" "CIMS_del"
             fi
             
             if [[ -s "$cims_sub_file" ]]; then
-                run_motif_analysis "$cims_sub_file" "${output_dir}/CIMS/CIMS_sub_motif" \
+                run_motif_analysis "$cims_sub_file" "${output_dir}/CIMS/${sample_name}_CIMS_sub_motif" \
                     "$genome_fasta" "$motif_flank" "CIMS_sub"
             fi
         fi
@@ -1862,7 +1866,7 @@ run_ctk_analysis() {
             # Run motif on CITS results (if enabled) - per-sample
             if [[ "$run_motif" == "yes" ]]; then
                 if [[ -s "$cits_file" ]]; then
-                    run_motif_analysis "$cits_file" "${output_dir}/CITS/CITS_motif" \
+                    run_motif_analysis "$cits_file" "${output_dir}/CITS/${sample_name}_CITS_motif" \
                         "$genome_fasta" "$motif_flank" "CITS"
                 fi
             fi
