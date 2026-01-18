@@ -425,6 +425,10 @@ if [[ "$CHILD_MODE" != "true" ]]; then
         fi
         console_msg "Threads: $THREADS | UMI: ${UMI_LEN}bp | Adapter: $adapter_display"
     fi
+    # Note about dynamic thread scaling for CIMS/CITS
+    if [[ "$RUN_CIMS" == "true" ]] || [[ "$RUN_CITS" == "true" ]]; then
+        console_msg "Note: CIMS/CITS threads may be reduced based on available memory"
+    fi
     console_msg "********************************************************************************"
     
     # Log Start (File Only)

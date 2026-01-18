@@ -1401,9 +1401,7 @@ CIMS_SCRIPT
         # Calculate optimal parallel jobs based on RAM and file size
         local optimal_jobs=$(calculate_optimal_parallel_jobs "$threads" "$input_collapsed_bed")
         local parallel_jobs=$(( optimal_jobs < chr_count ? optimal_jobs : chr_count ))
-        
-        # Show thread usage in console
-        echo -ne "${CYAN}CIMS ($parallel_jobs/${threads} threads)${NC} > " >&2
+        log_info "CIMS: Using $parallel_jobs/$threads threads based on available RAM"
         
         ls "$chunk_dir"/chr_*.bed 2>/dev/null | \
             parallel --memfree 4G -j "$parallel_jobs" \
@@ -1536,9 +1534,7 @@ CITS_SCRIPT
         # Calculate optimal parallel jobs based on RAM and file size
         local optimal_jobs=$(calculate_optimal_parallel_jobs "$threads" "$input_collapsed_bed")
         local parallel_jobs=$(( optimal_jobs < chr_count ? optimal_jobs : chr_count ))
-        
-        # Show thread usage in console
-        echo -ne "${CYAN}CITS ($parallel_jobs/${threads} threads)${NC} > " >&2
+        log_info "CITS: Using $parallel_jobs/$threads threads based on available RAM"
         
         ls "$chunk_dir"/chr_*.bed 2>/dev/null | \
             parallel --memfree 4G -j "$parallel_jobs" \
