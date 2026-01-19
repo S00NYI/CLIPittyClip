@@ -118,6 +118,7 @@ WIZARD_MODE="false"
 SKIP_NCRNA="false"  # ncRNA filtering is ON by default
 ALIGNER="star" # Default aligner
 ECLIP_MODE="false"  # ENCODE eCLIP mode (UMI in header, multiple adapters)
+FILTER_CHR="true"   # Filter to canonical chromosomes (chr1-22, X, Y, M) - default ON
 DEMUX_MISMATCHES="1"   # Default for barcode demultiplexing
 ALIGN_MISMATCHES="2"   # Default for STAR --outFilterMismatchNmax
 
@@ -182,6 +183,7 @@ while [[ $# -gt 0 ]]; do
         --dedup) DEDUP_MODE="true"; shift ;; # Keep for compat
         --skip-ncrna) SKIP_NCRNA="true"; shift ;;
         --eclip) ECLIP_MODE="true"; shift ;;
+        --no-chr-filter) FILTER_CHR="false"; shift ;;
         --notification) NOTIFY_MODE="true"; shift ;;
         --child) CHILD_MODE="true"; shift ;;
         --wizard|--advanced)
@@ -807,17 +809,28 @@ if [[ "$DEMUX" == "yes" ]]; then
     # 1a. Deduplication (if enabled)
     if [[ "$DEDUP_MODE" == "true" ]]; then
         console_msg "\n[DEDUPLICATING]"
-        print_section_item "Deduplicating Pooled Reads (SeqKit)"
+        print_section_item "Deduplicating Pooled Reads (fastq2collapse.pl)"
         
-        dedup_temp="pooled_dedup.fastq.gz"
-        seqkit rmdup -s -o "$dedup_temp" "$INPUT_FILE" 2>> "${LOG_FILE}"
+        dedup_temp="pooled_dedup.fastq"
+        dedup_temp_gz="pooled_dedup.fastq.gz"
+        
+        # Use fastq2collapse.pl to track duplicate counts for CTK compatibility
+        if [[ "$INPUT_FILE" == *.gz ]]; then
+            gzip -dc "$INPUT_FILE" > pooled_input_temp.fastq
+            fastq2collapse.pl pooled_input_temp.fastq "$dedup_temp" 2>> "${LOG_FILE}"
+            rm -f pooled_input_temp.fastq
+        else
+            fastq2collapse.pl "$INPUT_FILE" "$dedup_temp" 2>> "${LOG_FILE}"
+        fi
         
         if [[ $? -eq 0 && -s "$dedup_temp" ]]; then
-            WORK_INPUT="$dedup_temp"
+            gzip -c "$dedup_temp" > "$dedup_temp_gz"
+            rm -f "$dedup_temp"
+            WORK_INPUT="$dedup_temp_gz"
             print_section_item "Deduplicating Complete"
         else
             log_warning "Deduplication failed. Using original file."
-            rm -f "$dedup_temp"
+            rm -f "$dedup_temp" "$dedup_temp_gz"
             WORK_INPUT="$INPUT_FILE"
         fi
     else
@@ -1420,6 +1433,14 @@ fi
 # 3. PCR Collapse
 # BAM is "${MAPPED_PREFIX}.Aligned.sortedByCoord.out.bam"
 BAM_FILE="${MAPPED_PREFIX}.Aligned.sortedByCoord.out.bam"
+
+# 3a. Canonical chromosome filtering (default ON, disable with --no-chr-filter)
+if [[ "$FILTER_CHR" == "true" ]]; then
+    FILTERED_BAM="${MAPPED_PREFIX}.filtered.bam"
+    filter_canonical_chromosomes "$BAM_FILE" "$FILTERED_BAM"
+    BAM_FILE="$FILTERED_BAM"
+fi
+
 COLLAPSED_BED="${BASENAME}_collapsed.bed"
 MUTATION_FILE="${BASENAME}_mutations.txt"
 

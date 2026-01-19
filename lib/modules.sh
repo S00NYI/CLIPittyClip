@@ -169,52 +169,143 @@ function run_demultiplexing {
     fi
 }
 
-# Reformat eCLIP headers from ENCODE format to CTK format
-# ENCODE format: @NCCTGAATGA:K00180:234:... (UMI at start of read ID)
-# CTK format:    @K00180:234:...#1#NCCTGAATGA (UMI at end with #1# delimiter)
-reformat_eclip_headers() {
+# Filter BAM to canonical chromosomes only (chr1-22, X, Y, M)
+# Removes contigs like GL000220.1, KI270733.1, etc.
+# This reduces data size and improves downstream processing speed
+filter_canonical_chromosomes() {
+    local input_bam="$1"
+    local output_bam="$2"
+    
+    log_info "Filtering to canonical chromosomes (chr1-22, X, Y, M)..."
+    
+    # Create list of canonical chromosomes
+    local chr_list="chr1 chr2 chr3 chr4 chr5 chr6 chr7 chr8 chr9 chr10"
+    chr_list+=" chr11 chr12 chr13 chr14 chr15 chr16 chr17 chr18 chr19"
+    chr_list+=" chr20 chr21 chr22 chrX chrY chrM"
+    
+    # Count reads before filtering
+    local before_count=$(samtools view -c "$input_bam")
+    
+    # Filter BAM to canonical chromosomes
+    samtools view -b "$input_bam" $chr_list > "$output_bam" 2>> "${LOG_FILE}"
+    
+    if [[ $? -eq 0 && -s "$output_bam" ]]; then
+        samtools index "$output_bam"
+        local after_count=$(samtools view -c "$output_bam")
+        local filtered=$((before_count - after_count))
+        log_info "Chromosome filtering complete: $after_count reads kept, $filtered reads on contigs removed"
+    else
+        log_warning "Chromosome filtering failed. Using unfiltered BAM."
+        cp "$input_bam" "$output_bam"
+        samtools index "$output_bam"
+    fi
+}
+
+# Detect eCLIP UMI length from first read of FASTQ file
+# Returns the detected UMI length (e.g., 5 or 10)
+detect_eclip_umi_length() {
+    local input_fastq="$1"
+    local user_umi_len="${2:-0}"
+    
+    # Get first read header and extract UMI (before first colon)
+    local first_header
+    if [[ "$input_fastq" == *.gz ]]; then
+        first_header=$(zcat "$input_fastq" | head -1)
+    else
+        first_header=$(head -1 "$input_fastq")
+    fi
+    
+    # Parse: @UMI:REST_OF_ID -> extract UMI
+    local id_part="${first_header%% *}"  # Remove comment after space
+    local id_no_at="${id_part#@}"        # Remove leading @
+    local umi="${id_no_at%%:*}"          # Get part before first colon
+    local detected_len=${#umi}
+    
+    if [[ "$user_umi_len" -gt 0 && "$detected_len" -ne "$user_umi_len" ]]; then
+        log_warning "Detected UMI length ($detected_len) differs from specified ($user_umi_len). Using detected."
+    fi
+    
+    log_info "eCLIP UMI length detected: $detected_len nt"
+    echo "$detected_len"
+}
+
+# Reformat eCLIP: Move UMI from header to sequence (Zhang Lab approach)
+# This is required for correct fastq2collapse.pl behavior
+# Input:  @UMI:READ_ID
+#         SEQUENCE
+# Output: @READ_ID
+#         UMI+SEQUENCE (UMI prepended)
+#         +
+#         UMI_QUAL+QUAL (high quality prepended)
+reformat_eclip_umi_to_sequence() {
     local input_fastq="$1"
     local output_fastq="$2"
+    local umi_len="$3"
     
-    log_info "Reformatting eCLIP headers to CTK format..."
+    log_info "Moving eCLIP UMI from header to sequence (Zhang Lab approach)..."
+    log_info "UMI length: $umi_len nt"
     
-    # Use awk to reformat headers while preserving all other lines
-    zcat "$input_fastq" | awk '
+    # Generate quality string for UMI (I = Phred 40, high quality)
+    local umi_qual=$(printf 'I%.0s' $(seq 1 $umi_len))
+    
+    zcat "$input_fastq" | awk -v umi_len="$umi_len" -v umi_qual="$umi_qual" '
+    BEGIN { OFS="" }
     {
         if (NR % 4 == 1) {
-            # Header line: @UMI:REST_OF_ID COMMENT
-            # Split on space to separate ID from comment
+            # Header line: @UMI:READ_ID COMMENT
             n = split($0, parts, " ")
             id_part = parts[1]
             comment = ""
-            if (n > 1) {
-                for (i=2; i<=n; i++) comment = comment " " parts[i]
-            }
+            if (n > 1) { for (i=2; i<=n; i++) comment = comment " " parts[i] }
             
-            # Parse ID: @UMI:REST
-            # Remove leading @
             id_no_at = substr(id_part, 2)
-            
-            # Split on first colon to get UMI
             colon_pos = index(id_no_at, ":")
             if (colon_pos > 0) {
                 umi = substr(id_no_at, 1, colon_pos-1)
                 rest = substr(id_no_at, colon_pos+1)
-                # CTK format: @REST#UMI (single # like standard CLIP)
-                print "@" rest "#" umi comment
+                # Store UMI for sequence line, output clean header
+                saved_umi = umi
+                print "@" rest comment
             } else {
-                # No colon found, print as-is
+                saved_umi = ""
                 print $0
             }
+        } else if (NR % 4 == 2) {
+            # Sequence line: prepend UMI
+            print saved_umi $0
+        } else if (NR % 4 == 0) {
+            # Quality line: prepend UMI quality scores
+            print umi_qual $0
         } else {
+            # + line
             print $0
         }
     }' | gzip > "$output_fastq"
     
     if [[ -s "$output_fastq" ]]; then
-        log_info "Header reformatting complete: $output_fastq"
+        log_info "UMI moved to sequence: $output_fastq"
     else
-        log_error "Header reformatting failed - output is empty"
+        log_error "UMI reformat failed - output is empty"
+        return 1
+    fi
+}
+
+# Strip UMI from sequence and attach to read ID after collapse
+# Uses CTK stripBarcode.pl to extract UMI from 5' end of sequence
+# Result: @READ_ID#count#UMI (CTK-compatible format)
+strip_eclip_barcode() {
+    local input_fastq="$1"
+    local output_fastq="$2"
+    local umi_len="$3"
+    
+    log_info "Stripping UMI from sequence with stripBarcode.pl (len=$umi_len)..."
+    
+    stripBarcode.pl -format fastq -len "$umi_len" "$input_fastq" - 2>> "${LOG_FILE}" | gzip > "$output_fastq"
+    
+    if [[ -s "$output_fastq" ]]; then
+        log_info "UMI stripped and attached to read ID: $output_fastq"
+    else
+        log_error "stripBarcode.pl failed - output is empty"
         return 1
     fi
 }
@@ -231,16 +322,87 @@ run_preprocessing() {
     local eclip_mode="${8:-false}"  # eCLIP mode: UMI in header, use adapter FASTA
     
     update_status_first "Preprocessing"
-    log_info "Starting preprocessing with fastp..."
+    log_info "Starting preprocessing..."
     
     # Get path to eCLIP adapter FASTA (same dir as this script)
     local script_dir="$(dirname "${BASH_SOURCE[0]}")"
     local eclip_adapters_fasta="${script_dir}/eclip_adapters.fa"
     
+    #==========================================================================
+    # eCLIP MODE: Zhang Lab workflow
+    # 1. UMI header → sequence
+    # 2. fastp (adapter trim, no --umi)
+    # 3. fastq2collapse.pl (collapse with UMI in sequence)
+    # 4. stripBarcode.pl (extract UMI to header after count)
+    #==========================================================================
     if [[ "$eclip_mode" == "true" ]]; then
-        log_info "eCLIP mode: UMI already in header, skipping UMI extraction from sequence"
-        log_info "eCLIP mode: Using 9 standard eCLIP adapters from ${eclip_adapters_fasta}"
+        log_info "eCLIP mode: Using Zhang Lab preprocessing workflow"
+        
+        # Step 1: Detect and validate UMI length
+        local detected_umi_len=$(detect_eclip_umi_length "$input_file" "$umi_len")
+        umi_len="$detected_umi_len"
+        
+        # Step 2: Move UMI from header to sequence
+        update_status "  eCLIP: UMI → Sequence"
+        local umi_seq_file="${output_prefix}_umi_in_seq.fastq.gz"
+        reformat_eclip_umi_to_sequence "$input_file" "$umi_seq_file" "$umi_len"
+        if [[ ! -s "$umi_seq_file" ]]; then
+            log_error "Failed to reformat eCLIP UMI to sequence"
+            exit 1
+        fi
+        
+        # Step 3: Adapter trimming with fastp (eCLIP params from Zhang Lab)
+        update_status "  eCLIP: Adapter Trimming"
+        local trimmed_file="${output_prefix}_trimmed.fastq.gz"
+        local fastp_cmd="fastp -i ${umi_seq_file} -o ${trimmed_file} \
+            --thread ${threads} \
+            --adapter_fasta ${eclip_adapters_fasta} \
+            --length_required 20 \
+            --cut_tail --cut_tail_mean_quality 5 \
+            --overlap_len_require 1 \
+            --html ${output_prefix}_fastp.html \
+            --json ${output_prefix}_fastp.json"
+        if [ "$sample_size" -gt 0 ]; then fastp_cmd+=" --reads_to_process $sample_size"; fi
+        log_info "Running: $fastp_cmd"
+        execute_cmd "$fastp_cmd"
+        rm -f "$umi_seq_file"  # Cleanup intermediate
+        
+        # Check fastp succeeded
+        if [[ ! -s "$trimmed_file" ]]; then
+            log_error "fastp failed to create trimmed file"
+            exit 1
+        fi
+        
+        # Step 4: Collapse exact duplicates (with UMI in sequence)
+        update_status "  eCLIP: Collapsing Duplicates"
+        local collapsed_file="${output_prefix}_collapsed.fastq"
+        local collapsed_file_gz="${output_prefix}_collapsed.fastq.gz"
+        gzip -dc "$trimmed_file" > "${output_prefix}_trimmed_temp.fastq"
+        fastq2collapse.pl "${output_prefix}_trimmed_temp.fastq" "$collapsed_file" 2>> "${LOG_FILE}"
+        if [[ ! -s "$collapsed_file" ]]; then
+            log_error "fastq2collapse.pl failed"
+            exit 1
+        fi
+        gzip -c "$collapsed_file" > "$collapsed_file_gz"
+        rm -f "${output_prefix}_trimmed_temp.fastq" "$collapsed_file" "$trimmed_file"
+        
+        # Step 5: Strip UMI from sequence, attach to header after count
+        update_status "  eCLIP: Extracting UMI"
+        local final_file="${output_prefix}_cleaned.fastq.gz"
+        strip_eclip_barcode "$collapsed_file_gz" "$final_file" "$umi_len"
+        rm -f "$collapsed_file_gz"
+        
+        log_info "eCLIP preprocessing complete: $final_file"
+        log_info "Read ID format: READ#count#UMI (CTK-compatible)"
+        return 0
     fi
+    
+    #==========================================================================
+    # NON-eCLIP MODE: Standard workflow
+    # 1. Dedup with fastq2collapse.pl (if enabled)
+    # 2. fastp (with --umi for UMI extraction)
+    #==========================================================================
+    log_info "Standard mode: fastp with UMI extraction"
     
     # Define Fastp Command Function
     run_fastp_cmd() {
@@ -251,90 +413,51 @@ run_preprocessing() {
             --average_qual 30 \
             --html ${output_prefix}_fastp.html \
             --json ${output_prefix}_fastp.json"
-        # Adapter handling - eCLIP uses FASTA with multiple adapters
-        if [[ "$eclip_mode" == "true" ]]; then
-            if [[ -f "$eclip_adapters_fasta" ]]; then
-                cmd+=" --adapter_fasta ${eclip_adapters_fasta}"
-            else
-                log_warning "eCLIP adapter file not found: ${eclip_adapters_fasta}"
-            fi
-            # DO NOT add --umi flags - UMI is already in header for eCLIP
-        else
-            # Standard mode: single adapter and UMI extraction
-            if [ -n "$adapter3" ]; then cmd+=" --adapter_sequence ${adapter3}"; fi
-            if [ "$umi_len" -gt 0 ]; then cmd+=" --umi --umi_loc=read1 --umi_len=${umi_len} --umi_delim=#"; fi
-        fi
+        # Standard mode: single adapter and UMI extraction
+        if [ -n "$adapter3" ]; then cmd+=" --adapter_sequence ${adapter3}"; fi
+        if [ "$umi_len" -gt 0 ]; then cmd+=" --umi --umi_loc=read1 --umi_len=${umi_len} --umi_delim=#"; fi
         if [ "$sample_size" -gt 0 ]; then cmd+=" --reads_to_process $sample_size"; fi
-        
-        # Note: DEDUP is handled externally via seqkit before fastp if requested.
-        # But if dedup was somehow passed to this function, we ignore fastp's internal dedup 
-        # because seqkit is superior for this use case.
         
         log_info "Running: $cmd"
         execute_cmd "$cmd"
     }
 
-    # Preparation: Handle Input File (Sampling / Dedup / Repair)
-    # We create a pipeline of commands to prepare the input for fastp
-    
     local final_input="$input_file"
     local temp_dedup=""
     
-    # 1. Deduplication (SeqKit) - High Priority to reduce load
+    # 1. Deduplication (fastq2collapse.pl) - Tracks duplicate counts for CTK
     if [ "$dedup_mode" == "true" ]; then
-        update_status "  Deduplicating (SeqKit)" 
-        log_info "Deduplication: Running seqkit rmdup (by sequence, ignoring quality)..."
-        temp_dedup="${output_prefix}_dedup_temp.fastq.gz"
+        update_status "  Deduplicating (CTK)" 
+        log_info "Deduplication: Running fastq2collapse.pl (tracks duplicate counts for tag2collapse)..."
+        temp_dedup="${output_prefix}_dedup_temp.fastq"
+        local temp_dedup_gz="${output_prefix}_dedup_temp.fastq.gz"
         
-        local decompress="gzip -dc"
-        if command -v pigz &> /dev/null; then decompress="pigz -dc"; fi
-        
-        # Use seqkit rmdup -s (by seq) -o output.gz
-        seqkit rmdup -s -o "$temp_dedup" "$input_file" 2>> "${LOG_FILE}"
+        if [[ "$input_file" == *.gz ]]; then
+            local temp_input="${output_prefix}_input_temp.fastq"
+            gzip -dc "$input_file" > "$temp_input"
+            fastq2collapse.pl "$temp_input" "$temp_dedup" 2>> "${LOG_FILE}"
+            rm -f "$temp_input"
+        else
+            fastq2collapse.pl "$input_file" "$temp_dedup" 2>> "${LOG_FILE}"
+        fi
         
         if [[ $? -eq 0 && -s "$temp_dedup" ]]; then
-             final_input="$temp_dedup"
+             gzip -c "$temp_dedup" > "$temp_dedup_gz"
+             rm -f "$temp_dedup"
+             final_input="$temp_dedup_gz"
+             temp_dedup="$temp_dedup_gz"
              log_info "Deduplication complete."
              update_status "  Preprocessing (Fastp)"
         else
-             log_warning "SeqKit Deduplication failed or produced empty file. Reverting to original input."
-             rm -f "$temp_dedup"
+             log_warning "fastq2collapse.pl failed. Reverting to original input."
+             rm -f "$temp_dedup" "$temp_dedup_gz"
+             temp_dedup=""
         fi
     fi
 
-    # 2. Run Fastp on prepared input
+    # 2. Run Fastp
     run_fastp_cmd "$final_input"
-    exit_code=$?
-
-    # 3. Failure Recovery: Sanitize FASTQ (Empty Read / Truncation Fix)
-    if [ $exit_code -ne 0 ]; then
-        log_warning "fastp failed on $(basename "$final_input"). Attempting to repair malformed/empty reads..."
-        
-        local repaired_file="${output_prefix}_repaired.fastq.gz"
-        local source_for_repair="$final_input" 
-        # Note: If dedup failed, final_input is original. If dedup succeeded but fastp failed, final_input is deduped.
-        # We repair whatever failed.
-        
-        local decompress="gzip -dc"
-        if command -v pigz &> /dev/null; then decompress="pigz -dc"; fi
-        
-        # AWK Script: filter empty sequences and ensure 4-line records
-        # Logic: Read 4 lines. If seq (line 2) > 0 length, print. 
-        # Implicitly drops truncated records at end of file.
-        $decompress "$source_for_repair" | awk '{h=$0; getline s; getline p; getline q; if (length(s) > 0 && length(q) > 0) {print h; print s; print p; print q}}' | gzip > "$repaired_file"
-        
-        if [[ -s "$repaired_file" ]]; then
-            log_info "Repair successful. Retrying fastp with repaired file..."
-            run_fastp_cmd "$repaired_file"
-            exit_code=$?
-            
-            if [ $exit_code -eq 0 ]; then
-                rm "$repaired_file"
-            fi
-        else
-            log_error "Repair failed (empty output). The input file might be completely corrupt."
-        fi
-    fi
+    local exit_code=$?
     
     # Cleanup temp dedup file
     if [[ -n "$temp_dedup" && -f "$temp_dedup" ]]; then
@@ -343,24 +466,8 @@ run_preprocessing() {
 
     if [ $exit_code -eq 0 ]; then
         log_info "Preprocessing complete."
-        
-        # eCLIP mode: Reformat headers to CTK format for tag2collapse compatibility
-        if [[ "$eclip_mode" == "true" ]]; then
-            local cleaned_fastq="${output_prefix}_cleaned.fastq.gz"
-            local reformatted_fastq="${output_prefix}_cleaned_reformatted.fastq.gz"
-            
-            reformat_eclip_headers "$cleaned_fastq" "$reformatted_fastq"
-            
-            if [[ -s "$reformatted_fastq" ]]; then
-                # Replace original with reformatted
-                mv "$reformatted_fastq" "$cleaned_fastq"
-                log_info "eCLIP: Headers reformatted to CTK format"
-            else
-                log_warning "eCLIP header reformatting failed, continuing with original format"
-            fi
-        fi
     else
-        log_error "fastp failed even after repair attempt."
+        log_error "fastp failed."
         exit 1
     fi
 }
@@ -636,9 +743,16 @@ run_collapse_pcr() {
     
     # Only use --random-barcode when UMI is present in read names
     local barcode_flag=""
+    local weight_flags=""
     if [ "${umi_len:-0}" -gt 0 ]; then
         barcode_flag="--random-barcode"
-        log_info "UMI mode (length=$umi_len): using random barcode collapse"
+        # CTK weight flags: use pre-collapse counts from fastq2collapse.pl
+        # --weight: use tag count as weight
+        # --weight-in-name: read count from #count# in read ID
+        # -EM 30: EM iterations for barcode collapse
+        # --seq-error-model alignment: estimate error from alignment
+        weight_flags="--weight --weight-in-name -EM 30 --seq-error-model alignment"
+        log_info "UMI mode (length=$umi_len): using random barcode collapse with EM weighting"
     else
         log_info "No UMI: using position-only collapse"
     fi
@@ -647,7 +761,7 @@ run_collapse_pcr() {
     local cache_dir=$(mktemp -u "${TMPDIR:-/tmp}/collapse_cache.XXXXXX")
     
     # Use -big (memory-mapped BIG format) and -c (chromosome-based) for max memory efficiency
-    local cmd="$CONDA_PREFIX/bin/perl $(which tag2collapse.pl) -big -c \"${cache_dir}\" --keep-tag-name --keep-max-score ${barcode_flag} \
+    local cmd="$CONDA_PREFIX/bin/perl $(which tag2collapse.pl) -big -c \"${cache_dir}\" --keep-tag-name --keep-max-score ${barcode_flag} ${weight_flags} \
         \"${input_bed}\" \"${output_bed}\""
 
     execute_cmd "$cmd"
@@ -1375,7 +1489,7 @@ run_cims() {
     fi
     
     if [[ "$use_parallel" == "true" ]]; then
-        # Parallel mode: split by chromosome, process in parallel, merge
+        # Parallel mode: split BOTH collapsed.bed AND mutation file by chromosome
         local chunk_dir=$(mktemp -d "${TMPDIR:-/tmp}/cims_parallel.XXXXXX")
         
         # Split collapsed BED by chromosome (standard chromosomes only: chr1-22, X, Y, M)
@@ -1383,19 +1497,27 @@ run_cims() {
         grep -E '^chr([1-9]|1[0-9]|2[0-2]|X|Y|M)[[:space:]]' "$input_collapsed_bed" | \
             awk -v dir="$chunk_dir" '{print > dir"/chr_"$1".bed"}'
         
-        # Create processing script
+        # CRITICAL FIX: Also split mutation file by chromosome to match collapsed.bed chunks
+        grep -E '^chr([1-9]|1[0-9]|2[0-2]|X|Y|M)[[:space:]]' "$mutation_bed" | \
+            awk -v dir="$chunk_dir" '{print > dir"/chr_"$1".mut.bed"}'
+        
+        # Create processing script (updated to use per-chromosome mutation file)
         local process_script="$chunk_dir/run_cims_chunk.sh"
         cat > "$process_script" << 'CIMS_SCRIPT'
 #!/bin/bash
 chunk_file="$1"
-mutation_file="$2"
-iterations="$3"
-output_dir="$4"
+iterations="$2"
+output_dir="$3"
 chunk_name=$(basename "$chunk_file" .bed)
+# Use matching mutation file for this chromosome
+mutation_chunk="${output_dir}/${chunk_name}.mut.bed"
 output_chunk="${output_dir}/${chunk_name}.cims.txt"
 cache_dir=$(mktemp -u "${TMPDIR:-/tmp}/cims_cache.XXXXXX")
 export PERL5LIB="${CONDA_PREFIX}/lib/czplib:$PERL5LIB"
-CIMS.pl -big -c "$cache_dir" -n "$iterations" "$chunk_file" "$mutation_file" "$output_chunk" >/dev/null 2>&1
+# Only run CIMS if both chunk files exist and are non-empty
+if [[ -s "$chunk_file" && -s "$mutation_chunk" ]]; then
+    CIMS.pl -big -c "$cache_dir" -n "$iterations" "$chunk_file" "$mutation_chunk" "$output_chunk" >/dev/null 2>&1
+fi
 rm -rf "$cache_dir" 2>/dev/null
 CIMS_SCRIPT
         chmod +x "$process_script"
@@ -1405,9 +1527,10 @@ CIMS_SCRIPT
         local parallel_jobs=$(( optimal_jobs < chr_count ? optimal_jobs : chr_count ))
         log_info "CIMS: Using $parallel_jobs/$threads threads based on available RAM"
         
-        ls "$chunk_dir"/chr_*.bed 2>/dev/null | \
+        # Pass only chunk_file, iterations, and chunk_dir (mutation file is derived from chunk name)
+        ls "$chunk_dir"/chr_*.bed 2>/dev/null | grep -v '\.mut\.bed$' | \
             parallel --memfree 4G -j "$parallel_jobs" \
-            "$process_script" {} "$mutation_bed" "$cims_iterations" "$chunk_dir"
+            "$process_script" {} "$cims_iterations" "$chunk_dir"
         
         # Merge results (skip empty files, keep header from first)
         local first_file="true"
@@ -1509,7 +1632,7 @@ run_cits() {
     local cits_raw="${output_file%.txt}_raw.bed"
     
     if [[ "$use_parallel" == "true" ]]; then
-        # Parallel mode: split by chromosome, process in parallel, merge
+        # Parallel mode: split BOTH collapsed.bed AND deletion file by chromosome
         local chunk_dir=$(mktemp -d "${TMPDIR:-/tmp}/cits_parallel.XXXXXX")
         
         # Split collapsed BED by chromosome (standard chromosomes only: chr1-22, X, Y, M)
@@ -1517,20 +1640,33 @@ run_cits() {
         grep -E '^chr([1-9]|1[0-9]|2[0-2]|X|Y|M)[[:space:]]' "$input_collapsed_bed" | \
             awk -v dir="$chunk_dir" '{print > dir"/chr_"$1".bed"}'
         
-        # Create processing script
+        # CRITICAL FIX: Also split deletion file by chromosome to match collapsed.bed chunks
+        grep -E '^chr([1-9]|1[0-9]|2[0-2]|X|Y|M)[[:space:]]' "$deletion_bed" | \
+            awk -v dir="$chunk_dir" '{print > dir"/chr_"$1".del.bed"}'
+        
+        # Create processing script (updated to use per-chromosome deletion file)
         local process_script="$chunk_dir/run_cits_chunk.sh"
         cat > "$process_script" << 'CITS_SCRIPT'
 #!/bin/bash
 chunk_file="$1"
-deletion_file="$2"
-pvalue="$3"
-gap="$4"
-output_dir="$5"
+pvalue="$2"
+gap="$3"
+output_dir="$4"
 chunk_name=$(basename "$chunk_file" .bed)
+# Use matching deletion file for this chromosome
+deletion_chunk="${output_dir}/${chunk_name}.del.bed"
 output_chunk="${output_dir}/${chunk_name}.cits.bed"
 cache_dir=$(mktemp -u "${TMPDIR:-/tmp}/cits_cache.XXXXXX")
 export PERL5LIB="${CONDA_PREFIX}/lib/czplib:$PERL5LIB"
-CITS.pl -big -c "$cache_dir" -p "$pvalue" --gap "$gap" "$chunk_file" "$deletion_file" "$output_chunk" >/dev/null 2>&1
+# Only run CITS if collapsed chunk exists (deletion chunk can be empty)
+if [[ -s "$chunk_file" ]]; then
+    if [[ -s "$deletion_chunk" ]]; then
+        CITS.pl -big -c "$cache_dir" -p "$pvalue" --gap "$gap" "$chunk_file" "$deletion_chunk" "$output_chunk" >/dev/null 2>&1
+    else
+        # No deletions for this chromosome - run without deletion filtering
+        touch "$output_chunk"
+    fi
+fi
 rm -rf "$cache_dir" 2>/dev/null
 CITS_SCRIPT
         chmod +x "$process_script"
@@ -1540,9 +1676,10 @@ CITS_SCRIPT
         local parallel_jobs=$(( optimal_jobs < chr_count ? optimal_jobs : chr_count ))
         log_info "CITS: Using $parallel_jobs/$threads threads based on available RAM"
         
-        ls "$chunk_dir"/chr_*.bed 2>/dev/null | \
+        # Pass only chunk_file, pvalue, gap, and chunk_dir (deletion file is derived from chunk name)
+        ls "$chunk_dir"/chr_*.bed 2>/dev/null | grep -v '\.del\.bed$' | \
             parallel --memfree 4G -j "$parallel_jobs" \
-            "$process_script" {} "$deletion_bed" "$cits_pvalue" "$cits_gap" "$chunk_dir"
+            "$process_script" {} "$cits_pvalue" "$cits_gap" "$chunk_dir"
         
         # Merge results
         > "$cits_raw"
