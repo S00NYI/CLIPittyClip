@@ -49,7 +49,7 @@ function show_usage {
     echo "  -x <path>          Path to genome index directory (STAR or Bowtie2)"
     echo ""
     echo "GENERAL OPTIONS:"
-    echo "  -o <str>           Output ID / prefix (default: derived from filename)"
+    echo "  -o <str>           Output folder name (default: INPUT_output)"
     echo "  -t <int>           Number of threads (default: 1)"
     echo "  --aligner <str>    Aligner: 'star' (default) or 'bowtie2'"
     echo "  -h, --help         Show this help message"
@@ -83,7 +83,7 @@ function show_usage {
     echo "  --skip-ncrna       Disable ncRNA pre-filtering (on by default)"
     echo ""
     echo "OUTPUT OPTIONS:"
-    echo "  -k                 Keep intermediate files"
+    echo "  -k                 Keep intermediate files (in OUTPUT/OTHERS/sample_analysis/)"
     echo "  --notification     Enable system notifications on completion"
     echo "  --wizard           Launch interactive configuration wizard
   --advanced         Alias for --wizard (backward compatibility)"
@@ -555,7 +555,12 @@ if [[ -n "$INPUT_DIR" ]]; then
     
     # Aggregation - same as demux path
     INPUT_BASENAME=$(basename "$INPUT_DIR")
-    OUTPUT_ROOT="${INPUT_BASENAME}_output"
+    # Use -o value for output folder if provided, otherwise use input directory name
+    if [[ -n "$EXP_ID" ]]; then
+        OUTPUT_ROOT="$EXP_ID"
+    else
+        OUTPUT_ROOT="${INPUT_BASENAME}_output"
+    fi
     
     DIR_BAM="1_BAM"
     DIR_BED="2_COLLAPSED_BED"
@@ -694,9 +699,13 @@ if [[ -n "$INPUT_DIR" ]]; then
             # Pipeline log
             cp "$sample_out"/*.log "$OUTPUT_ROOT/$DIR_REPORTS/SAMPLES/${sample_name}_detailed.log" 2>/dev/null
             
-            # Cleanup sample dir (keep if -k)
+            # Cleanup sample dir or move to OTHERS if -k
             if [[ "$KEEP_INTERMEDIATE" != "yes" ]]; then
                 rm -rf "$sample_out"
+            else
+                # Move intermediate files into OUTPUT/OTHERS/ for cleaner organization
+                mkdir -p "$OUTPUT_ROOT/$DIR_OTHERS/sample_analysis"
+                mv "$sample_out" "$OUTPUT_ROOT/$DIR_OTHERS/sample_analysis/" 2>/dev/null
             fi
         fi
     done
@@ -1011,7 +1020,12 @@ if [[ "$DEMUX" == "yes" ]]; then
         # Let's just use a clean name.
         INPUT_BASENAME="${INPUT_BASENAME%_sampled_*}"
     fi
-    OUTPUT_ROOT="${INPUT_BASENAME}_output"
+    # Use -o value for output folder if provided, otherwise use input file name
+    if [[ -n "$EXP_ID" ]]; then
+        OUTPUT_ROOT="$EXP_ID"
+    else
+        OUTPUT_ROOT="${INPUT_BASENAME}_output"
+    fi
     
     DIR_DEMUX="0_DEMUX_FASTQ"
     DIR_BAM="1_BAM"
@@ -1322,9 +1336,18 @@ if [[ "$DEMUX" == "yes" ]]; then
         console_msg "  ----------------------------------------------------------------"
     fi
     
-    # Cleanup Analysis Folders and Temp Files
-    console_msg "  > Cleaning up temporary analysis directories and files..."
-    rm -rf *_analysis barcodes.fasta
+    # Cleanup Analysis Folders and Temp Files or move to OTHERS if -k
+    if [[ "$KEEP_INTERMEDIATE" == "yes" ]]; then
+        console_msg "  > Moving sample analysis directories to $OUTPUT_ROOT/$DIR_OTHERS/sample_analysis/..."
+        mkdir -p "$OUTPUT_ROOT/$DIR_OTHERS/sample_analysis"
+        for analysis_dir in *_analysis; do
+            [[ -d "$analysis_dir" ]] && mv "$analysis_dir" "$OUTPUT_ROOT/$DIR_OTHERS/sample_analysis/" 2>/dev/null
+        done
+    else
+        console_msg "  > Cleaning up temporary analysis directories and files..."
+        rm -rf *_analysis
+    fi
+    rm -f barcodes.fasta
     
     # Remove sampled input if it exists (pattern match)
     rm -f *_sampled_*.fastq.gz

@@ -229,7 +229,7 @@ detect_eclip_umi_length() {
     echo "$detected_len"
 }
 
-# Reformat eCLIP: Move UMI from header to sequence (Zhang Lab approach)
+# Reformat eCLIP: Move UMI from header to sequence (CTK documentation workflow)
 # This is required for correct fastq2collapse.pl behavior
 # Input:  @UMI:READ_ID
 #         SEQUENCE
@@ -242,7 +242,7 @@ reformat_eclip_umi_to_sequence() {
     local output_fastq="$2"
     local umi_len="$3"
     
-    log_info "Moving eCLIP UMI from header to sequence (Zhang Lab approach)..."
+    log_info "Moving eCLIP UMI from header to sequence (CTK documentation workflow)..."
     log_info "UMI length: $umi_len nt"
     
     # Generate quality string for UMI (I = Phred 40, high quality)
@@ -329,14 +329,14 @@ run_preprocessing() {
     local eclip_adapters_fasta="${script_dir}/eclip_adapters.fa"
     
     #==========================================================================
-    # eCLIP MODE: Zhang Lab workflow
+    # eCLIP MODE: CTK documentation workflow
     # 1. UMI header → sequence
     # 2. fastp (adapter trim, no --umi)
     # 3. fastq2collapse.pl (collapse with UMI in sequence)
     # 4. stripBarcode.pl (extract UMI to header after count)
     #==========================================================================
     if [[ "$eclip_mode" == "true" ]]; then
-        log_info "eCLIP mode: Using Zhang Lab preprocessing workflow"
+        log_info "eCLIP mode: Using CTK documentation preprocessing workflow"
         
         # Step 1: Detect and validate UMI length
         local detected_umi_len=$(detect_eclip_umi_length "$input_file" "$umi_len")
@@ -351,7 +351,7 @@ run_preprocessing() {
             exit 1
         fi
         
-        # Step 3: Adapter trimming with fastp (eCLIP params from Zhang Lab)
+        # Step 3: Adapter trimming with fastp (eCLIP params from CTK documentation)
         update_status "  eCLIP: Adapter Trimming"
         local trimmed_file="${output_prefix}_trimmed.fastq.gz"
         local fastp_cmd="fastp -i ${umi_seq_file} -o ${trimmed_file} \
@@ -1392,7 +1392,7 @@ add_ctk_columns_to_peak_matrix() {
 # Detects crosslinking-induced mutation sites
 # ═══════════════════════════════════════════════════════════════════════════
 # CTK CIMS/CITS ANALYSIS FUNCTIONS
-# Verified workflow based on Zhang Lab CTK documentation (Dec 2024)
+# Verified workflow based on CTK documentation (Dec 2024)
 # ═══════════════════════════════════════════════════════════════════════════
 
 # CTK Preprocessing: Filter mutations and extract mutation types
@@ -1730,29 +1730,21 @@ CITS_SCRIPT
     return 0
 }
 
-# 7. Motif Enrichment Analysis (HOMER)
-# Extracts flanking regions and runs findMotifsGenome.pl
-run_motif_analysis() {
+# 7. Flanked BED Generation for Motif Analysis
+# Generates ±10nt flanked regions around CIMS/CITS sites
+# Creates flanked BED file alongside the input file (same directory)
+# Users can run their own motif analysis tools on these files
+generate_flanked_bed() {
     local input_bed="$1"
-    local output_dir="$2"
-    local genome_fasta="$3"
-    local flank_nt="${4:-10}"         # Default: ±10 nucleotides
-    local label="${5:-motif}"
-    
-    # Status update removed - motif analysis is part of CIMS/CITS
-    log_info "Running motif enrichment analysis..."
-    log_info "Input: $input_bed"
-    log_info "Flanking region: ±${flank_nt}nt"
+    local flank_nt="${2:-10}"         # Default: ±10 nucleotides
     
     if [[ ! -s "$input_bed" ]]; then
-        log_warning "Motif analysis: Input BED is empty, skipping."
         return 1
     fi
     
-    mkdir -p "$output_dir"
+    # Create flanked file alongside input: sample_CIMS_sub.txt → sample_CIMS_sub_flanked.bed
+    local flanked_bed="${input_bed%.txt}_flanked.bed"
     
-    # Extend regions by ±flank_nt
-    local flanked_bed="${output_dir}/${label}_flanked.bed"
     awk -v n="$flank_nt" 'BEGIN{OFS="\t"} {
         start = $2 - n
         if (start < 0) start = 0
@@ -1760,29 +1752,7 @@ run_motif_analysis() {
     }' "$input_bed" > "$flanked_bed"
     
     local site_count=$(wc -l < "$flanked_bed")
-    log_info "Prepared $site_count sites with ±${flank_nt}nt flanks"
-    
-    # Run HOMER findMotifsGenome.pl
-    local homer_output="${output_dir}/${label}_homer"
-    
-    if command -v findMotifsGenome.pl &> /dev/null; then
-        log_info "Running HOMER findMotifsGenome.pl (RNA mode)..."
-        
-        # HOMER requires genome to be in its database or a FASTA path
-        findMotifsGenome.pl "$flanked_bed" "$genome_fasta" "$homer_output" \
-            -size given -rna -p "${THREADS:-1}" 2>> "${LOG_FILE:-/dev/null}"
-        
-        if [[ -d "$homer_output" ]]; then
-            log_info "HOMER complete: $homer_output"
-        else
-            log_warning "HOMER may have failed. Check logs."
-        fi
-    else
-        log_warning "HOMER (findMotifsGenome.pl) not found. Skipping motif analysis."
-        log_info "To install: conda install -c bioconda homer"
-    fi
-    
-    log_info "Motif analysis complete."
+    log_info "Generated flanked BED (±${flank_nt}nt, $site_count sites): $(basename "$flanked_bed")"
 }
 
 # 8. Full CTK Analysis Pipeline
@@ -1879,32 +1849,20 @@ run_ctk_full_analysis() {
         log_info "Phase 3: CITS Analysis... SKIPPED (not enabled)"
     fi
     
-    # Phase 4: Motif Analysis
+    # Phase 4: Flanked BED Generation (for user's motif analysis)
     if [[ "$run_motif" == "yes" ]]; then
-        log_info "Phase 4: Motif Enrichment Analysis..."
+        log_info "Phase 4: Generating flanked BED files..."
         
         if [[ "$run_cims" == "true" ]]; then
             local cims_del_sig="${output_dir}/CIMS/${sample_name}_CIMS_del_significant.bed"
             local cims_sub_sig="${output_dir}/CIMS/${sample_name}_CIMS_sub_significant.bed"
-            
-            if [[ -s "$cims_del_sig" ]]; then
-                run_motif_analysis "$cims_del_sig" "${output_dir}/motif_analysis" \
-                    "$genome_fasta" "$motif_flank" "CIMS_del"
-            fi
-            
-            if [[ -s "$cims_sub_sig" ]]; then
-                run_motif_analysis "$cims_sub_sig" "${output_dir}/motif_analysis" \
-                    "$genome_fasta" "$motif_flank" "CIMS_sub"
-            fi
+            [[ -s "$cims_del_sig" ]] && generate_flanked_bed "$cims_del_sig" "$motif_flank"
+            [[ -s "$cims_sub_sig" ]] && generate_flanked_bed "$cims_sub_sig" "$motif_flank"
         fi
         
         if [[ "$run_cits" == "true" ]]; then
             local cits_singleton="${output_dir}/CITS/${sample_name}_CITS_singleton.bed"
-            
-            if [[ -s "$cits_singleton" ]]; then
-                run_motif_analysis "$cits_singleton" "${output_dir}/motif_analysis" \
-                    "$genome_fasta" "$motif_flank" "CITS"
-            fi
+            [[ -s "$cits_singleton" ]] && generate_flanked_bed "$cits_singleton" "$motif_flank"
         fi
     fi
     
@@ -1976,17 +1934,10 @@ run_ctk_analysis() {
                 "$cims_iterations" "$cims_fdr"
         fi
         
-        # Run motif on CIMS results (if enabled) - per-sample
+        # Generate flanked BED for CIMS results (for user's motif analysis)
         if [[ "$run_motif" == "yes" ]]; then
-            if [[ -s "$cims_del_file" ]]; then
-                run_motif_analysis "$cims_del_file" "${output_dir}/CIMS/${sample_name}_CIMS_del_motif" \
-                    "$genome_fasta" "$motif_flank" "CIMS_del"
-            fi
-            
-            if [[ -s "$cims_sub_file" ]]; then
-                run_motif_analysis "$cims_sub_file" "${output_dir}/CIMS/${sample_name}_CIMS_sub_motif" \
-                    "$genome_fasta" "$motif_flank" "CIMS_sub"
-            fi
+            [[ -s "$cims_del_file" ]] && generate_flanked_bed "$cims_del_file" "$motif_flank"
+            [[ -s "$cims_sub_file" ]] && generate_flanked_bed "$cims_sub_file" "$motif_flank"
         fi
     fi
     
@@ -2000,12 +1951,9 @@ run_ctk_analysis() {
             run_cits "$collapsed_bed" "$del_bed" "$cits_file" \
                 "$cits_pvalue" "$cits_gap"
                 
-            # Run motif on CITS results (if enabled) - per-sample
+            # Generate flanked BED for CITS results (for user's motif analysis)
             if [[ "$run_motif" == "yes" ]]; then
-                if [[ -s "$cits_file" ]]; then
-                    run_motif_analysis "$cits_file" "${output_dir}/CITS/${sample_name}_CITS_motif" \
-                        "$genome_fasta" "$motif_flank" "CITS"
-                fi
+                [[ -s "$cits_file" ]] && generate_flanked_bed "$cits_file" "$motif_flank"
             fi
         else
             log_warning "No deletion file for CITS. Skipping."
