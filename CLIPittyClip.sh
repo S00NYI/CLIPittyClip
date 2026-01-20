@@ -75,10 +75,10 @@ function show_usage {
     echo "  --cims-fdr <float> CIMS FDR threshold (default: 0.05)"
     echo "  --cits-pval <float> CITS p-value threshold (default: 0.05)"
     echo "  --cits-gap <int>   CITS clustering gap (default: 25, -1=no cluster)"
-    echo "  --motif-flank <int> Motif flanking nucleotides (default: 10)"
+    echo "  -f, --motif-flank <int>  Flanked BED nucleotides (default: 10)"
     echo "  --no-motif         Skip motif enrichment analysis"
-    echo "  -g, --ctk-group <file> Aggregate samples by group for CIMS/CITS"
-    echo "                      Format: sample_name<TAB>group_name"
+    echo "  -g, --groups <file>    Groups file for bedgraph/peak grouping"
+    echo "  --ctk-group            Enable group CTK analysis (pools samples in groups.txt)"
     echo "  --sample <int>     Test mode: process only first N reads"
     echo "  --skip-ncrna       Disable ncRNA pre-filtering (on by default)"
     echo ""
@@ -170,7 +170,7 @@ while [[ $# -gt 0 ]]; do
         --cims-fdr) CIMS_FDR="$2"; shift 2 ;;
         --cits-pval) CITS_PVALUE="$2"; shift 2 ;;
         --cits-gap) CITS_GAP="$2"; shift 2 ;;
-        --motif-flank) MOTIF_FLANK="$2"; shift 2 ;;
+        -f|--motif-flank) MOTIF_FLANK="$2"; shift 2 ;;
         --no-motif) RUN_MOTIF="no"; shift ;;
         -g|--groups) GROUPS_FILE="$2"; shift 2 ;;  # For bedgraph/matrix grouping only
         --ctk-group) CTK_GROUP_MODE="true"; shift ;;  # Enable group CTK analysis

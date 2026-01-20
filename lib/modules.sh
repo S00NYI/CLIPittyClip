@@ -344,7 +344,8 @@ run_preprocessing() {
         umi_len="$detected_umi_len"
         
         # Step 2: Move UMI from header to sequence
-        update_status "eCLIP Preprocessing > (UMI to Sequence"
+        update_status_first "eCLIP Preprocessing"
+        echo -ne "(UMI to Sequence"
         local umi_seq_file="${output_prefix}_umi_in_seq.fastq.gz"
         reformat_eclip_umi_to_sequence "$input_file" "$umi_seq_file" "$umi_len"
         if [[ ! -s "$umi_seq_file" ]]; then
@@ -353,7 +354,7 @@ run_preprocessing() {
         fi
         
         # Step 3: Adapter trimming with fastp (eCLIP params from CTK documentation)
-        update_status "eCLIP Preprocessing > (UMI to Sequence → Adapter Trimming"
+        echo -ne " → Adapter Trimming"
         local trimmed_file="${output_prefix}_trimmed.fastq.gz"
         local fastp_cmd="fastp -i ${umi_seq_file} -o ${trimmed_file} \
             --thread ${threads} \
@@ -375,7 +376,7 @@ run_preprocessing() {
         fi
         
         # Step 4: Collapse exact duplicates (with UMI in sequence)
-        update_status "eCLIP Preprocessing > (UMI to Sequence → Adapter Trimming → Collapsing Duplicates"
+        echo -ne " → Collapsing Duplicates"
         local collapsed_file="${output_prefix}_collapsed.fastq"
         local collapsed_file_gz="${output_prefix}_collapsed.fastq.gz"
         gzip -dc "$trimmed_file" > "${output_prefix}_trimmed_temp.fastq"
@@ -388,7 +389,7 @@ run_preprocessing() {
         rm -f "${output_prefix}_trimmed_temp.fastq" "$collapsed_file" "$trimmed_file"
         
         # Step 5: Strip UMI from sequence, attach to header after count
-        update_status "eCLIP Preprocessing > (UMI to Sequence → Adapter Trimming → Collapsing Duplicates → Extract UMI)"
+        echo -ne " → Extract UMI) > "
         local final_file="${output_prefix}_cleaned.fastq.gz"
         strip_eclip_barcode "$collapsed_file_gz" "$final_file" "$umi_len"
         rm -f "$collapsed_file_gz"

@@ -1,0 +1,34 @@
+Flag	Short	Long	Type	Default	Required	Error Handling	Category
+Input file	-i	—	path	—	Yes*	Exits if not found	Input/Output
+Input dir	-d	—	path	—	Yes*	Exits if not found	Input/Output
+Genome index	-x	—	path	—	Yes	Exits if not found	Input/Output
+Output name	-o	—	string	{input}_output	No	Auto-derived	Input/Output
+Keep files	-k	—	bool	no	No	—	Input/Output
+Threads	-t	—	int	1	No	—	Processing
+Aligner	—	--aligner	string	star	No	Validates star/bowtie2	Processing
+eCLIP mode	—	--eclip	bool	false	No	—	Processing
+Adapter	-a	—	string	L32	No	—	Processing
+UMI length	-u	—	int	—	No	—	Processing
+Verbose	—	--verbose	bool	false	No	—	Processing
+Barcode file	-b	--barcode	path	—	No	Exits if not found	Demux
+Demux mismatches	—	--demux-mismatches	int	1	No	—	Demux
+Enable dedup	—	--dedup	bool	true	No	—	Dedup/Align
+Disable dedup	—	--no-dedup	bool	—	No	—	Dedup/Align
+Align mismatches	—	--align-mismatches	int	2	No	—	Dedup/Align
+Skip ncRNA	—	--skip-ncrna	bool	false	No	Warns if index missing	Dedup/Align
+Filter chr	—	--no-chr-filter	bool	true	No	—	Dedup/Align
+Run CTK	—	--run-ctk	bool	—	No	—	CTK
+CIMS	—	--cims	bool	—	No	—	CTK
+CITS	—	--cits	bool	—	No	—	CTK
+CIMS iterations	—	--cims-iter	int	5	No	—	CTK
+CIMS FDR	—	--cims-fdr	float	0.05	No	—	CTK
+CITS p-value	—	--cits-pval	float	0.05	No	—	CTK
+CITS gap	—	--cits-gap	int	25	No	-1 disables clustering	CTK
+Flank size	-f	--motif-flank	int	10	No	—	CTK
+No motif	—	--no-motif	bool	—	No	—	CTK
+Groups file	-g	--groups	path	—	No	Exits if not found	Grouping
+CTK group mode	—	--ctk-group	bool	false	No	Warns if no --cims/--cits	Grouping
+Help	-h	--help	—	—	No	Shows help, exits	Other
+Notification	—	--notification	bool	false	No	—	Other
+Wizard	—	--wizard	bool	—	No	—	Other
+Sample	—	--sample	int	—	No	—	Other
