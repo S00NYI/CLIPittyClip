@@ -42,51 +42,49 @@ function show_usage {
     echo "CLIPittyClip v3.0 - Modern CLIP-seq Analysis Pipeline"
     echo ""
     echo "REQUIRED INPUT (Choose one):"
-    echo "  -i <path>          Input FASTQ file (gzipped supported)"
-    echo "  -d <dir>           Input directory containing .fastq.gz files (Batch Mode)"
+    echo "  -i, --input-file <path>  Input FASTQ file (gzipped supported)"
+    echo "  -d, --input-dir <dir>    Input directory containing .fastq.gz files (Batch Mode)"
     echo ""
     echo "REQUIRED REFERENCE:"
-    echo "  -x <path>          Path to genome index directory (STAR or Bowtie2)"
+    echo "  -x, --index <path>       Path to genome index directory (STAR or Bowtie2)"
     echo ""
     echo "GENERAL OPTIONS:"
-    echo "  -o <str>           Output folder name (default: INPUT_output)"
-    echo "  -t <int>           Number of threads (default: 1)"
-    echo "  --aligner <str>    Aligner: 'star' (default) or 'bowtie2'"
-    echo "  -h, --help         Show this help message"
-    echo "  --verbose          Enable verbose logging"
+    echo "  -o, --output <str>       Output folder name (default: INPUT_output)"
+    echo "  -t, --threads <int>      Number of threads (default: 1)"
+    echo "  -m, --mapper <str>       Mapper: 'star' (default) or 'bowtie2'"
+    echo "  -v, --verbose            Enable verbose logging"
+    echo "  -h, --help               Show this help message"
     echo ""
     echo "PREPROCESSING OPTIONS:"
-    echo "  -u <int>           UMI length (e.g., 7 for CoCLIP)"
-    echo "  -a <str>           3' adapter sequence (default: L32)"
-    echo "  --dedup            Enable FASTQ deduplication (default: ON)"
-    echo "  --no-dedup         Disable FASTQ deduplication"
-    echo "  --eclip            ENCODE eCLIP mode: UMI in header, uses all eCLIP adapters"
+    echo "  -u, --umi-length <int>   UMI length (e.g., 7 for CoCLIP)"
+    echo "  -a, --adapter <str>      3' adapter sequence (default: L32)"
+    echo "  --no-dedup               Disable FASTQ deduplication (default: ON)"
+    echo "  --eclip                  ENCODE eCLIP mode: UMI in header, uses all eCLIP adapters"
     echo ""
     echo "DEMULTIPLEXING OPTIONS (for -i mode):"
-    echo "  -b, --barcode <path>   Barcode file for demultiplexing"
+    echo "  -b, --barcodes <path>    Barcode file for demultiplexing"
     echo "  --demux-mismatches <int> Max barcode mismatches (default: 1)"
     echo "  --align-mismatches <int> Max alignment mismatches (default: 2, STAR only)"
     echo ""
     echo "ANALYSIS OPTIONS:"
-    echo "  --run-ctk          Enable full CTK CIMS+CITS analysis"
-    echo "  --cims             Enable CIMS analysis (mutation sites only)"
-    echo "  --cits             Enable CITS analysis (truncation sites only)"
-    echo "  --cims-iter <int>  CIMS permutation iterations (default: 10)"
-    echo "  --cims-fdr <float> CIMS FDR threshold (default: 0.05)"
-    echo "  --cits-pval <float> CITS p-value threshold (default: 0.05)"
-    echo "  --cits-gap <int>   CITS clustering gap (default: 25, -1=no cluster)"
-    echo "  -f, --motif-flank <int>  Flanked BED nucleotides (default: 10)"
-    echo "  --no-motif         Skip motif enrichment analysis"
-    echo "  -g, --groups <file>    Groups file for bedgraph/peak grouping"
-    echo "  --ctk-group            Enable group CTK analysis (pools samples in groups.txt)"
-    echo "  --sample <int>     Test mode: process only first N reads"
-    echo "  --skip-ncrna       Disable ncRNA pre-filtering (on by default)"
+    echo "  --run-ctk                Enable full CTK CIMS+CITS analysis"
+    echo "  --run-cims               Enable CIMS analysis (mutation sites only)"
+    echo "  --run-cits               Enable CITS analysis (truncation sites only)"
+    echo "  --cims-iter <int>        CIMS permutation iterations (default: 5)"
+    echo "  --cims-fdr <float>       CIMS FDR threshold (default: 0.05)"
+    echo "  --cits-pval <float>      CITS p-value threshold (default: 0.05)"
+    echo "  --cits-gap <int>         CITS clustering gap (default: 25, -1=no cluster)"
+    echo "  -f, --flank <int>        Flanked BED nucleotides (default: 10)"
+    echo "  --no-motif               Skip flanked BED generation"
+    echo "  -g, --groups <file>      Groups file for bedgraph/peak grouping"
+    echo "  --ctk-group              Enable group CTK analysis (pools samples in groups.txt)"
+    echo "  -s, --sample <int>       Test mode: process only first N reads"
+    echo "  --skip-ncrna             Disable ncRNA pre-filtering (on by default)"
     echo ""
     echo "OUTPUT OPTIONS:"
-    echo "  -k                 Keep intermediate files (in OUTPUT/OTHERS/sample_analysis/)"
-    echo "  --notification     Enable system notifications on completion"
-    echo "  --wizard           Launch interactive configuration wizard
-  --advanced         Alias for --wizard (backward compatibility)"
+    echo "  -k, --keep               Keep intermediate files (in OUTPUT/OTHERS/sample_analysis/)"
+    echo "  --notification           Enable system notifications on completion"
+    echo "  -w, --wizard             Launch interactive configuration wizard"
     echo ""
     echo "EXAMPLES:"
     echo "  # Standard run (Single File)"
@@ -96,10 +94,10 @@ function show_usage {
     echo "  $0 -i pool.fastq.gz -b barcodes.txt -x /path/to/star_index -t 8"
     echo ""
     echo "  # Directory Batch Mode"
-    echo "  $0 -d /path/to/samples/ -x /path/to/star_index -t 8 --cims"
+    echo "  $0 -d /path/to/samples/ -x /path/to/star_index -t 8 --run-cims"
     echo ""
     echo "  # Bowtie2 Alignment"
-    echo "  $0 -i reads.fastq.gz -x /path/to/bt2_index -t 8 --aligner bowtie2"
+    echo "  $0 -i reads.fastq.gz -x /path/to/bt2_index -t 8 -m bowtie2"
     echo ""
 }
 
@@ -155,42 +153,38 @@ while [[ $# -gt 0 ]]; do
     # Skip empty arguments
     if [[ -z "$1" ]]; then shift; continue; fi
     case $1 in
-        -i) INPUT_FILE="$2"; shift 2 ;;
-        -x) GENOME_INDEX="$2"; shift 2 ;;
-        --aligner) ALIGNER=$(echo "$2" | tr '[:upper:]' '[:lower:]'); shift 2 ;;
-        -o) EXP_ID="$2"; shift 2 ;;
-        -t) THREADS="$2"; shift 2 ;;
-        -u) UMI_LEN="$2"; shift 2 ;;
-        -a) ADAPTER_3="$2"; shift 2 ;;
-        -k) KEEP_INTERMEDIATE="yes"; shift ;;
-        --cims) RUN_CIMS=true; RUN_CTK="yes"; shift ;;
-        --cits) RUN_CITS=true; RUN_CTK="yes"; shift ;;
+        -i|--input-file) INPUT_FILE="$2"; shift 2 ;;
+        -x|--index) GENOME_INDEX="$2"; shift 2 ;;
+        -m|--mapper) ALIGNER=$(echo "$2" | tr '[:upper:]' '[:lower:]'); shift 2 ;;
+        -o|--output) EXP_ID="$2"; shift 2 ;;
+        -t|--threads) THREADS="$2"; shift 2 ;;
+        -u|--umi-length) UMI_LEN="$2"; shift 2 ;;
+        -a|--adapter) ADAPTER_3="$2"; shift 2 ;;
+        -k|--keep) KEEP_INTERMEDIATE="yes"; shift ;;
+        --run-cims) RUN_CIMS=true; RUN_CTK="yes"; shift ;;
+        --run-cits) RUN_CITS=true; RUN_CTK="yes"; shift ;;
         --run-ctk) RUN_CTK="yes"; RUN_CIMS=true; RUN_CITS=true; shift ;;
         --cims-iter) CIMS_ITERATIONS="$2"; shift 2 ;;
         --cims-fdr) CIMS_FDR="$2"; shift 2 ;;
         --cits-pval) CITS_PVALUE="$2"; shift 2 ;;
         --cits-gap) CITS_GAP="$2"; shift 2 ;;
-        -f|--motif-flank) MOTIF_FLANK="$2"; shift 2 ;;
+        -f|--flank) MOTIF_FLANK="$2"; shift 2 ;;
         --no-motif) RUN_MOTIF="no"; shift ;;
-        -g|--groups) GROUPS_FILE="$2"; shift 2 ;;  # For bedgraph/matrix grouping only
-        --ctk-group) CTK_GROUP_MODE="true"; shift ;;  # Enable group CTK analysis
-        --sample) SAMPLE_SIZE="$2"; shift 2 ;;
-        -b|--barcode) BARCODE_FILE="$2"; DEMUX="yes"; shift 2 ;;
+        -g|--groups) GROUPS_FILE="$2"; shift 2 ;;
+        --ctk-group) CTK_GROUP_MODE="true"; shift ;;
+        -s|--sample) SAMPLE_SIZE="$2"; shift 2 ;;
+        -b|--barcodes) BARCODE_FILE="$2"; DEMUX="yes"; shift 2 ;;
         -d|--input-dir) INPUT_DIR="$2"; shift 2 ;;
         --demux-mismatches) DEMUX_MISMATCHES="$2"; shift 2 ;;
         --align-mismatches) ALIGN_MISMATCHES="$2"; shift 2 ;;
         --no-dedup) DEDUP_MODE="false"; shift ;;
-        --dedup) DEDUP_MODE="true"; shift ;; # Keep for compat
         --skip-ncrna) SKIP_NCRNA="true"; shift ;;
         --eclip) ECLIP_MODE="true"; shift ;;
         --no-chr-filter) FILTER_CHR="false"; shift ;;
         --notification) NOTIFY_MODE="true"; shift ;;
         --child) CHILD_MODE="true"; shift ;;
-        --wizard|--advanced)
-            WIZARD_MODE="true"
-            shift
-            ;;
-        --verbose) VERBOSE="true"; shift ;;
+        -w|--wizard|--advanced) WIZARD_MODE="true"; shift ;;
+        -v|--verbose) VERBOSE="true"; shift ;;
         -h|--help) show_usage; exit 0 ;;
         *) echo "[ERROR] Unknown option: $1"; show_usage; exit 1 ;;
     esac
@@ -312,10 +306,10 @@ if [[ $THREADS -gt $MAX_SAFE_THREADS ]]; then
     THREADS=$MAX_SAFE_THREADS
 fi
 
-# Validate groups file (requires --cims or --cits)
+# Validate groups file (requires --run-cims or --run-cits)
 if [[ -n "$GROUPS_FILE" ]]; then
     if [[ "$RUN_CIMS" != "true" ]] && [[ "$RUN_CITS" != "true" ]] && [[ "$CTK_GROUP_MODE" == "true" ]]; then
-        log_warning "--ctk-group requires --cims and/or --cits. Group CTK will be disabled."
+        log_warning "--ctk-group requires --run-cims and/or --run-cits. Group CTK will be disabled."
         CTK_GROUP_MODE="false"
     fi
     if [[ ! -f "$GROUPS_FILE" ]]; then
@@ -505,13 +499,13 @@ if [[ -n "$INPUT_DIR" ]]; then
     EXTRA_FLAGS=""
     # Only pass CIMS/CITS to children if NOT using groups file (group CTK runs after batch)
     if [[ -z "$CTK_GROUPS_FILE" ]]; then
-        if [[ "$RUN_CIMS" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --cims"; fi
-        if [[ "$RUN_CITS" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --cits"; fi
+        if [[ "$RUN_CIMS" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --run-cims"; fi
+        if [[ "$RUN_CITS" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --run-cits"; fi
     fi
     if [[ "$VERBOSE" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --verbose"; fi
     if [[ "$KEEP_INTERMEDIATE" == "yes" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS -k"; fi
     if [[ "$SAMPLE_SIZE" -gt 0 ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --sample $SAMPLE_SIZE"; fi
-    EXTRA_FLAGS="$EXTRA_FLAGS --aligner $ALIGNER"
+    EXTRA_FLAGS="$EXTRA_FLAGS -m $ALIGNER"
     if [[ "$ECLIP_MODE" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --eclip"; fi
     EXTRA_FLAGS="$EXTRA_FLAGS --no-dedup"  # Assume pre-processed, skip dedup
     EXTRA_FLAGS="$EXTRA_FLAGS --child"
@@ -920,14 +914,14 @@ if [[ "$DEMUX" == "yes" ]]; then
     EXTRA_FLAGS=""
     # Only pass CIMS/CITS to children if NOT using groups file (group CTK runs after batch)
     # Always pass CIMS/CITS flags if requested (Removed legacy suppression)
-    if [[ "$RUN_CIMS" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --cims"; fi
-    if [[ "$RUN_CITS" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --cits"; fi
+    if [[ "$RUN_CIMS" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --run-cims"; fi
+    if [[ "$RUN_CITS" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --run-cits"; fi
     if [[ "$VERBOSE" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --verbose"; fi
     if [[ "$SAMPLE_SIZE" -gt 0 ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --sample $SAMPLE_SIZE"; fi
     if [[ "$KEEP_INTERMEDIATE" == "yes" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS -k"; fi
     
     # Pass Aligner choice
-    EXTRA_FLAGS="$EXTRA_FLAGS --aligner $ALIGNER"
+    EXTRA_FLAGS="$EXTRA_FLAGS -m $ALIGNER"
     if [[ "$ECLIP_MODE" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --eclip"; fi
     
     # We already deduped the pooled file before demux (if DEDUP_MODE was true).

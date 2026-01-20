@@ -177,21 +177,21 @@ CLIPittyClip.sh -i pool.fastq.gz -b barcodes.txt -x /path/to/star_index -t 8
 CLIPittyClip.sh -d /path/to/samples_folder/ -x /path/to/star_index -t 8
 
 # Using Bowtie2 instead
-CLIPittyClip.sh -i reads.fastq.gz -x /path/to/bt2_index -t 8 --aligner bowtie2
+CLIPittyClip.sh -i reads.fastq.gz -x /path/to/bt2_index -t 8 -m bowtie2
 
 # With CIMS analysis only
-CLIPittyClip.sh -i reads.fastq.gz -x /path/to/star_index -t 8 --cims
+CLIPittyClip.sh -i reads.fastq.gz -x /path/to/star_index -t 8 --run-cims
 
 # With CITS analysis only
-CLIPittyClip.sh -i reads.fastq.gz -x /path/to/star_index -t 8 --cits
+CLIPittyClip.sh -i reads.fastq.gz -x /path/to/star_index -t 8 --run-cits
 
 # With both CIMS and CITS analysis
-CLIPittyClip.sh -i reads.fastq.gz -x /path/to/star_index -t 8 --ctk
+CLIPittyClip.sh -i reads.fastq.gz -x /path/to/star_index -t 8 --run-ctk
 # OR equivalently:
-CLIPittyClip.sh -i reads.fastq.gz -x /path/to/star_index -t 8 --cims --cits
+CLIPittyClip.sh -i reads.fastq.gz -x /path/to/star_index -t 8 --run-cims --run-cits
 
 # ENCODE eCLIP analysis (pre-processed files with UMI in header)
-CLIPittyClip.sh --eclip -d /path/to/samples/ -x /path/to/star_index -t 8 --cims --cits
+CLIPittyClip.sh --eclip -d /path/to/samples/ -x /path/to/star_index -t 8 --run-cims --run-cits
 ```
 
 ## ENCODE eCLIP Mode
@@ -203,7 +203,7 @@ For pre-processed ENCODE eCLIP data, use `--eclip` mode:
 CLIPittyClip.sh --eclip -d /path/to/eclip_fastqs/ -x /path/to/star_index -t 8
 
 # eCLIP with CIMS/CITS analysis (optional, add flags as needed)
-CLIPittyClip.sh --eclip -d /path/to/eclip_fastqs/ -x /path/to/star_index -t 8 --cims --cits
+CLIPittyClip.sh --eclip -d /path/to/eclip_fastqs/ -x /path/to/star_index -t 8 --run-cims --run-cits
 ```
 
 **What `--eclip` does (preprocessing only):**
@@ -211,7 +211,7 @@ CLIPittyClip.sh --eclip -d /path/to/eclip_fastqs/ -x /path/to/star_index -t 8 --
 - **Uses 9 standard eCLIP adapters** - Automatically trims all adapter variants
 - **Reformats headers for CTK** - Converts to CTK-compatible format for tag2collapse
 
-> **Note:** `--eclip` only affects preprocessing. CIMS/CITS analysis requires separate `--cims` and/or `--cits` flags.
+> **Note:** `--eclip` only affects preprocessing. CIMS/CITS analysis requires separate `--run-cims` and/or `--run-cits` flags.
 
 > **Note:** Dynamic thread scaling for CIMS/CITS (based on available RAM) applies to all modes, not just eCLIP.
 
@@ -234,36 +234,80 @@ CLIPittyClip.sh --eclip -d /path/to/eclip_fastqs/ -x /path/to/star_index -t 8 --
 
 ## Command-Line Options
 
-Run `CLIPittyClip.sh --help` for full usage. Key options:
+Run `CLIPittyClip.sh --help` for full usage.
 
-| Option | Description |
-|--------|-------------|
-| `-i <path>` | Input FASTQ file (required unless using `-d`) |
-| `-d <dir>` | Input directory with pre-demultiplexed FASTQs |
-| `-x <path>` | Genome index directory (required) |
-| `-t <int>` | Number of threads |
-| `-u <int>` | UMI length (e.g., 7) |
-| `--aligner` | `star` (default) or `bowtie2` |
-| `-b <path>` | Barcode file for demultiplexing |
-| `--demux-mismatches` | Max barcode mismatches (default: 1) |
-| `--align-mismatches` | Max alignment mismatches (default: 2, STAR only) |
-| `--skip-ncrna` | Disable ncRNA pre-filtering (on by default) |
-| `--eclip` | ENCODE eCLIP mode (UMI in header, 9 adapters) |
-| `--cims` | Enable CIMS analysis |
-| `--cits` | Enable CITS analysis |
-| `--cims-fdr` | CIMS FDR threshold (default: 0.05) |
-| `--cits-pval` | CITS p-value threshold (default: 0.05) |
-| `-g, --ctk-group` | Aggregate samples by group for CIMS/CITS |
-| `--no-dedup` | Disable pooled read deduplication |
-| `--sample <int>` | Test mode (first N reads) |
-| `--wizard` | Interactive configuration wizard |
+### Input/Output Options
+
+| Short | Long | Type | Default | Description |
+|-------|------|------|---------|-------------|
+| `-i` | `--input-file` | path | — | Input FASTQ file (required unless using `-d`) |
+| `-d` | `--input-dir` | path | — | Input directory with pre-demultiplexed FASTQs |
+| `-x` | `--index` | path | — | Genome index directory (required) |
+| `-o` | `--output` | string | derived from input | Output folder name |
+| `-k` | `--keep` | bool | no | Keep intermediate files |
+
+### Processing Options
+
+| Short | Long | Type | Default | Description |
+|-------|------|------|---------|-------------|
+| `-t` | `--threads` | int | 1 | Number of threads |
+| `-m` | `--mapper` | string | star | Mapper: `star` or `bowtie2` |
+| `-v` | `--verbose` | bool | false | Enable verbose logging |
+| `-h` | `--help` | — | — | Show help message |
+
+### Preprocessing Options
+
+| Short | Long | Type | Default | Description |
+|-------|------|------|---------|-------------|
+| `-u` | `--umi-length` | int | — | UMI length (auto-detected for eCLIP) |
+| `-a` | `--adapter` | string | L32 | 3' adapter sequence |
+| — | `--eclip` | bool | false | ENCODE eCLIP mode |
+| — | `--no-dedup` | bool | — | Disable FASTQ deduplication (default: ON) |
+
+### Demultiplexing Options
+
+| Short | Long | Type | Default | Description |
+|-------|------|------|---------|-------------|
+| `-b` | `--barcodes` | path | — | Barcode file (enables demultiplexing) |
+| — | `--demux-mismatches` | int | 1 | Max barcode mismatches |
+| — | `--align-mismatches` | int | 2 | Max alignment mismatches (STAR only) |
+| — | `--skip-ncrna` | bool | false | Disable ncRNA pre-filtering |
+
+### CTK Analysis Options
+
+| Short | Long | Type | Default | Description |
+|-------|------|------|---------|-------------|
+| — | `--run-ctk` | bool | — | Enable full CTK CIMS+CITS analysis |
+| — | `--run-cims` | bool | — | Enable CIMS analysis (mutation sites) |
+| — | `--run-cits` | bool | — | Enable CITS analysis (truncation sites) |
+| — | `--cims-iter` | int | 5 | CIMS permutation iterations |
+| — | `--cims-fdr` | float | 0.05 | CIMS FDR threshold |
+| — | `--cits-pval` | float | 0.05 | CITS p-value threshold |
+| — | `--cits-gap` | int | 25 | CITS clustering gap (-1 disables) |
+| `-f` | `--flank` | int | 10 | Flanked BED nucleotides |
+| — | `--no-motif` | bool | — | Skip flanked BED generation |
+
+### Grouping Options
+
+| Short | Long | Type | Default | Description |
+|-------|------|------|---------|-------------|
+| `-g` | `--groups` | path | — | Groups file for bedgraph/peak grouping |
+| — | `--ctk-group` | bool | false | Enable group CTK analysis |
+
+### Other Options
+
+| Short | Long | Type | Default | Description |
+|-------|------|------|---------|-------------|
+| — | `--notification` | bool | false | Enable system notifications |
+| `-w` | `--wizard` | bool | — | Launch interactive wizard |
+| `-s` | `--sample` | int | — | Test mode: process only first N reads |
 
 ## Group-Based CIMS/CITS Analysis
 
-Use `--ctk-group groups.txt` to aggregate replicates/samples before running CIMS/CITS:
+Use `--ctk-group` with `-g groups.txt` to aggregate replicates/samples before running CIMS/CITS:
 
 ```bash
-CLIPittyClip.sh -i pool.fq.gz -b barcodes.txt -x index --cims --cits --ctk-group groups.txt
+CLIPittyClip.sh -i pool.fq.gz -b barcodes.txt -x index --run-cims --run-cits -g groups.txt --ctk-group
 ```
 
 **groups.txt format** (tab-separated: `SampleName<TAB>GroupName`):
@@ -347,19 +391,19 @@ Standalone mapping module for aligning FASTQ files to a reference genome.
 
 **Key options:**
 - `-t <int>`: Number of threads (default: 1)
-- `--aligner <star|bowtie2>`: Alignment tool (default: star)
+- `-m, --mapper <star|bowtie2>`: Alignment tool (default: star)
 - `-o <path>`: Output directory
-- `--wizard`: Launch interactive configuration wizard
+- `-w, --wizard`: Launch interactive configuration wizard
 
 ```bash
 # Using STAR
-MAPittyMap.sh -i reads.fastq.gz -x /path/to/star_index -t 8 --aligner star
+MAPittyMap.sh -i reads.fastq.gz -x /path/to/star_index -t 8 -m star
 
 # Using Bowtie2
-MAPittyMap.sh -i reads.fastq.gz -x /path/to/bt2_index -t 8 --aligner bowtie2
+MAPittyMap.sh -i reads.fastq.gz -x /path/to/bt2_index -t 8 -m bowtie2
 
 # Interactive wizard mode for custom aligner settings
-MAPittyMap.sh -i reads.fastq.gz -x /path/to/star_index -t 8 --wizard
+MAPittyMap.sh -i reads.fastq.gz -x /path/to/star_index -t 8 -w
 ```
 
 ---
