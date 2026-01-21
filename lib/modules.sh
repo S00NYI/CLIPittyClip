@@ -337,7 +337,7 @@ run_preprocessing() {
     # 4. stripBarcode.pl (extract UMI to header after count)
     #==========================================================================
     if [[ "$eclip_mode" == "true" ]]; then
-        log_info "eCLIP mode: Using CTK documentation preprocessing workflow"
+        log_info "eCLIP mode: Preprocessing workflow (collapse before trim)"
         
         # Step 1: Detect and validate UMI length
         local detected_umi_len=$(detect_eclip_umi_length "$input_file" "$umi_len")
@@ -353,10 +353,34 @@ run_preprocessing() {
             exit 1
         fi
         
-        # Step 3: Adapter trimming with fastp (eCLIP params from CTK documentation)
-        echo -ne " → Adapter Trimming"
-        local trimmed_file="${output_prefix}_trimmed.fastq.gz"
-        local fastp_cmd="fastp -i ${umi_seq_file} -o ${trimmed_file} \
+        # Step 3: Collapse exact duplicates FIRST (with UMI in sequence)
+        # This matches non-eCLIP flow where collapse happens before fastp
+        echo -ne " → Collapsing"
+        local collapsed_file="${output_prefix}_collapsed.fastq"
+        local collapsed_file_gz="${output_prefix}_collapsed.fastq.gz"
+        gzip -dc "$umi_seq_file" > "${output_prefix}_umi_temp.fastq"
+        fastq2collapse.pl "${output_prefix}_umi_temp.fastq" "$collapsed_file" 2>> "${LOG_FILE}"
+        if [[ ! -s "$collapsed_file" ]]; then
+            log_error "fastq2collapse.pl failed"
+            exit 1
+        fi
+        gzip -c "$collapsed_file" > "$collapsed_file_gz"
+        rm -f "${output_prefix}_umi_temp.fastq" "$collapsed_file" "$umi_seq_file"
+        
+        # Step 4: Strip UMI from sequence, attach to header after count
+        echo -ne " → Extract UMI"
+        local stripped_file="${output_prefix}_stripped.fastq.gz"
+        strip_eclip_barcode "$collapsed_file_gz" "$stripped_file" "$umi_len"
+        rm -f "$collapsed_file_gz"
+        if [[ ! -s "$stripped_file" ]]; then
+            log_error "stripBarcode.pl failed"
+            exit 1
+        fi
+        
+        # Step 5: Adapter trimming with fastp (AFTER collapse for efficiency)
+        echo -ne " → Adapter Trim) > "
+        local final_file="${output_prefix}_cleaned.fastq.gz"
+        local fastp_cmd="fastp -i ${stripped_file} -o ${final_file} \
             --thread ${threads} \
             --adapter_fasta ${eclip_adapters_fasta} \
             --length_required 20 \
@@ -367,32 +391,13 @@ run_preprocessing() {
         if [ "$sample_size" -gt 0 ]; then fastp_cmd+=" --reads_to_process $sample_size"; fi
         log_info "Running: $fastp_cmd"
         execute_cmd "$fastp_cmd"
-        rm -f "$umi_seq_file"  # Cleanup intermediate
+        rm -f "$stripped_file"  # Cleanup intermediate
         
         # Check fastp succeeded
-        if [[ ! -s "$trimmed_file" ]]; then
-            log_error "fastp failed to create trimmed file"
+        if [[ ! -s "$final_file" ]]; then
+            log_error "fastp failed to create cleaned file"
             exit 1
         fi
-        
-        # Step 4: Collapse exact duplicates (with UMI in sequence)
-        echo -ne " → Collapsing Duplicates"
-        local collapsed_file="${output_prefix}_collapsed.fastq"
-        local collapsed_file_gz="${output_prefix}_collapsed.fastq.gz"
-        gzip -dc "$trimmed_file" > "${output_prefix}_trimmed_temp.fastq"
-        fastq2collapse.pl "${output_prefix}_trimmed_temp.fastq" "$collapsed_file" 2>> "${LOG_FILE}"
-        if [[ ! -s "$collapsed_file" ]]; then
-            log_error "fastq2collapse.pl failed"
-            exit 1
-        fi
-        gzip -c "$collapsed_file" > "$collapsed_file_gz"
-        rm -f "${output_prefix}_trimmed_temp.fastq" "$collapsed_file" "$trimmed_file"
-        
-        # Step 5: Strip UMI from sequence, attach to header after count
-        echo -ne " → Extract UMI) > "
-        local final_file="${output_prefix}_cleaned.fastq.gz"
-        strip_eclip_barcode "$collapsed_file_gz" "$final_file" "$umi_len"
-        rm -f "$collapsed_file_gz"
         
         log_info "eCLIP preprocessing complete: $final_file"
         log_info "Read ID format: READ#count#UMI (CTK-compatible)"

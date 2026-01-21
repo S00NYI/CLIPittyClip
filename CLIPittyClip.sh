@@ -912,10 +912,14 @@ if [[ "$DEMUX" == "yes" ]]; then
     
     # Check if we need to pass CIMS/CITS flags
     EXTRA_FLAGS=""
-    # Only pass CIMS/CITS to children if NOT using groups file (group CTK runs after batch)
-    # Always pass CIMS/CITS flags if requested (Removed legacy suppression)
-    if [[ "$RUN_CIMS" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --run-cims"; fi
-    if [[ "$RUN_CITS" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --run-cits"; fi
+    # Only pass CIMS/CITS to children if NOT using group CTK mode
+    # When --ctk-group is enabled, skip individual CTK (group CTK runs after batch)
+    if [[ "$CTK_GROUP_MODE" != "true" ]]; then
+        if [[ "$RUN_CIMS" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --run-cims"; fi
+        if [[ "$RUN_CITS" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --run-cits"; fi
+    else
+        log_info "Group CTK mode: skipping individual CIMS/CITS (will run on grouped data)"
+    fi
     if [[ "$VERBOSE" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --verbose"; fi
     if [[ "$SAMPLE_SIZE" -gt 0 ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --sample $SAMPLE_SIZE"; fi
     if [[ "$KEEP_INTERMEDIATE" == "yes" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS -k"; fi
