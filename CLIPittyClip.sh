@@ -1063,9 +1063,8 @@ if [[ "$DEMUX" == "yes" ]]; then
         mkdir -p "$OUTPUT_ROOT/$DIR_OTHERS/STAR_OUTPUT"
     fi
 
-    # Run Group-based CTK Analysis (OPT-IN ONLY)
-    # User requested to deactivate automatic group CTK.
-    if [[ "$RUN_GROUP_CTK" == "true" ]] && [[ -n "$GROUPS_FILE" ]]; then
+    # Run Group-based CTK Analysis (OPT-IN ONLY with --ctk-group flag)
+    if [[ "$CTK_GROUP_MODE" == "true" ]] && [[ -n "$GROUPS_FILE" ]]; then
         run_group_ctk_analysis "$GROUPS_FILE" "$OUTPUT_ROOT" "$GENOME_INDEX" \
             "$CIMS_ITERATIONS" "$CIMS_FDR" "$CITS_PVALUE" "$CITS_GAP" \
             "$MOTIF_FLANK" "$RUN_MOTIF" "$RUN_CIMS" "$RUN_CITS"
