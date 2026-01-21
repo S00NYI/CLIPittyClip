@@ -23,43 +23,9 @@ CLIPittyClip v3.0 provides a complete, modernized workflow for CLIP-seq analysis
 
 ## Pipeline Flow
 
-```mermaid
-flowchart TD
-    subgraph INPUT["1. Input & Preprocessing"]
-        A["Pooled FASTQ"] --> B["SeqKit Dedup"]
-        B --> C["Cutadapt Demux"]
-        C --> D["Per-Sample FASTQs"]
-    end
-    
-    subgraph ALIGN["2. Per-Sample Processing"]
-        D --> E["fastp QC"]
-        E --> F{"Aligner"}
-        F -->|STAR| G["STAR"]
-        F -->|Bowtie2| H["Bowtie2"]
-        G --> I["Sorted BAM"]
-        H --> I
-    end
-    
-    subgraph UNIFIED["3. Unified Preprocessing"]
-        I --> J["samtools calmd"]
-        J --> K["parseAlignment.pl"]
-        K --> L["tags.bed + mutations.txt"]
-        L --> M["tag2collapse.pl"]
-        M --> N["Collapsed BED"]
-    end
-    
-    subgraph ANALYSIS["4. Analysis"]
-        N --> O["Bedgraph Coverage"]
-        N --> P["HOMER Peaks"]
-        N --> Q{"CIMS/CITS?"}
-        Q -->|Yes| R["CIMS.pl"]
-        Q -->|Yes| S["CITS.pl"]
-        R --> T["CIMS Results"]
-        S --> U["CITS Results"]
-    end
-```
-
-> **Note**: Unified preprocessing always runs, generating `mutations.txt` for CIMS/CITS compatibility.
+<p align="center">
+  <img src="flowchart.png" alt="CLIPittyClip Pipeline Flow" width="800">
+</p>
 
 ## Installation
 
