@@ -798,7 +798,7 @@ if [[ -n "$INPUT_DIR" ]]; then
     rm -f *_sampled_*.fastq.gz 2>/dev/null
     
     # Remove CITS.pl temporary directories and .tmp files (from failed/empty CTK runs)
-    rm -rf CITS.pl_* 2>/dev/null
+    rm -rf CITS.pl_* tag2profile.pl_* 2>/dev/null
     rm -f *.tmp 2>/dev/null
     
     send_notification "CLIPittyClip" "Directory batch analysis complete: $total_samples samples"
@@ -1346,8 +1346,8 @@ if [[ "$DEMUX" == "yes" ]]; then
     # Remove sampled input if it exists (pattern match)
     rm -f *_sampled_*.fastq.gz
     
-    # Remove CTK temp directories (CITS.pl_* and CIMS.pl_*)
-    rm -rf CITS.pl_* CIMS.pl_* 2>/dev/null
+    # Remove CTK temp directories (CITS.pl_*, CIMS.pl_*, tag2profile.pl_*)
+    rm -rf CITS.pl_* CIMS.pl_* tag2profile.pl_* 2>/dev/null
     
     # Remove CTK temp files (*.tmp from perl scripts)
     rm -f *.tmp 2>/dev/null
