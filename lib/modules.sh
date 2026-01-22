@@ -211,7 +211,7 @@ detect_eclip_umi_length() {
     # Get first read header and extract UMI (before first colon)
     local first_header
     if [[ "$input_fastq" == *.gz ]]; then
-        first_header=$(zcat "$input_fastq" | head -1)
+        first_header=$(gunzip -c "$input_fastq" | head -1)
     else
         first_header=$(head -1 "$input_fastq")
     fi
@@ -249,7 +249,7 @@ reformat_eclip_umi_to_sequence() {
     # Generate quality string for UMI (I = Phred 40, high quality)
     local umi_qual=$(printf 'I%.0s' $(seq 1 $umi_len))
     
-    zcat "$input_fastq" | awk -v umi_len="$umi_len" -v umi_qual="$umi_qual" '
+    gunzip -c "$input_fastq" | awk -v umi_len="$umi_len" -v umi_qual="$umi_qual" '
     BEGIN { OFS="" }
     {
         if (NR % 4 == 1) {
