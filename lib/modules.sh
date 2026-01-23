@@ -249,6 +249,9 @@ reformat_eclip_umi_to_sequence() {
     # Generate quality string for UMI (I = Phred 40, high quality)
     local umi_qual=$(printf 'I%.0s' $(seq 1 $umi_len))
     
+    # Write to temp file first, then gzip (avoids macOS pipe buffering issues)
+    local temp_output="${output_fastq%.gz}"
+    
     gunzip -c "$input_fastq" | awk -v umi_len="$umi_len" -v umi_qual="$umi_qual" '
     BEGIN { OFS="" }
     {
@@ -281,7 +284,12 @@ reformat_eclip_umi_to_sequence() {
             # + line
             print $0
         }
-    }' | gzip > "$output_fastq"
+    }' > "$temp_output"
+    
+    # Explicitly gzip the temp file (creates .gz, removes original)
+    if [[ -s "$temp_output" ]]; then
+        gzip -f "$temp_output"
+    fi
     
     if [[ -s "$output_fastq" ]]; then
         log_info "UMI moved to sequence: $output_fastq"
