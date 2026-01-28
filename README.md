@@ -68,7 +68,7 @@ conda activate [ENV_NAME]
 conda config --env --set subdir osx-64
 
 # Step 2: Install core packages
-mamba env update -f install_macos.yml
+mamba env update -n [ENV_NAME] -f install_macos.yml
 
 # Step 3: Install CTK and HOMER manually (see Section 3 below)
 ```
@@ -85,11 +85,21 @@ mkdir -p ~/Tools
 # Clone CTK repository
 git clone https://github.com/chaolinzhanglab/ctk.git ~/Tools/ctk
 
+# Download missing MyConfig.pm from czplib repository
+curl -o ~/Tools/ctk/czplib/MyConfig.pm \
+  https://raw.githubusercontent.com/chaolinzhanglab/czplib/master/MyConfig.pm
+
 # Add CTK to your PATH and PERL5LIB
 echo 'export PATH=$PATH:~/Tools/ctk' >> ~/.zshrc
 echo 'export PERL5LIB=$PERL5LIB:~/Tools/ctk/czplib' >> ~/.zshrc
 source ~/.zshrc
 ```
+
+> **Already installed CTK?** If you encounter `Can't locate MyConfig.pm` errors, run:
+> ```bash
+> curl -o ~/Tools/ctk/czplib/MyConfig.pm \
+>   https://raw.githubusercontent.com/chaolinzhanglab/czplib/master/MyConfig.pm
+> ```
 
 **HOMER:**
 ```bash

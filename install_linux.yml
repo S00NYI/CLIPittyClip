@@ -1,4 +1,4 @@
-name: CLIPittyClip_env
+name: CLIPittyClip
 channels:
   - conda-forge
   - bioconda
