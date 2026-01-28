@@ -556,11 +556,17 @@ run_mapping_star() {
         read_command="cat"
     fi
 
+    # Create temp directory for STAR (prevents FIFO errors on exFAT/NTFS drives)
+    local star_tmp="${TMPDIR:-/tmp}/star_$(basename "$output_prefix")_$$"
+    mkdir -p "$star_tmp"
+    log_info "STAR temp directory: $star_tmp"
+
     local cmd="STAR --runThreadN ${threads} \
         --genomeDir ${genome_dir} \
         --readFilesIn ${input_fastq} \
         --readFilesCommand ${read_command} \
         --outFileNamePrefix ${output_prefix}. \
+        --outTmpDir ${star_tmp}/STARtmp \
         --outSAMtype BAM SortedByCoordinate \
         --outFilterMultimapNmax 10 \
         --outFilterMismatchNmax ${mismatch_max} \
@@ -570,7 +576,12 @@ run_mapping_star() {
 
     log_info "Running: $cmd"
     execute_cmd "$cmd"
-    if [ $? -ne 0 ]; then
+    local star_exit=$?
+    
+    # Cleanup temp directory (always, even on failure)
+    rm -rf "$star_tmp"
+    
+    if [ $star_exit -ne 0 ]; then
         log_error "STAR mapping failed. Check the log file for details."
         exit 1
     fi
