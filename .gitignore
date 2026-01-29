@@ -4,3 +4,13 @@ indices.tar.gz
 
 bedgraph_normalization_1.sh
 bedgraph_normalization_2.R
+
+# Installation logs
+install_*.txt
+install_log*.txt
+*.log
+
+# Editor/IDE
+.vscode/
+*.swp
+*~

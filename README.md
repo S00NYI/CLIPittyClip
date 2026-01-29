@@ -11,14 +11,10 @@ A comprehensive, single-command CLIP-seq data analysis pipeline from FASTQ to pe
 
 CLIPittyClip v3.0 provides a complete, modernized workflow for CLIP-seq analysis:
 
-- **Dual Aligner Support**: STAR (default) or Bowtie2 (with smart index prioritization)
-- **Unified Preprocessing**: `samtools calmd` → `parseAlignment.pl` → `tag2collapse.pl`
+- **Dual Aligner Support**: STAR (default) or Bowtie2
 - **Advanced Coverage Analysis**: Normalized BedGraph generation (CPM) with junction read removal (CIGAR filtering) and group averaging
-- **Integrated QC**: `fastp` for quality filtering, trimming, and UMI extraction
-- **Demultiplexing**: Native barcode-based sample splitting with `cutadapt`
-- **Dual-Mode Peak Calling**: Robust `PEAKittyPeak` module supporting aggregated (meta-peak) or individual calling without filesystem limitations
-- **Group-Based Analysis**: Integrated support for group-wise peak aggregation and CTK analysis
-- **Flexible Reporting**: Centralized `REPORTS/` folder with detailed logs and stats
+- **Advanced Peak Calling**: Robust `PEAKittyPeak` module supporting aggregated (meta-peak) or individual calling without filesystem limitations
+- **Group/Condition-Based Analysis**: Group/Condition-wise peak aggregation and CTK analysis
 - **Interactive Wizard**: `--wizard` mode for guided configuration
 
 ## Pipeline Flow
@@ -31,114 +27,63 @@ CLIPittyClip v3.0 provides a complete, modernized workflow for CLIP-seq analysis
 
 > ⚠️ **Development Version**: This is the `v3-development` branch. For the stable release, use the `main` branch.
 
-### 1. Clone Repository
+### Quick Install (Recommended)
+
+CLIPittyClip provides self-contained installation scripts that automatically install all dependencies including CTK, HOMER, and required Perl modules.
+
+#### 1. Clone Repository
 ```bash
 git clone -b v3-development https://github.com/S00NYI/CLIPittyClip.git
 cd CLIPittyClip
 ```
 
-### 2. Create Conda Environment
+#### 2. Run Installation Script
 
-> **Note:** Replace `[ENV_NAME]` with your preferred environment name (e.g., `clipittyclip`, `clip_env`, etc.)
-
-#### Linux
+**macOS (Intel or Apple Silicon):**
 ```bash
-mamba env create -n [ENV_NAME] -f install_linux.yml
+./install_macos.sh --env clipittyclip --tools-dir ~/Tools
 ```
 
-#### macOS (Intel or Apple Silicon)
-
-> [!IMPORTANT]
-> **Why macOS requires special installation:**
-> 
-> The CTK (CLIP Tool Kit) and HOMER packages have incompatible Perl version requirements:
-> - **CTK** requires `perl >=5.32.1`
-> - **HOMER** requires `perl 5.22.0` or `perl 5.26.x`
-> 
-> Additionally, some CTK dependencies (like `xopen` via `cutadapt`) have broken builds for macOS on conda channels. These conflicts make it impossible to install both packages via conda on macOS.
-> 
-> The workaround is to:
-> 1. Install core dependencies via conda (using x86 emulation via Rosetta 2)
-> 2. Install CTK and HOMER manually from source
-
+**Linux:**
 ```bash
-# Step 1: Create environment with x86 architecture (required for Rosetta compatibility)
-CONDA_SUBDIR=osx-64 mamba create -n [ENV_NAME]
-conda activate [ENV_NAME]
-conda config --env --set subdir osx-64
-
-# Step 2: Install core packages
-mamba env update -n [ENV_NAME] -f install_macos.yml
-
-# Step 3: Install CTK and HOMER manually (see Section 3 below)
+./install_linux.sh --env clipittyclip --tools-dir ~/Tools
 ```
 
-### 3. macOS: Manual CTK & HOMER Installation
+> **Note:** The scripts will:
+> - Create a conda environment with all dependencies
+> - Install CTK and HOMER from source
+> - Install required Perl modules (Math::CDF, Bio::SeqIO) via CPAN
+> - Configure your shell PATH automatically
 
-> **Note:** The commands below install to `~/Tools/`. If this directory doesn't exist, it will be created automatically. You can change the installation path to any location you prefer.
-
-**CTK (CLIP Tool Kit):**
+#### 3. Activate and Verify
 ```bash
-# Create Tools directory if it doesn't exist
-mkdir -p ~/Tools
+# Restart terminal or source your shell config
+source ~/.zshrc    # macOS
+source ~/.bashrc   # Linux
 
-# Clone CTK repository
-git clone https://github.com/chaolinzhanglab/ctk.git ~/Tools/ctk
+# Activate the environment
+conda activate clipittyclip
 
-# Download missing MyConfig.pm from czplib repository
-curl -o ~/Tools/ctk/czplib/MyConfig.pm \
-  https://raw.githubusercontent.com/chaolinzhanglab/czplib/master/MyConfig.pm
-
-# Add CTK to your PATH and PERL5LIB
-echo 'export PATH=$PATH:~/Tools/ctk' >> ~/.zshrc
-echo 'export PERL5LIB=$PERL5LIB:~/Tools/ctk/czplib' >> ~/.zshrc
-source ~/.zshrc
+# Verify installation
+which CLIPittyClip.sh
+which parseAlignment.pl
+which findPeaks
+perl -MBio::SeqIO -e 'print "Bio::SeqIO OK\n"'
+perl -MMath::CDF -e 'print "Math::CDF OK\n"'
 ```
 
-> **Already installed CTK?** If you encounter `Can't locate MyConfig.pm` errors, run:
-> ```bash
-> curl -o ~/Tools/ctk/czplib/MyConfig.pm \
->   https://raw.githubusercontent.com/chaolinzhanglab/czplib/master/MyConfig.pm
-> ```
+### Installation Options
 
-**HOMER:**
-```bash
-# Create HOMER directory and download installer
-mkdir -p ~/Tools/homer && cd ~/Tools/homer
-wget http://homer.ucsd.edu/homer/configureHomer.pl
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--env <name>` | `clipittyclip` | Conda environment name |
+| `--tools-dir <path>` | `~/Tools` | Directory for CTK/HOMER |
+| `--help` | — | Show help message |
 
-# Install HOMER (this will download required data files)
-perl configureHomer.pl -install
+### Manual Installation (Advanced)
 
-# Add HOMER to your PATH
-echo 'export PATH=$PATH:~/Tools/homer/bin' >> ~/.zshrc
-source ~/.zshrc
-```
+If the automated scripts don't work for your system, see [docs/manual_installation.md](docs/manual_installation.md) for step-by-step instructions.
 
-### 4. Activate Environment
-```bash
-# Replace [ENV_NAME] with the name you chose in Step 2
-conda activate [ENV_NAME]
-
-# Example:
-# conda activate clipittyclip
-```
-
-### 5. Add CLIPittyClip to PATH (Optional)
-
-To run CLIPittyClip commands from any directory:
-
-```bash
-# For zsh (macOS default)
-bash install_zshrc.sh
-
-# For bash (Linux default)
-bash install_bashrc.sh
-```
-
-This adds the CLIPittyClip directory to your PATH and sets execute permissions on all scripts.
-
-> **Note:** Restart your terminal or run `source ~/.zshrc` (or `source ~/.bashrc`) for the changes to take effect.
 
 ## Quick Start
 

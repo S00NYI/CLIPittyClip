@@ -296,7 +296,12 @@ fi
 GENOME_INDEX="$(cd "$GENOME_INDEX" && pwd)"
 
 # Thread validation: cap to available cores - 1 (leave 1 for system)
-MAX_AVAILABLE_THREADS=$(nproc 2>/dev/null || echo 4)
+# Cross-platform CPU detection: macOS uses sysctl, Linux uses nproc
+if [[ "$(uname)" == "Darwin" ]]; then
+    MAX_AVAILABLE_THREADS=$(sysctl -n hw.ncpu 2>/dev/null || echo 4)
+else
+    MAX_AVAILABLE_THREADS=$(nproc 2>/dev/null || echo 4)
+fi
 MAX_SAFE_THREADS=$(( MAX_AVAILABLE_THREADS - 1 ))
 [[ $MAX_SAFE_THREADS -lt 1 ]] && MAX_SAFE_THREADS=1
 
