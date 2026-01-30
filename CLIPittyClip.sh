@@ -295,6 +295,16 @@ fi
 
 GENOME_INDEX="$(cd "$GENOME_INDEX" && pwd)"
 
+# Normalize EXP_ID (strip trailing slash if present)
+EXP_ID="${EXP_ID%/}"
+
+# Determine input parent directory for default output location
+if [[ -n "$INPUT_FILE" ]]; then
+    INPUT_PARENT="$(dirname "$INPUT_FILE")"
+elif [[ -n "$INPUT_DIR" ]]; then
+    INPUT_PARENT="$(dirname "$INPUT_DIR")"
+fi
+
 # Thread validation: cap to available cores - 1 (leave 1 for system)
 # Cross-platform CPU detection: macOS uses sysctl, Linux uses nproc
 if [[ "$(uname)" == "Darwin" ]]; then
@@ -555,10 +565,15 @@ if [[ -n "$INPUT_DIR" ]]; then
     # Aggregation - same as demux path
     INPUT_BASENAME=$(basename "$INPUT_DIR")
     # Use -o value for output folder if provided, otherwise use input directory name
+    # If -o contains a path separator, use as full path; otherwise create next to input
     if [[ -n "$EXP_ID" ]]; then
-        OUTPUT_ROOT="$EXP_ID"
+        if [[ "$EXP_ID" == */* ]]; then
+            OUTPUT_ROOT="$EXP_ID"
+        else
+            OUTPUT_ROOT="${INPUT_PARENT}/${EXP_ID}"
+        fi
     else
-        OUTPUT_ROOT="${INPUT_BASENAME}_output"
+        OUTPUT_ROOT="${INPUT_PARENT}/${INPUT_BASENAME}_output"
     fi
     
     DIR_BAM="1_BAM"
@@ -1024,10 +1039,15 @@ if [[ "$DEMUX" == "yes" ]]; then
         INPUT_BASENAME="${INPUT_BASENAME%_sampled_*}"
     fi
     # Use -o value for output folder if provided, otherwise use input file name
+    # If -o contains a path separator, use as full path; otherwise create next to input
     if [[ -n "$EXP_ID" ]]; then
-        OUTPUT_ROOT="$EXP_ID"
+        if [[ "$EXP_ID" == */* ]]; then
+            OUTPUT_ROOT="$EXP_ID"
+        else
+            OUTPUT_ROOT="${INPUT_PARENT}/${EXP_ID}"
+        fi
     else
-        OUTPUT_ROOT="${INPUT_BASENAME}_output"
+        OUTPUT_ROOT="${INPUT_PARENT}/${INPUT_BASENAME}_output"
     fi
     
     DIR_DEMUX="0_DEMUX_FASTQ"

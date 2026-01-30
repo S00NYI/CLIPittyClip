@@ -164,8 +164,13 @@ Run `CLIPittyClip.sh --help` for full usage.
 | `-i` | `--input-file` | path | — | Input FASTQ file (required unless using `-d`) |
 | `-d` | `--input-dir` | path | — | Input directory with pre-demultiplexed FASTQs |
 | `-x` | `--index` | path | — | Genome index directory (required) |
-| `-o` | `--output` | string | derived from input | Output folder name |
+| `-o` | `--output` | string | next to input | Output folder name or full path (see below) |
 | `-k` | `--keep` | bool | no | Keep intermediate files |
+
+> **Output Location (`-o`):**
+> - **No `-o`**: Output created next to input files (e.g., `/data/reads.fq.gz` → `/data/reads_output/`)
+> - **Name only** (`-o HepG2`): Creates folder next to input (e.g., `/data/HepG2/`)
+> - **Full path** (`-o /results/HepG2`): Uses exact path specified
 
 ### Processing Options
 

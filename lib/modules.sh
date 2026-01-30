@@ -1521,11 +1521,11 @@ run_cims() {
         # Split collapsed BED by chromosome (standard chromosomes only: chr1-22, X, Y, M)
         # This filters out contigs like KI270737.1, GL000220.1, etc.
         grep -E '^chr([1-9]|1[0-9]|2[0-2]|X|Y|M)[[:space:]]' "$input_collapsed_bed" | \
-            awk -v dir="$chunk_dir" '{print > dir"/chr_"$1".bed"}'
+            awk -v dir="$chunk_dir" '{print > (dir"/chr_"$1".bed")}'
         
         # CRITICAL FIX: Also split mutation file by chromosome to match collapsed.bed chunks
         grep -E '^chr([1-9]|1[0-9]|2[0-2]|X|Y|M)[[:space:]]' "$mutation_bed" | \
-            awk -v dir="$chunk_dir" '{print > dir"/chr_"$1".mut.bed"}'
+            awk -v dir="$chunk_dir" '{print > (dir"/chr_"$1".mut.bed")}'
         
         # Create processing script (updated to use per-chromosome mutation file)
         local process_script="$chunk_dir/run_cims_chunk.sh"
@@ -1664,11 +1664,11 @@ run_cits() {
         # Split collapsed BED by chromosome (standard chromosomes only: chr1-22, X, Y, M)
         # This filters out contigs like KI270737.1, GL000220.1, etc.
         grep -E '^chr([1-9]|1[0-9]|2[0-2]|X|Y|M)[[:space:]]' "$input_collapsed_bed" | \
-            awk -v dir="$chunk_dir" '{print > dir"/chr_"$1".bed"}'
+            awk -v dir="$chunk_dir" '{print > (dir"/chr_"$1".bed")}'
         
         # CRITICAL FIX: Also split deletion file by chromosome to match collapsed.bed chunks
         grep -E '^chr([1-9]|1[0-9]|2[0-2]|X|Y|M)[[:space:]]' "$deletion_bed" | \
-            awk -v dir="$chunk_dir" '{print > dir"/chr_"$1".del.bed"}'
+            awk -v dir="$chunk_dir" '{print > (dir"/chr_"$1".del.bed")}'
         
         # Create processing script (updated to use per-chromosome deletion file)
         local process_script="$chunk_dir/run_cits_chunk.sh"
