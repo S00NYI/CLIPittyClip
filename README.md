@@ -14,9 +14,9 @@ CLIPittyClip v3.0 provides a complete, modernized workflow for CLIP-seq analysis
 - **Dual Aligner Support**
   - STAR (default) or Bowtie2
 - **Advanced Coverage Analysis**
-  - Normalized BedGraph generation (CPM) with junction read removal (CIGAR filtering) and group averaging
+  - Normalized BedGraph and group averaging
 - **Advanced Peak Calling**
-  - Robust `PEAKittyPeak` module supporting aggregated (meta-peak) or individual calling without filesystem limitations
+  - Aggregated (meta-peak) or individual peak calling support
 - **Group/Condition-Based Analysis**
   - Group/Condition-wise peak aggregation and CTK analysis
 - **Interactive Wizard**
