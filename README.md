@@ -11,11 +11,16 @@ A comprehensive, single-command CLIP-seq data analysis pipeline from FASTQ to pe
 
 CLIPittyClip v3.0 provides a complete, modernized workflow for CLIP-seq analysis:
 
-- **Dual Aligner Support**: STAR (default) or Bowtie2
-- **Advanced Coverage Analysis**: Normalized BedGraph generation (CPM) with junction read removal (CIGAR filtering) and group averaging
-- **Advanced Peak Calling**: Robust `PEAKittyPeak` module supporting aggregated (meta-peak) or individual calling without filesystem limitations
-- **Group/Condition-Based Analysis**: Group/Condition-wise peak aggregation and CTK analysis
-- **Interactive Wizard**: `--wizard` mode for guided configuration
+- **Dual Aligner Support**
+  - STAR (default) or Bowtie2
+- **Advanced Coverage Analysis**
+  - Normalized BedGraph generation (CPM) with junction read removal (CIGAR filtering) and group averaging
+- **Advanced Peak Calling**
+  - Robust `PEAKittyPeak` module supporting aggregated (meta-peak) or individual calling without filesystem limitations
+- **Group/Condition-Based Analysis**
+  - Group/Condition-wise peak aggregation and CTK analysis
+- **Interactive Wizard**
+  - `--wizard` mode for guided configuration
 
 ## Pipeline Flow
 

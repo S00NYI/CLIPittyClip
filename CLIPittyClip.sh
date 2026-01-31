@@ -821,7 +821,7 @@ if [[ -n "$INPUT_DIR" ]]; then
     rm -rf CITS.pl_* tag2profile.pl_* 2>/dev/null
     rm -f *.tmp 2>/dev/null
     
-    send_notification "CLIPittyClip" "Directory batch analysis complete: $total_samples samples"
+    send_notification "CLIPittyClip Batch" "Analysis complete for $total_samples samples in $(basename "$INPUT_DIR")"
     
     exit 0
 fi
@@ -876,7 +876,7 @@ if [[ "$DEMUX" == "yes" ]]; then
         log_info "Cleaned up pooled dedup temp file."
     fi
     
-    send_notification "CLIPittyClip" "Demultiplexing complete for $(basename "$INPUT_FILE")"
+    send_notification "CLIPittyClip: $(basename "$INPUT_FILE")" "Demultiplexing complete"
     
     echo "" # Newline after progress
 
@@ -1419,7 +1419,7 @@ if [[ "$DEMUX" == "yes" ]]; then
     # Cleanup intermediate files
     rm -f "$OUTPUT_ROOT/$DIR_BG/scale_factors.tsv" 2>/dev/null
     
-    send_notification "CLIPittyClip" "Pipeline execution finished successfully. Duration: ${H}h ${M}m ${S}s"
+    send_notification "CLIPittyClip: $(basename "$INPUT_FILE")" "Pipeline execution finished successfully. Duration: ${H}h ${M}m ${S}s"
     exit 0
 fi
 
@@ -1576,4 +1576,4 @@ S=$((DURATION%60))
 log_info "End Time: $(date '+%Y-%m-%d %H:%M:%S')"
 log_info "Total Duration: ${H}h ${M}m ${S}s"
 
-send_notification "CLIPittyClip" "Analysis finished for $BASENAME. Duration: ${H}h ${M}m ${S}s"
+send_notification "CLIPittyClip: $BASENAME" "Analysis finished successfully. Duration: ${H}h ${M}m ${S}s"
