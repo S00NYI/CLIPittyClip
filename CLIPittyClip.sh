@@ -200,13 +200,13 @@ if [[ "$CHILD_MODE" == "true" ]]; then
 else
     # Enable console output capture for parent process only
     # Derive log name from input file if available
-    if [[ -n "$INPUT_FILE" ]]; then
-        TEMP_CONSOLE_LOG="$(basename "$INPUT_FILE" .fastq.gz).log"
-    elif [[ -n "$INPUT_DIR" ]]; then
-        TEMP_CONSOLE_LOG="$(basename "$INPUT_DIR").log"
-    else
-        TEMP_CONSOLE_LOG="CLIPittyClip_$$.log"
-    fi
+    # Derive log name from input file if available
+    # User Request: Fixed name "console_output.log"
+    TEMP_CONSOLE_LOG="console_output.log"
+    
+    # exec > >(tee -a "$TEMP_CONSOLE_LOG") 2>&1
+    # We clear the log first to avoid appending to old runs
+    > "$TEMP_CONSOLE_LOG"
     exec > >(tee -a "$TEMP_CONSOLE_LOG") 2>&1
     # Use absolute path so redirects work correctly even if we cd later
 # Check for existing config in current directory (e.g. from parent process or previous run)
@@ -250,8 +250,10 @@ if [[ "$WIZARD_MODE" == "true" ]]; then
 fi
 
 # Log file setup
-LOG_FILE="$(pwd)/CLIPittyClip_$(date +%Y%m%d_%H%M%S).log"
-    touch "${LOG_FILE}"
+    # User Request: Fixed name "detailed_output.log"
+    LOG_FILE="$(pwd)/detailed_output.log"
+    # Overwrite if exists
+    > "${LOG_FILE}"
 fi
 
 # Validation: Need either -i or -d (but not both) - skip if wizard already set them
@@ -597,7 +599,7 @@ if [[ -n "$INPUT_DIR" ]]; then
     fi
     DIR_REPORTS="REPORTS"
     DIR_PEAK_LOGS="REPORTS/PEAK"
-    DIR_IND_PEAK_LOGS="REPORTS/PEAK/INDIVIDUAL_SAMPLES"
+    DIR_IND_PEAK_LOGS="$DIR_PEAK_LOGS"
     
     # Create base directories (CTK folders created conditionally during aggregation)
     mkdir -p "$OUTPUT_ROOT/$DIR_BAM" \
@@ -714,6 +716,7 @@ if [[ -n "$INPUT_DIR" ]]; then
             cp "$sample_out"/*.log "$OUTPUT_ROOT/$DIR_REPORTS/SAMPLES/${sample_name}_detailed.log" 2>/dev/null
             
             # Cleanup sample dir or move to OTHERS if -k
+            # Cleanup sample dir or move to OTHERS if -k
             if [[ "$KEEP_INTERMEDIATE" != "yes" ]]; then
                 rm -rf "$sample_out"
             else
@@ -762,7 +765,7 @@ if [[ -n "$INPUT_DIR" ]]; then
     console_msg "\n[COMBINED PEAK CALLING]"
     BED_DIR="$OUTPUT_ROOT/$DIR_BED"
     
-    PEAK_LOG="$OUTPUT_ROOT/$DIR_PEAK_LOGS/${INPUT_BASENAME}_PeakCalling.log"
+    PEAK_LOG="$OUTPUT_ROOT/$DIR_PEAK_LOGS/Combined_PeakCalling.log"
     
     PEAK_CMD="$SCRIPT_DIR/PEAKittyPeak.sh -i \"$BED_DIR\" --aggregate -n \"Combined\" -p \"$PEAK_DIST\" -z \"$PEAK_SIZE\" -f \"$FRAG_LEN\""
     if [[ -n "$DIR_CTK" ]]; then
@@ -778,7 +781,8 @@ if [[ -n "$INPUT_DIR" ]]; then
         PEAK_CMD="$PEAK_CMD --cits-pval \"$CITS_PVALUE\""
     fi
     
-    eval "$PEAK_CMD" > "$PEAK_LOG" 2>&1
+    # Force hardcoded path to ensure correct filename
+    eval "$PEAK_CMD" > "$OUTPUT_ROOT/$DIR_PEAK_LOGS/Combined_PeakCalling.log" 2>&1
     
     # Move combined results (PEAKittyPeak creates ${BASE_NAME}_peaks/, not PEAKS/)
     if [[ -d "Combined_peaks" ]]; then
@@ -800,19 +804,7 @@ if [[ -n "$INPUT_DIR" ]]; then
     console_msg "  > Output: $OUTPUT_ROOT/"
     console_msg "  > Console log: $OUTPUT_ROOT/$DIR_REPORTS/${TEMP_CONSOLE_LOG:-CLIPittyClip.log}"
     
-    # Cleanup: Move logs and remove intermediate files (AFTER final messages)
-    # Move main log file into output
-    if [[ -f "$LOG_FILE" ]]; then
-        mv "$LOG_FILE" "$OUTPUT_ROOT/$DIR_REPORTS/" 2>/dev/null
-    fi
-    
-    # Clean up any residual CLIPittyClip log files
-    mv CLIPittyClip_*.log "$OUTPUT_ROOT/$DIR_REPORTS/" 2>/dev/null
-    
-    # Move console log into output for cleaner parent directory
-    if [[ -n "$TEMP_CONSOLE_LOG" && -f "$TEMP_CONSOLE_LOG" ]]; then
-        mv "$TEMP_CONSOLE_LOG" "$OUTPUT_ROOT/$DIR_REPORTS/${TEMP_CONSOLE_LOG}" 2>/dev/null
-    fi
+
     
     # Remove sampled fastq files (created when --sample is used)
     rm -f *_sampled_*.fastq.gz 2>/dev/null
@@ -821,7 +813,36 @@ if [[ -n "$INPUT_DIR" ]]; then
     rm -rf CITS.pl_* tag2profile.pl_* 2>/dev/null
     rm -f *.tmp 2>/dev/null
     
+    # Add enhanced columns to peak matrix (TC, NC, BC, Cov)
+    # This fixes the missing columns issue for eCLIP/Batch runs
+    PEAK_MATRIX="$OUTPUT_ROOT/$DIR_PEAKS/COMBINED_PEAKS/COMBINED_peakCoverage.txt"
+    PEAKS_BED="$OUTPUT_ROOT/$DIR_PEAKS/COMBINED_PEAKS/peaks_Sorted.bed"
+    
+    if [[ -f "$PEAK_MATRIX" && -f "$PEAKS_BED" ]]; then
+        console_msg "  > Adding enhanced matrix columns..."
+        add_matrix_columns "$PEAK_MATRIX" "$PEAKS_BED" \
+            "$OUTPUT_ROOT/$DIR_BG" "$OUTPUT_ROOT/$DIR_BG/scale_factors.tsv" \
+            "$GROUPS_FILE"
+            
+    fi
+
     send_notification "CLIPittyClip Batch" "Analysis complete for $total_samples samples in $(basename "$INPUT_DIR")"
+    
+    # Cleanup: Move logs and remove intermediate files (AFTER final messages)
+    # Move detailed log (if defined and exists)
+    if [[ -f "$LOG_FILE" ]]; then
+        # Ensure it goes to REPORTS/detailed_output.log
+        mv "$LOG_FILE" "$OUTPUT_ROOT/$DIR_REPORTS/detailed_output.log" 2>/dev/null
+        # Update variable so any final messages go to the right place
+        LOG_FILE="$OUTPUT_ROOT/$DIR_REPORTS/detailed_output.log"
+    else
+        mv CLIPittyClip_*.log "$OUTPUT_ROOT/$DIR_REPORTS/" 2>/dev/null
+    fi
+    
+    # Move console log into output
+    if [[ -n "$TEMP_CONSOLE_LOG" && -f "$TEMP_CONSOLE_LOG" ]]; then
+        mv "$TEMP_CONSOLE_LOG" "$OUTPUT_ROOT/$DIR_REPORTS/console_output.log" 2>/dev/null
+    fi
     
     exit 0
 fi
@@ -1234,9 +1255,9 @@ if [[ "$DEMUX" == "yes" ]]; then
         curr_dir=$(pwd)
         cd "$OUTPUT_ROOT" || exit 1
         
-        # Define separate log for peak calling details (Specific Name)
-        PEAK_LOG="REPORTS/PEAK/${INPUT_BASENAME}_PeakCalling.log"
-        console_msg "  > Detailed Peak Log: REPORTS/PEAK/$(basename "$PEAK_LOG")"
+        # Define separate log for peak calling details
+        PEAK_LOG="REPORTS/PEAK/Combined_PeakCalling.log"
+        console_msg "  > Detailed Peak Log: $PEAK_LOG"
 
         # Call script (using absolute path or relative to old pwd)
         # Call script with -n COMBINED to create COMBINED_peaks folder
@@ -1262,7 +1283,8 @@ if [[ "$DEMUX" == "yes" ]]; then
             fi
         fi
         
-        eval "$PEAK_CMD" > "$PEAK_LOG" 2>&1
+        # Force hardcoded path to ensure correct filename (bypass potential variable issues)
+        eval "$PEAK_CMD" > "REPORTS/PEAK/Combined_PeakCalling.log" 2>&1
         
         # (No Symlink to remove)
         
@@ -1290,23 +1312,6 @@ if [[ "$DEMUX" == "yes" ]]; then
     # Uses GROUPS_FILE if present, otherwise creates "All Samples"
     if [[ -n "$GROUPS_FILE" ]]; then
         run_combined_bedgraph "$OUTPUT_ROOT" "$GROUPS_FILE" "$OUTPUT_ROOT/$DIR_BG"
-    else
-        # Fallback: Create a temporary groups file to combine ALL samples
-        console_msg "  > Generating Combined Bedgraph for all samples..."
-        TEMP_GROUPS="${OUTPUT_ROOT}/temp_all_groups.txt"
-        
-        # List all positive bedgraphs to identify samples
-        for bg in "$OUTPUT_ROOT/$DIR_BG"/*_pos.bedgraph; do
-            if [[ -f "$bg" ]]; then
-                s_name=$(basename "$bg" _pos.bedgraph)
-                echo -e "${s_name}\tALL_SAMPLES" >> "$TEMP_GROUPS"
-            fi
-        done
-        
-        if [[ -s "$TEMP_GROUPS" ]]; then
-            run_combined_bedgraph "$OUTPUT_ROOT" "$TEMP_GROUPS" "$OUTPUT_ROOT/$DIR_BG"
-            rm "$TEMP_GROUPS"
-        fi
     fi
     
     # Add enhanced columns to peak matrix (after combined bedgraphs are ready)
@@ -1380,11 +1385,11 @@ if [[ "$DEMUX" == "yes" ]]; then
     # Remove CTK temp files (*.tmp from perl scripts)
     rm -f *.tmp 2>/dev/null
 
-    # Also remove the main log if it was created in this dir (CLIPittyClip_*.log)
-    # We want to MOVE it to REPORTS and rename it.
+    # Also remove the main log if it was created in this dir
+    # We want to MOVE it to REPORTS/detailed_output.log
     if [[ -f "$LOG_FILE" ]]; then
-         mv "$LOG_FILE" "$OUTPUT_ROOT/$DIR_REPORTS/${INPUT_BASENAME}_CLIPittyClip.log"
-         LOG_FILE="$OUTPUT_ROOT/$DIR_REPORTS/${INPUT_BASENAME}_CLIPittyClip.log"
+         mv "$LOG_FILE" "$OUTPUT_ROOT/$DIR_REPORTS/detailed_output.log"
+         LOG_FILE="$OUTPUT_ROOT/$DIR_REPORTS/detailed_output.log"
     fi
     
     # Output Summary

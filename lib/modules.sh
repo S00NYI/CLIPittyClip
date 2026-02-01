@@ -872,7 +872,7 @@ add_matrix_columns() {
         for group in $unique_groups; do
             log_info "    Group: $group"
             # Get sample column indices for this group
-            local group_samples=$(awk -v g="$group" '{gsub(/^[ \t]+|[ \t]+$/, "", $1); gsub(/^[ \t]+|[ \t]+$/, "", $2)} $2==g {print $1}' "$groups_file")
+            local group_samples=$(awk -v g="$group" '{gsub(/^[ \t]+|[ \t]+$/, "", $1); gsub(/^[ \t]+|[ \t]+$/, "", $2)} $2==g {print $1}' "$groups_file" | tr '\n' ' ')
             
             # For each peak (row), count samples with count > 0
             awk -F'\t' -v samples="$group_samples" -v allsamples="${samples[*]}" '
@@ -915,7 +915,8 @@ add_matrix_columns() {
         
         for sample in "${samples[@]}"; do
             # Get scale factor for this sample
-            local sf=$(grep -P "^${sample}\t|/${sample}\t" "$scale_file" | tail -1 | cut -f3)
+            # Use grep -E for portability (works on macOS BSD grep and Linux GNU grep)
+            local sf=$(grep -E "^${sample}\t|/${sample}\t" "$scale_file" | tail -1 | cut -f3)
             if [[ -z "$sf" ]]; then
                 log_warning "    Scale factor not found for $sample, using 1.0"
                 sf="1.0"
@@ -955,7 +956,7 @@ add_matrix_columns() {
         local unique_groups=$(awk '{gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2}' "$groups_file" | sort -u)
         
         for group in $unique_groups; do
-            local group_samples=$(awk -v g="$group" '{gsub(/^[ \t]+|[ \t]+$/, "", $1); gsub(/^[ \t]+|[ \t]+$/, "", $2)} $2==g {print $1}' "$groups_file")
+            local group_samples=$(awk -v g="$group" '{gsub(/^[ \t]+|[ \t]+$/, "", $1); gsub(/^[ \t]+|[ \t]+$/, "", $2)} $2==g {print $1}' "$groups_file" | tr '\n' ' ')
             
             # Sum raw counts for group
             awk -F'\t' -v samples="$group_samples" -v allsamples="${samples[*]}" '
@@ -1040,9 +1041,9 @@ add_matrix_columns() {
             
             for stat in sum mean max; do
                 # Map positive strand peaks to pos bedgraph
-                bedtools map -a peaks_pos.tmp.bed -b "${sample}_pos_sorted.bg.tmp" -c 4 -o "$stat" -null 0 2>/dev/null > "bg_pos_${stat}.tmp"
+                bedtools map -a peaks_pos.tmp.bed -b "${sample}_pos_sorted.bg.tmp" -c 4 -o "$stat" -null 0 > "bg_pos_${stat}.tmp"
                 # Map negative strand peaks to neg bedgraph
-                bedtools map -a peaks_neg.tmp.bed -b "${sample}_neg_sorted.bg.tmp" -c 4 -o "$stat" -null 0 2>/dev/null > "bg_neg_${stat}.tmp"
+                bedtools map -a peaks_neg.tmp.bed -b "${sample}_neg_sorted.bg.tmp" -c 4 -o "$stat" -null 0 > "bg_neg_${stat}.tmp"
                 
                 # Combine and sort to match original peak order
                 # Add line numbers for sorting
@@ -1067,7 +1068,7 @@ add_matrix_columns() {
                     while((getline < "bg_pos_"stat_val".tmp") > 0) { pos[$1"\t"$2"\t"$3] = $NF }
                     while((getline < "bg_neg_"stat_val".tmp") > 0) { neg[$1"\t"$2"\t"$3] = $NF }
                 }
-                NR==1 { print "BG" toupper(substr(stat_val,1,1)) substr(stat_val,2) "_" sample_val; next }
+                NR==1 { print "Cov" toupper(substr(stat_val,1,1)) substr(stat_val,2) "_" sample_val; next }
                 {
                     key = $1"\t"$2"\t"$3
                     if($6 == "+") print (key in pos) ? pos[key] : 0
@@ -1107,20 +1108,20 @@ add_matrix_columns() {
                     continue
                 fi
                 
-                # Sort group bedgraphs for bedtools compatibility
-                sort -k1,1 -k2,2n "$grp_bg_pos" > "${group}_pos_sorted.bg.tmp"
-                sort -k1,1 -k2,2n "$grp_bg_neg" > "${group}_neg_sorted.bg.tmp"
+                # Sort group bedgraphs for bedtools compatibility (and ensure TABs)
+                tr ' ' '\t' < "$grp_bg_pos" | sort -k1,1 -k2,2n > "${group}_pos_sorted.bg.tmp"
+                tr ' ' '\t' < "$grp_bg_neg" | sort -k1,1 -k2,2n > "${group}_neg_sorted.bg.tmp"
                 
                 for stat in sum mean max; do
-                    bedtools map -a peaks_pos.tmp.bed -b "${group}_pos_sorted.bg.tmp" -c 4 -o "$stat" -null 0 2>/dev/null > "bg_pos_${stat}.tmp"
-                    bedtools map -a peaks_neg.tmp.bed -b "${group}_neg_sorted.bg.tmp" -c 4 -o "$stat" -null 0 2>/dev/null > "bg_neg_${stat}.tmp"
+                    bedtools map -a peaks_pos.tmp.bed -b "${group}_pos_sorted.bg.tmp" -c 4 -o "$stat" -null 0 > "bg_pos_${stat}.tmp"
+                    bedtools map -a peaks_neg.tmp.bed -b "${group}_neg_sorted.bg.tmp" -c 4 -o "$stat" -null 0 > "bg_neg_${stat}.tmp"
                     
                     awk -F'\t' '
                     BEGIN { 
                         while((getline < "bg_pos_'"$stat"'.tmp") > 0) { pos[$1"\t"$2"\t"$3] = $NF }
                         while((getline < "bg_neg_'"$stat"'.tmp") > 0) { neg[$1"\t"$2"\t"$3] = $NF }
                     }
-                    NR==1 { print "BG" toupper(substr("'$stat'",1,1)) substr("'$stat'",2) "_'$group'"; next }
+                    NR==1 { print "Cov" toupper(substr("'$stat'",1,1)) substr("'$stat'",2) "_'$group'"; next }
                     {
                         key = $1"\t"$2"\t"$3
                         if($6 == "+") print (key in pos) ? pos[key] : 0
@@ -1232,15 +1233,10 @@ add_ctk_columns_to_peak_matrix() {
         # Filter by threshold and convert to BED
         if [[ "$ctk_type" == "cims" ]]; then
             # CIMS: Column 9 is FDR, skip header line
-            grep -v "^#" "$ctk_file" | awk -F'\t' -v fdr="$threshold" \
-                '$9+0 < fdr {print $1"\t"$2"\t"$3"\t"$4"\t"$5"\t"$6}' > "$temp_filtered"
+            grep -v "^#" "$ctk_file" | awk -F'\t' '{print $1"\t"$2"\t"$3"\t"$4"\t"$5"\t"$6}' > "$temp_filtered"
         else
             # CITS: P-value is embedded in name as [P=value]
-            grep -v "^#" "$ctk_file" | awk -F'\t' -v pval="$threshold" '{
-                if (match($4, /\[P=([0-9.e+-]+)\]/, arr)) {
-                    if (arr[1]+0 < pval) print $1"\t"$2"\t"$3"\t"$4"\t"$5"\t"$6
-                }
-            }' > "$temp_filtered"
+            grep -v "^#" "$ctk_file" | awk -F'\t' '{print $1"\t"$2"\t"$3"\t"$4"\t"$5"\t"$6}' > "$temp_filtered"
         fi
         
         local site_count=$(wc -l < "$temp_filtered")
@@ -1283,16 +1279,22 @@ add_ctk_columns_to_peak_matrix() {
         
         for group in $unique_groups; do
             # Get samples for this group
-            local samples=$(grep -P "\t${group}$" "$groups_map" | cut -f1)
+            local samples=$(awk -F'\t' -v g="$group" '$2==g {print $1}' "$groups_map" | tr '\n' ' ')
             
             # --- Aggregate CIMS (Deletions) ---
             local group_del_bed="${ctk_dir}/${group}_aggregated_CIMS_del.txt"
-            > "$group_del_bed"
-            for sample in $samples; do
-                # Look for sample CIMS file in CTK dir or subdirs
-                local s_file=$(find "$ctk_dir" -name "${sample}_CIMS_del.txt" 2>/dev/null | head -n 1)
-                [[ -s "$s_file" ]] && cat "$s_file" >> "$group_del_bed"
-            done
+            local precalc_del="${ctk_dir}/${group}/CIMS/${group}_CIMS_del.txt"
+            if [[ -s "$precalc_del" ]]; then
+                cp "$precalc_del" "$group_del_bed"
+            else
+                > "$group_del_bed"
+                local samples=$(awk -F'\t' -v g="$group" '$2==g {print $1}' "$groups_map" | tr '\n' ' ')
+                for sample in $samples; do
+                    # Look for sample CIMS file in CTK dir or subdirs
+                    local s_file=$(find "$ctk_dir" -name "${sample}_CIMS_del.txt" 2>/dev/null | head -n 1)
+                    [[ -s "$s_file" ]] && cat "$s_file" >> "$group_del_bed"
+                done
+            fi
             if [[ -s "$group_del_bed" ]]; then
                 add_ctk_column "$group_del_bed" "DEL_${group}" "cims" "$cims_fdr"
             else
@@ -1302,11 +1304,17 @@ add_ctk_columns_to_peak_matrix() {
             
             # --- Aggregate CIMS (Substitutions) ---
             local group_sub_bed="${ctk_dir}/${group}_aggregated_CIMS_sub.txt"
-            > "$group_sub_bed"
-            for sample in $samples; do
-                local s_file=$(find "$ctk_dir" -name "${sample}_CIMS_sub.txt" 2>/dev/null | head -n 1)
-                [[ -s "$s_file" ]] && cat "$s_file" >> "$group_sub_bed"
-            done
+            local precalc_sub="${ctk_dir}/${group}/CIMS/${group}_CIMS_sub.txt"
+             if [[ -s "$precalc_sub" ]]; then
+                cp "$precalc_sub" "$group_sub_bed"
+            else
+                > "$group_sub_bed"
+                local samples=$(awk -F'\t' -v g="$group" '$2==g {print $1}' "$groups_map" | tr '\n' ' ')
+                for sample in $samples; do
+                    local s_file=$(find "$ctk_dir" -name "${sample}_CIMS_sub.txt" 2>/dev/null | head -n 1)
+                    [[ -s "$s_file" ]] && cat "$s_file" >> "$group_sub_bed"
+                done
+            fi
             if [[ -s "$group_sub_bed" ]]; then
                 add_ctk_column "$group_sub_bed" "SUB_${group}" "cims" "$cims_fdr"
             else
@@ -1315,11 +1323,20 @@ add_ctk_columns_to_peak_matrix() {
             
             # --- Aggregate CITS (Truncations) ---
             local group_cits_bed="${ctk_dir}/${group}_aggregated_CITS.txt"
-            > "$group_cits_bed"
-            for sample in $samples; do
-                local s_file=$(find "$ctk_dir" -name "${sample}_CITS.txt" 2>/dev/null | head -n 1)
-                [[ -s "$s_file" ]] && cat "$s_file" >> "$group_cits_bed"
-            done
+            local precalc_cits="${ctk_dir}/${group}/CITS/${group}_CITS.bed"
+            # Try .bed first, then .txt
+            if [[ ! -s "$precalc_cits" ]]; then precalc_cits="${ctk_dir}/${group}/CITS/${group}_CITS.txt"; fi
+            
+             if [[ -s "$precalc_cits" ]]; then
+                cp "$precalc_cits" "$group_cits_bed"
+            else
+                > "$group_cits_bed"
+                local samples=$(awk -F'\t' -v g="$group" '$2==g {print $1}' "$groups_map" | tr '\n' ' ')
+                for sample in $samples; do
+                    local s_file=$(find "$ctk_dir" -name "${sample}_CITS.txt" 2>/dev/null | head -n 1)
+                    [[ -s "$s_file" ]] && cat "$s_file" >> "$group_cits_bed"
+                done
+            fi
             if [[ -s "$group_cits_bed" ]]; then
                 add_ctk_column "$group_cits_bed" "TRUNC_${group}" "cits" "$cits_pval"
             else
@@ -1347,14 +1364,14 @@ add_ctk_columns_to_peak_matrix() {
         for cims_del_file in "${ctk_dir}/CIMS/"*_CIMS_del.txt; do
             if [[ -f "$cims_del_file" ]]; then
                 local name=$(basename "$cims_del_file" _CIMS_del.txt)
-                add_ctk_column "$cims_del_file" "${name}_del" "cims" "$cims_fdr"
+                add_ctk_column "$cims_del_file" "DEL_${name}" "cims" "$cims_fdr"
             fi
         done
         
         for cims_sub_file in "${ctk_dir}/CIMS/"*_CIMS_sub.txt; do
             if [[ -f "$cims_sub_file" ]]; then
                 local name=$(basename "$cims_sub_file" _CIMS_sub.txt)
-                add_ctk_column "$cims_sub_file" "${name}_sub" "cims" "$cims_fdr"
+                add_ctk_column "$cims_sub_file" "SUB_${name}" "cims" "$cims_fdr"
             fi
         done
     fi
@@ -1367,14 +1384,14 @@ add_ctk_columns_to_peak_matrix() {
                 for cims_del_file in "${group_dir}CIMS/"*_CIMS_del.txt; do
                     if [[ -f "$cims_del_file" ]]; then
                         local name=$(basename "$cims_del_file" _CIMS_del.txt)
-                        add_ctk_column "$cims_del_file" "${name}_del" "cims" "$cims_fdr"
+                        add_ctk_column "$cims_del_file" "DEL_${name}" "cims" "$cims_fdr"
                     fi
                 done
                 
                 for cims_sub_file in "${group_dir}CIMS/"*_CIMS_sub.txt; do
                     if [[ -f "$cims_sub_file" ]]; then
                         local name=$(basename "$cims_sub_file" _CIMS_sub.txt)
-                        add_ctk_column "$cims_sub_file" "${name}_sub" "cims" "$cims_fdr"
+                        add_ctk_column "$cims_sub_file" "SUB_${name}" "cims" "$cims_fdr"
                     fi
                 done
             fi
@@ -1391,7 +1408,7 @@ add_ctk_columns_to_peak_matrix() {
         for cits_file in "${ctk_dir}/CITS/"*_CITS.txt "${ctk_dir}/CITS/"*_CITS.bed; do
             if [[ -f "$cits_file" ]]; then
                 local name=$(basename "$cits_file" | sed 's/_CITS\.\(txt\|bed\)$//')
-                add_ctk_column "$cits_file" "${name}_trunc" "cits" "$cits_pval"
+                add_ctk_column "$cits_file" "TRUNC_${name}" "cits" "$cits_pval"
             fi
         done
     fi
@@ -1404,7 +1421,7 @@ add_ctk_columns_to_peak_matrix() {
                 for cits_file in "${group_dir}CITS/"*_CITS.txt "${group_dir}CITS/"*_CITS.bed; do
                     if [[ -f "$cits_file" ]]; then
                         local name=$(basename "$cits_file" | sed 's/_CITS\.\(txt\|bed\)$//')
-                        add_ctk_column "$cits_file" "${name}_trunc" "cits" "$cits_pval"
+                        add_ctk_column "$cits_file" "TRUNC_${name}" "cits" "$cits_pval"
                     fi
                 done
             fi
@@ -2050,7 +2067,6 @@ run_combined_bedgraph() {
     local groups_file="$2"
     local bedgraph_dir="$3"
     
-    update_status "Combined BedGraph"
     log_info "Generating combined average bedgraphs..."
     
     mkdir -p "$bedgraph_dir/COMBINED_BEDGRAPH"
@@ -2097,7 +2113,7 @@ run_combined_bedgraph() {
                 local output_file="$bedgraph_dir/COMBINED_BEDGRAPH/${group}_combined_${strand}.bedgraph"
                 
                 bedtools unionbedg -i $bg_files | \
-                awk -v N="$count" '{sum=0; for(i=4;i<=NF;i++) sum+=$i; print $1,$2,$3,sum/N}' \
+                awk -v N="$count" 'BEGIN{OFS="\t"} {sum=0; for(i=4;i<=NF;i++) sum+=$i; print $1,$2,$3,sum/N}' \
                 > "$output_file"
                 
                 log_info "  Generatd: $(basename "$output_file") ($count replicates)"
