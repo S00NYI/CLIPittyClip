@@ -815,7 +815,7 @@ if [[ -n "$INPUT_DIR" ]]; then
     
     # Add enhanced columns to peak matrix (TC, NC, BC, Cov)
     # This fixes the missing columns issue for eCLIP/Batch runs
-    PEAK_MATRIX="$OUTPUT_ROOT/$DIR_PEAKS/COMBINED_PEAKS/COMBINED_peakCoverage.txt"
+    PEAK_MATRIX="$OUTPUT_ROOT/$DIR_PEAKS/COMBINED_PEAKS/COMBINED_peakMatrix.txt"
     PEAKS_BED="$OUTPUT_ROOT/$DIR_PEAKS/COMBINED_PEAKS/peaks_Sorted.bed"
     
     if [[ -f "$PEAK_MATRIX" && -f "$PEAKS_BED" ]]; then
@@ -1315,7 +1315,7 @@ if [[ "$DEMUX" == "yes" ]]; then
     fi
     
     # Add enhanced columns to peak matrix (after combined bedgraphs are ready)
-    PEAK_MATRIX="$OUTPUT_ROOT/$DIR_PEAKS/COMBINED_PEAKS/COMBINED_peakCoverage.txt"
+    PEAK_MATRIX="$OUTPUT_ROOT/$DIR_PEAKS/COMBINED_PEAKS/COMBINED_peakMatrix.txt"
     PEAKS_BED="$OUTPUT_ROOT/$DIR_PEAKS/COMBINED_PEAKS/peaks_Sorted.bed"
     
     if [[ -f "$PEAK_MATRIX" && -f "$PEAKS_BED" ]]; then
@@ -1421,8 +1421,7 @@ if [[ "$DEMUX" == "yes" ]]; then
         console_msg "  > Console log: $TEMP_CONSOLE_LOG"
     fi
     
-    # Cleanup intermediate files
-    rm -f "$OUTPUT_ROOT/$DIR_BG/scale_factors.tsv" 2>/dev/null
+    
     
     send_notification "CLIPittyClip: $(basename "$INPUT_FILE")" "Pipeline execution finished successfully. Duration: ${H}h ${M}m ${S}s"
     exit 0

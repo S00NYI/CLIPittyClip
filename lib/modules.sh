@@ -1067,8 +1067,8 @@ add_matrix_columns() {
                 BEGIN { 
                     while((getline < "bg_pos_"stat_val".tmp") > 0) { pos[$1"\t"$2"\t"$3] = $NF }
                     while((getline < "bg_neg_"stat_val".tmp") > 0) { neg[$1"\t"$2"\t"$3] = $NF }
+                    print "Cov" toupper(substr(stat_val,1,1)) substr(stat_val,2) "_" sample_val
                 }
-                NR==1 { print "Cov" toupper(substr(stat_val,1,1)) substr(stat_val,2) "_" sample_val; next }
                 {
                     key = $1"\t"$2"\t"$3
                     if($6 == "+") print (key in pos) ? pos[key] : 0

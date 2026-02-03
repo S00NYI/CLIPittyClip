@@ -163,7 +163,7 @@ call_peaks() {
         mv peaks_Sorted.bed "$out_dir/"
         
         # 4. Coverage Analysis
-        local coverage_file="${out_dir}/${output_name}_peakCoverage.txt"
+        local coverage_file="${out_dir}/${output_name}_peakMatrix.txt"
         cp "${out_dir}/peaks_Sorted.bed" "$coverage_file"
         
         # Header String (TAB separated)
@@ -220,6 +220,12 @@ call_peaks() {
             # Pass correct arguments: Matrix, PeaksBED, CTK_Dir, Thresholds, AND GroupsFile
             add_ctk_columns_to_peak_matrix "$coverage_file" "${out_dir}/peaks_Sorted.bed" "$CTK_DIR" "$CIMS_FDR" "$CITS_PVALUE" "$GROUPS_FILE"
         fi
+        
+        # 7. Cleanup intermediate files to save disk space
+        log_info "Cleaning up intermediate files..."
+        rm -f "${out_dir}/COMBINED.bed" \
+              "${out_dir}/peaks.bed" \
+              "${out_dir}/peaks_Sorted.bed"
         
         log_info "Peak calling for $output_name complete: $out_dir/"
     else
