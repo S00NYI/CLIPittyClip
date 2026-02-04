@@ -551,7 +551,7 @@ run_mapping_star() {
     update_status "Mapping (STAR)"
     log_info "Starting mapping with STAR..."
 
-    local read_command="gzip -dc"
+    local read_command="$(which gunzip) -c"
     if [[ "$input_fastq" != *.gz ]]; then
         read_command="cat"
     fi
@@ -1021,6 +1021,10 @@ add_matrix_columns() {
     if [[ -d "$bg_dir" ]] && [[ ${#samples[@]} -gt 0 ]]; then
         log_info "  Adding BedGraph statistics..."
         
+        # Split peaks by strand and sort for bedtools compatibility (same as STEP 5)
+        awk -F'\t' '$6=="+"' "$peaks_bed" | sort -k1,1 -k2,2n > peaks_pos.tmp.bed
+        awk -F'\t' '$6=="-"' "$peaks_bed" | sort -k1,1 -k2,2n > peaks_neg.tmp.bed
+        
         for sample in "${samples[@]}"; do
             local bg_pos="${bg_dir}/${sample}_pos.bedgraph"
             local bg_neg="${bg_dir}/${sample}_neg.bedgraph"
@@ -1030,39 +1034,26 @@ add_matrix_columns() {
                 continue
             fi
             
+            # Sort bedgraphs for bedtools compatibility (same as STEP 5)
+            sort -k1,1 -k2,2n "$bg_pos" > "${sample}_pos_sorted.bg.tmp"
+            sort -k1,1 -k2,2n "$bg_neg" > "${sample}_neg_sorted.bg.tmp"
+            
             for stat in sum mean max; do
-                # Use bedtools map directly without requiring sorted input
-                # Redirect stderr to suppress chromosome order warnings
-                # Process positive strand peaks with positive bedgraph
-                awk -F'\t' '$6=="+"' "$peaks_bed" | \
-                    bedtools map -a stdin -b "$bg_pos" -c 4 -o "$stat" -null 0 2>/dev/null > "bg_pos_${stat}.tmp"
+                # Run bedtools map on sorted files (same as STEP 5)
+                bedtools map -a peaks_pos.tmp.bed -b "${sample}_pos_sorted.bg.tmp" -c 4 -o "$stat" -null 0 > "bg_pos_${stat}.tmp" 2>/dev/null
+                bedtools map -a peaks_neg.tmp.bed -b "${sample}_neg_sorted.bg.tmp" -c 4 -o "$stat" -null 0 > "bg_neg_${stat}.tmp" 2>/dev/null
                 
-                # Process negative strand peaks with negative bedgraph
-                awk -F'\t' '$6=="-"' "$peaks_bed" | \
-                    bedtools map -a stdin -b "$bg_neg" -c 4 -o "$stat" -null 0 2>/dev/null > "bg_neg_${stat}.tmp"
-                
-                # Build lookup from bedtools output and match against original peak order
-                awk -F'\t' -v stat_val="$stat" -v sample_val="$sample" '
+                # Build lookup and match to original peak order (same logic as STEP 5)
+                awk -F'\t' '
                 BEGIN { 
-                    # Read positive strand coverage values
-                    while((getline < "bg_pos_"stat_val".tmp") > 0) { 
-                        pos[$1"\t"$2"\t"$3] = $NF 
-                    }
-                    # Read negative strand coverage values
-                    while((getline < "bg_neg_"stat_val".tmp") > 0) { 
-                        neg[$1"\t"$2"\t"$3] = $NF 
-                    }
-                    # Print header
-                    print "Cov" toupper(substr(stat_val,1,1)) substr(stat_val,2) "_" sample_val
+                    while((getline < "bg_pos_'"$stat"'.tmp") > 0) { pos[$1"\t"$2"\t"$3] = $NF }
+                    while((getline < "bg_neg_'"$stat"'.tmp") > 0) { neg[$1"\t"$2"\t"$3] = $NF }
                 }
+                NR==1 { print "Cov" toupper(substr("'"$stat"'",1,1)) substr("'"$stat"'",2) "_'"$sample"'"; next }
                 {
                     key = $1"\t"$2"\t"$3
-                    strand = $6
-                    if(strand == "+") {
-                        print (key in pos) ? pos[key] : 0
-                    } else {
-                        print (key in neg) ? neg[key] : 0
-                    }
+                    if($6 == "+") print (key in pos) ? pos[key] : 0
+                    else print (key in neg) ? neg[key] : 0
                 }
                 ' "$peaks_bed" > "bg_${sample}_${stat}.col"
                 
@@ -1071,8 +1062,10 @@ add_matrix_columns() {
                 rm -f "bg_${sample}_${stat}.col"
             done
             
-            rm -f "bg_pos_"*.tmp "bg_neg_"*.tmp
+            rm -f "${sample}_pos_sorted.bg.tmp" "${sample}_neg_sorted.bg.tmp"
         done
+        
+        rm -f peaks_pos.tmp.bed peaks_neg.tmp.bed "bg_pos_"*.tmp "bg_neg_"*.tmp
         
         # -------------------------------------------
         # STEP 5: Group BedGraph Stats (from combined bedgraph) - Groups Only
