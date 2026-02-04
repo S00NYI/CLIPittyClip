@@ -221,12 +221,6 @@ call_peaks() {
             add_ctk_columns_to_peak_matrix "$coverage_file" "${out_dir}/peaks_Sorted.bed" "$CTK_DIR" "$CIMS_FDR" "$CITS_PVALUE" "$GROUPS_FILE"
         fi
         
-        # 7. Cleanup intermediate files to save disk space
-        # Note: peaks_Sorted.bed is kept for add_matrix_columns() in CLIPittyClip.sh
-        log_info "Cleaning up intermediate files..."
-        rm -f "${out_dir}/COMBINED.bed" \
-              "${out_dir}/peaks.bed"
-        
         log_info "Peak calling for $output_name complete: $out_dir/"
     else
         log_error "No peaks generated for $output_name"

@@ -823,9 +823,12 @@ if [[ -n "$INPUT_DIR" ]]; then
         add_matrix_columns "$PEAK_MATRIX" "$PEAKS_BED" \
             "$OUTPUT_ROOT/$DIR_BG" "$OUTPUT_ROOT/$DIR_BG/scale_factors.tsv" \
             "$GROUPS_FILE"
-        
-        # Cleanup peaks_Sorted.bed after it's been used
-        rm -f "$PEAKS_BED"
+            
+        # Cleanup intermediate BED files after peak matrix is complete
+        console_msg "  > Cleaning up intermediate files..."
+        rm -f "$OUTPUT_ROOT/$DIR_PEAKS/COMBINED_PEAKS/COMBINED.bed" \
+              "$OUTPUT_ROOT/$DIR_PEAKS/COMBINED_PEAKS/peaks.bed" \
+              "$OUTPUT_ROOT/$DIR_PEAKS/COMBINED_PEAKS/peaks_Sorted.bed"
     fi
 
     send_notification "CLIPittyClip Batch" "Analysis complete for $total_samples samples in $(basename "$INPUT_DIR")"
@@ -1325,9 +1328,12 @@ if [[ "$DEMUX" == "yes" ]]; then
         add_matrix_columns "$PEAK_MATRIX" "$PEAKS_BED" \
             "$OUTPUT_ROOT/$DIR_BG" "$OUTPUT_ROOT/$DIR_BG/scale_factors.tsv" \
             "$GROUPS_FILE"
-        
-        # Cleanup peaks_Sorted.bed after it's been used
-        rm -f "$PEAKS_BED"
+            
+        # Cleanup intermediate BED files after peak matrix is complete
+        console_msg "  > Cleaning up intermediate files..."
+        rm -f "$OUTPUT_ROOT/$DIR_PEAKS/COMBINED_PEAKS/COMBINED.bed" \
+              "$OUTPUT_ROOT/$DIR_PEAKS/COMBINED_PEAKS/peaks.bed" \
+              "$OUTPUT_ROOT/$DIR_PEAKS/COMBINED_PEAKS/peaks_Sorted.bed"
     fi
 
     # ncRNA Filtering Summary (before cleanup so stats files still exist)
