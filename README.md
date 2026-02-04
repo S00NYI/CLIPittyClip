@@ -32,6 +32,11 @@ CLIPittyClip v3.0 provides a complete, modernized workflow for CLIP-seq analysis
 
 > ⚠️ **Development Version**: This is the `v3-development` branch. For the stable release, use the `main` branch.
 
+> [!WARNING]
+> **macOS Compatibility Note:**
+> STAR version `2.7.11b` (current latest in Bioconda) is **broken on macOS Tahoe (26.2)** when running via Rosetta (fails to spawn sub-processes).
+> **Solution:** You MUST install/pin STAR to version **2.7.10b**: `mamba install bioconda::star=2.7.10b`
+
 ### Quick Install (Recommended)
 
 CLIPittyClip provides self-contained installation scripts that automatically install all dependencies including CTK, HOMER, and required Perl modules.

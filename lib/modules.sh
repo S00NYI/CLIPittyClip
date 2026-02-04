@@ -551,7 +551,7 @@ run_mapping_star() {
     update_status "Mapping (STAR)"
     log_info "Starting mapping with STAR..."
 
-    local read_command="gunzip -c"
+    local read_command="gzip -dc"
     if [[ "$input_fastq" != *.gz ]]; then
         read_command="cat"
     fi
