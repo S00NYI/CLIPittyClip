@@ -1021,9 +1021,9 @@ add_matrix_columns() {
     if [[ -d "$bg_dir" ]] && [[ ${#samples[@]} -gt 0 ]]; then
         log_info "  Adding BedGraph statistics..."
         
-        # Split peaks by strand and SORT for bedtools compatibility
-        awk -F'\t' '$6=="+"' "$peaks_bed" | sort -k1,1 -k2,2n > peaks_pos.tmp.bed
-        awk -F'\t' '$6=="-"' "$peaks_bed" | sort -k1,1 -k2,2n > peaks_neg.tmp.bed
+        # Split peaks by strand and sort using bedtools for consistent chromosome ordering
+        awk -F'\t' '$6=="+"' "$peaks_bed" | bedtools sort -i stdin > peaks_pos.tmp.bed
+        awk -F'\t' '$6=="-"' "$peaks_bed" | bedtools sort -i stdin > peaks_neg.tmp.bed
         
         for sample in "${samples[@]}"; do
             local bg_pos="${bg_dir}/${sample}_pos.bedgraph"
@@ -1034,9 +1034,9 @@ add_matrix_columns() {
                 continue
             fi
             
-            # Sort bedgraphs for bedtools compatibility
-            sort -k1,1 -k2,2n "$bg_pos" > "${sample}_pos_sorted.bg.tmp"
-            sort -k1,1 -k2,2n "$bg_neg" > "${sample}_neg_sorted.bg.tmp"
+            # Sort bedgraphs using bedtools for consistent chromosome ordering
+            bedtools sort -i "$bg_pos" > "${sample}_pos_sorted.bg.tmp"
+            bedtools sort -i "$bg_neg" > "${sample}_neg_sorted.bg.tmp"
             
             for stat in sum mean max; do
                 # Map positive strand peaks to pos bedgraph
@@ -1089,9 +1089,9 @@ add_matrix_columns() {
             local combined_bg_dir="${bg_dir}/COMBINED_BEDGRAPH"
             local unique_groups=$(awk '{gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2}' "$groups_file" | sort -u)
             
-            # Re-split and sort peaks for bedtools compatibility
-            awk -F'\t' '$6=="+"' "$peaks_bed" | sort -k1,1 -k2,2n > peaks_pos.tmp.bed
-            awk -F'\t' '$6=="-"' "$peaks_bed" | sort -k1,1 -k2,2n > peaks_neg.tmp.bed
+            # Re-split and sort peaks using bedtools for consistent chromosome ordering
+            awk -F'\t' '$6=="+"' "$peaks_bed" | bedtools sort -i stdin > peaks_pos.tmp.bed
+            awk -F'\t' '$6=="-"' "$peaks_bed" | bedtools sort -i stdin > peaks_neg.tmp.bed
             
             for group in $unique_groups; do
                 local grp_bg_pos="${combined_bg_dir}/${group}_combined_pos.bedgraph"
@@ -1102,9 +1102,9 @@ add_matrix_columns() {
                     continue
                 fi
                 
-                # Sort group bedgraphs for bedtools compatibility (and ensure TABs)
-                tr ' ' '\t' < "$grp_bg_pos" | sort -k1,1 -k2,2n > "${group}_pos_sorted.bg.tmp"
-                tr ' ' '\t' < "$grp_bg_neg" | sort -k1,1 -k2,2n > "${group}_neg_sorted.bg.tmp"
+                # Sort group bedgraphs using bedtools for consistent chromosome ordering (and ensure TABs)
+                tr ' ' '\t' < "$grp_bg_pos" | bedtools sort -i stdin > "${group}_pos_sorted.bg.tmp"
+                tr ' ' '\t' < "$grp_bg_neg" | bedtools sort -i stdin > "${group}_neg_sorted.bg.tmp"
                 
                 for stat in sum mean max; do
                     bedtools map -a peaks_pos.tmp.bed -b "${group}_pos_sorted.bg.tmp" -c 4 -o "$stat" -null 0 > "bg_pos_${stat}.tmp"
