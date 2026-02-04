@@ -300,14 +300,14 @@ The `COMBINED_peakMatrix.txt` file contains up to 54+ advanced metrics summarizi
 | Metric Type | Column Prefix | Scoping | Calculation Method | Interpretation |
 | :--- | :--- | :--- | :--- | :--- |
 | **Biological Complexity** | `BC_` | **Group** | Count of samples in the group with Raw Count (TC) > 0. | Tells you how reproducible the peak is across replicates. |
-| **Total Count (Raw)** | `TC_` | **Sample** | Raw number of read starts (tags) overlapping the peak. | Absolute number of cross-link events (PCR-duplicates removed). |
-| **Total Count (Raw Aggregate)** | `TC_` | **Group** | **SUM** of raw counts for all samples in the group. | Total depth of evidence for the peak within that biological condition. |
+| **Total Count (Raw)** | `TC_` | **Sample** | Raw number of read starts (tags) overlapping the peak. | Absolute number of RBP-bound RNA (PCR-duplicates removed). |
+| **Total Count (Raw Aggregate)** | `TC_` | **Group** | **SUM** of raw counts for all samples in the group. | Total RBP-bound RNA for the peak within that biological condition/group. |
 | **Normalized Count** | `NormedTC_` | **Sample** | `Raw TC * (1,000,000 / Total Mapped Reads)`. | Read abundance relative to the total depth of the sample (RPM). |
 | **Normalized Count Aggregate** | `NormedTC_` | **Group** | **SUM** of normalized counts for all samples in the group. | Total intensity of the peak for that group, standardized for sequencing depth. |
-| **Coverage Sum** | `CovSum_` | **Sample** | Sum of per-base signal values from a **Normalized BedGraph** across the peak. | Precise integration of the signal shape; accounts for every base inside the peak. |
-| **Coverage Sum (Group Average)** | `CovSum_` | **Group** | Sum of per-base signal from an **Averaged Group BedGraph** across the peak. | Integrated signal shape for the "standard" or average replicate in the group. |
-| **Coverage Mean** | `CovMean_` | **Both** | `CovSum / Peak Length`. | Average signal intensity per base within the peak boundaries. |
-| **Coverage Max** | `CovMax_` | **Both** | The **highest** signal value found at any single base within the peak. | Peak height; useful for identifying the "summit" or most frequent cross-link site. |
+| **Coverage Sum** | `CovSum_` | **Sample** | Sum of per-base signal values from a **Normalized BedGraph** across the peak. | Read coverage across the peak per sample. |
+| **Coverage Sum (Group Average)** | `CovSum_` | **Group** | Sum of per-base signal from an **Averaged Group BedGraph** across the peak. | Averaged read coverage across the peak for the group. |
+| **Coverage Mean** | `CovMean_` | **Both** | `CovSum / Peak Length`. | Average signal intensity per base within the peak. |
+| **Coverage Max** | `CovMax_` | **Both** | The **highest** signal value found at any single base within the peak. | Peak height. |
 
 > [!TIP]
 > **NormedTC** (additive) measures the total intensity of the group, while **Cov** columns (mean-based) measure the density/shape of the average replicate in that group.
