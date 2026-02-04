@@ -914,9 +914,8 @@ add_matrix_columns() {
         log_info "  Adding normalized read counts..."
         
         for sample in "${samples[@]}"; do
-            # Get scale factor for this sample
-            # Use grep -E for portability (works on macOS BSD grep and Linux GNU grep)
-            local sf=$(grep -E "^${sample}\t|/${sample}\t" "$scale_file" | tail -1 | cut -f3)
+            # Get scale factor for this sample using awk for reliable tab-delimited matching
+            local sf=$(awk -F'\t' -v s="$sample" '$1==s {print $3; exit}' "$scale_file")
             if [[ -z "$sf" ]]; then
                 log_warning "    Scale factor not found for $sample, using 1.0"
                 sf="1.0"
@@ -1045,34 +1044,29 @@ add_matrix_columns() {
                 # Map negative strand peaks to neg bedgraph
                 bedtools map -a peaks_neg.tmp.bed -b "${sample}_neg_sorted.bg.tmp" -c 4 -o "$stat" -null 0 > "bg_neg_${stat}.tmp"
                 
-                # Combine and sort to match original peak order
-                # Add line numbers for sorting
-                awk -F'\t' '{print NR"\t"$0}' "$peaks_bed" > peaks_numbered.tmp
-                awk -F'\t' 'NR==FNR {pos[$1"\t"$2"\t"$3]=$NF; next} {key=$1"\t"$2"\t"$3; print (key in pos) ? pos[key] : "0"}' "bg_pos_${stat}.tmp" peaks_pos.tmp.bed > "pos_vals.tmp"
-                awk -F'\t' 'NR==FNR {neg[$1"\t"$2"\t"$3]=$NF; next} {key=$1"\t"$2"\t"$3; print (key in neg) ? neg[key] : "0"}' "bg_neg_${stat}.tmp" peaks_neg.tmp.bed > "neg_vals.tmp"
-                
-                # Merge based on strand in original peaks
-                awk -F'\t' 'NR==FNR && $6=="+" {pos[$1"\t"$2"\t"$3]=FNR; next}
-                             NR==FNR && $6=="-" {neg[$1"\t"$2"\t"$3]=FNR; next}
-                             FNR==NR {posv[FNR]=$0; next}
-                             {negv[FNR]=$0}
-                             END {
-                                 for(i=1; i<=NR; i++) {
-                                     # placeholder
-                                 }
-                             }' "$peaks_bed" "pos_vals.tmp" "neg_vals.tmp"
-                
-                # Simpler approach: iterate through peaks and pick from correct file
+                # Build lookup from bedtools output and match against original peak order
+                # The bedtools output has chr, start, end, name, score, strand, stat_value
                 awk -F'\t' -v stat_val="$stat" -v sample_val="$sample" '
                 BEGIN { 
-                    while((getline < "bg_pos_"stat_val".tmp") > 0) { pos[$1"\t"$2"\t"$3] = $NF }
-                    while((getline < "bg_neg_"stat_val".tmp") > 0) { neg[$1"\t"$2"\t"$3] = $NF }
+                    # Read positive strand coverage values
+                    while((getline < "bg_pos_"stat_val".tmp") > 0) { 
+                        pos[$1"\t"$2"\t"$3] = $NF 
+                    }
+                    # Read negative strand coverage values
+                    while((getline < "bg_neg_"stat_val".tmp") > 0) { 
+                        neg[$1"\t"$2"\t"$3] = $NF 
+                    }
+                    # Print header
                     print "Cov" toupper(substr(stat_val,1,1)) substr(stat_val,2) "_" sample_val
                 }
                 {
                     key = $1"\t"$2"\t"$3
-                    if($6 == "+") print (key in pos) ? pos[key] : 0
-                    else print (key in neg) ? neg[key] : 0
+                    strand = $6
+                    if(strand == "+") {
+                        print (key in pos) ? pos[key] : 0
+                    } else {
+                        print (key in neg) ? neg[key] : 0
+                    }
                 }
                 ' "$peaks_bed" > "bg_${sample}_${stat}.col"
                 
