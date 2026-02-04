@@ -30,13 +30,12 @@ rm -rf "$TEST_DIR"
 mkdir -p "$TEST_DIR"
 cd "$TEST_DIR"
 
-echo "[1/4] Generating synthetic genome..."
 # Create tiny genome (2 chromosomes, unique sequences)
 cat > genome.fa <<EOF
 >chr1
-AAACCCGGGTTTAAACCCGGGTTTAAACCCGGGTTTAAACCCGGGTTT
+ATGCGTACGTTAGCCTAGCTAGCATGCTAGCTAGCTGATCGATCGTAGCTAGCTAGCTAG
 >chr2
-TTTGGGCCCAAATTTGGGCCCAAATTTGGGCCCAAATTTGGGCCCAAA
+CGTACGATCGATCGATCGTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTA
 EOF
 
 echo "[2/4] Building STAR index..."
@@ -50,14 +49,14 @@ STAR --runThreadN 2 \
 
 echo "[3/4] Generating synthetic reads..."
 # Generate reads matching the genome (unique match)
-# Matches chr1
+# Matches chr1 uniquely (first 21 bases of chr1 above)
 cat > reads.fastq <<EOF
 @READ1
-AAAACCCGGGTTTAAACCCGG
+ATGCGTACGTTAGCCTAGCTA
 +
 IIIIIIIIIIIIIIIIIIIII
 @READ2
-TTTTTTGGGCCCAAATTTGGG
+CGTACGATCGATCGATCGTAG
 +
 IIIIIIIIIIIIIIIIIIIII
 EOF
