@@ -524,6 +524,7 @@ if [[ -n "$INPUT_DIR" ]]; then
     if [[ "$SAMPLE_SIZE" -gt 0 ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --sample $SAMPLE_SIZE"; fi
     EXTRA_FLAGS="$EXTRA_FLAGS -m $ALIGNER"
     if [[ "$ECLIP_MODE" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --eclip"; fi
+    if [[ "$SKIP_NCRNA" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --skip-ncrna"; fi
     EXTRA_FLAGS="$EXTRA_FLAGS --no-dedup"  # Assume pre-processed, skip dedup
     EXTRA_FLAGS="$EXTRA_FLAGS --child"
     
@@ -972,6 +973,7 @@ if [[ "$DEMUX" == "yes" ]]; then
     # Pass Aligner choice
     EXTRA_FLAGS="$EXTRA_FLAGS -m $ALIGNER"
     if [[ "$ECLIP_MODE" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --eclip"; fi
+    if [[ "$SKIP_NCRNA" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --skip-ncrna"; fi
     
     # We already deduped the pooled file before demux (if DEDUP_MODE was true).
     # So we explicitly tell child processes NOT to dedup again to save time.
