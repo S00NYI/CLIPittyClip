@@ -324,6 +324,12 @@ if [[ $THREADS -gt $MAX_SAFE_THREADS ]]; then
 fi
 
 # Validate groups file (requires --run-cims or --run-cits)
+if [[ "$CTK_GROUP_MODE" == "true" ]] && [[ -z "$GROUPS_FILE" ]]; then
+    log_error "--ctk-group requires a groups file (-g). Please provide a groups file."
+    show_usage
+    exit 1
+fi
+
 if [[ -n "$GROUPS_FILE" ]]; then
     if [[ "$RUN_CIMS" != "true" ]] && [[ "$RUN_CITS" != "true" ]] && [[ "$CTK_GROUP_MODE" == "true" ]]; then
         log_warning "--ctk-group requires --run-cims and/or --run-cits. Group CTK will be disabled."
