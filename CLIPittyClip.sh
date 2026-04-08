@@ -1417,7 +1417,10 @@ if [[ "$DEMUX" == "yes" ]]; then
     console_msg "  ├── 2_COLLAPSED_BED/"
     console_msg "  ├── 3_BEDGRAPH/"
     console_msg "  ├── 4_PEAKS/"
-    console_msg "  ├── 5_OTHERS/"
+    if [[ -n "$DIR_CTK" ]]; then
+        console_msg "  ├── ${DIR_CTK}/"
+    fi
+    console_msg "  ├── ${DIR_OTHERS}/"
     console_msg "  └── REPORTS/"
 
     console_msg "\n[SUCCESS] Pipeline finished."
