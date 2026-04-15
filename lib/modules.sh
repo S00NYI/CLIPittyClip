@@ -814,7 +814,7 @@ run_collapse_pcr() {
 }
 
 # 4. Peak Calling (HOMER)
-run_peak_calling() {
+run_peak_calling_homer() {
     local input_bed="$1"
     local out_dir="$2"
     local peak_dist="$3"
@@ -822,19 +822,54 @@ run_peak_calling() {
     local frag_len="$5"
     local log_file="${out_dir}_homer.log"
 
-    # Only called in aggregation or single sample (non-batch)
     update_status "Peaks"
     log_info "Calling peaks with HOMER..."
-    
-    # Capture output to specific log file for extraction later
+
     echo "Running HOMER makeTagDirectory..." > "$log_file"
     makeTagDirectory "${out_dir}" "${input_bed}" -single -format bed >> "$log_file" 2>&1
-    
+
     echo "Running HOMER findPeaks..." >> "$log_file"
     findPeaks "${out_dir}" -o auto -style factor -L 2 -localSize 10000 -strand separate \
         -minDist "${peak_dist}" -size "${peak_size}" -fragLength "${frag_len}" $ADV_HOMER_ARGS >> "$log_file" 2>&1
-        
+
     log_info "Peak calling complete. Log saved to $log_file"
+}
+
+# 4. Peak Calling (CTK tag2peak.pl)
+run_peak_calling_ctk() {
+    local input_bed="$1"
+    local out_dir="$2"
+    local peak_dist="$3"
+    local log_file="${out_dir}_ctk.log"
+
+    update_status "Peaks"
+    log_info "Calling peaks with CTK tag2peak.pl..."
+
+    local cache_dir=$(mktemp -u "${TMPDIR:-/tmp}/tag2peak_cache.XXXXXX")
+    local raw_peaks="${out_dir}_raw.bed"
+
+    echo "Running CTK tag2peak.pl..." > "$log_file"
+    $CONDA_PREFIX/bin/perl $(which tag2peak.pl) -big -ss -p 0.01 -minPH 2 -gap "${peak_dist}" \
+        -c "${cache_dir}" "${input_bed}" "${raw_peaks}" >> "$log_file" 2>&1
+    local exit_code=$?
+    rm -rf "$cache_dir"
+
+    if [[ $exit_code -eq 0 && -s "$raw_peaks" ]]; then
+        log_info "Peak calling complete. Log saved to $log_file"
+    else
+        log_error "CTK tag2peak.pl failed."
+        rm -f "$raw_peaks"
+        exit 1
+    fi
+}
+
+# 4. Peak Calling - dispatcher
+run_peak_calling() {
+    if [[ "${PEAK_CALLER:-homer}" == "ctk" ]]; then
+        run_peak_calling_ctk "$@"
+    else
+        run_peak_calling_homer "$@"
+    fi
 }
 
 # 4b. Add Enhanced Columns to Peak Coverage Matrix

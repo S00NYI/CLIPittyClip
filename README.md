@@ -207,6 +207,12 @@ Run `CLIPittyClip.sh --help` for full usage.
 | — | `--align-mismatches` | int | 2 | Max alignment mismatches (STAR only) |
 | — | `--skip-ncrna` | bool | false | Disable ncRNA pre-filtering |
 
+### Peak Calling Options
+
+| Short | Long | Type | Default | Description |
+|-------|------|------|---------|-------------|
+| — | `--peak-caller` | str | homer | Peak caller: `homer` or `ctk` (tag2peak.pl) |
+
 ### CTK Analysis Options
 
 | Short | Long | Type | Default | Description |
@@ -362,18 +368,19 @@ MAPittyMap.sh -i reads.fastq.gz -x /path/to/star_index -t 8 -w
 ---
 
 ### PEAKittyPeak.sh
-Standalone peak calling using HOMER. Requires a directory containing collapsed BED files.
+Standalone peak calling module. Supports HOMER (default) and CTK `tag2peak.pl`. Requires a directory containing collapsed BED files.
 
 **Required inputs:**
 - Run from a directory containing a `BED/` folder with `.bed` files
 - OR use `-i <directory>` to specify input BED directory explicitly
 
 **Key options:**
+- `--peak-caller <str>`: Peak caller: `homer` (default) or `ctk`
 - `-p <int>`: Min distance between peaks (default: 50)
-- `-z <int>`: Peak size (default: 20)
-- `-f <int>`: Fragment length (default: 25)
+- `-z <int>`: Peak size (default: 20, HOMER only)
+- `-f <int>`: Fragment length (default: 25, HOMER only)
 - `-n <string>`: Output name prefix
-- `-a <string>`: Additional HOMER findPeaks arguments
+- `-a <string>`: Additional HOMER findPeaks arguments (HOMER only)
 - `--aggregate`: Combine all input BED files into a single meta-sample for peak calling
 - `--no-aggregate`: Process each BED file individually (Default)
 - `--ctk-dir <path>`: Add CIMS/CITS site counts from CTK analysis
@@ -381,11 +388,11 @@ Standalone peak calling using HOMER. Requires a directory containing collapsed B
 - `--wizard`: Launch interactive HOMER configuration wizard
 
 ```bash
-# Individual Peak Calling (Default)
+# Individual Peak Calling (Default, HOMER)
 PEAKittyPeak.sh -i ./2_COLLAPSED_BED -n Analysis --no-aggregate
 
-# Aggregated Peak Calling (Meta-sample)
-PEAKittyPeak.sh -i ./2_COLLAPSED_BED -n Combined --aggregate
+# Aggregated Peak Calling using CTK tag2peak.pl
+PEAKittyPeak.sh -i ./2_COLLAPSED_BED -n Combined --aggregate --peak-caller ctk
 
 # With custom HOMER arguments
 PEAKittyPeak.sh -n Combined -a '-style factor -L 2'

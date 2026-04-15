@@ -18,6 +18,7 @@ PEAK_SIZE=20
 FRAG_LEN=25
 BASE_NAME="Combined"
 ADV_HOMER_ARGS="" # Additional arguments for findPeaks
+PEAK_CALLER="homer" # Peak caller: homer (default) or ctk
 WIZARD_MODE="false"
 CTK_DIR=""         # Optional: CTK analysis output directory
 CTK_GROUPS_FILE="" # Optional: groups file for CTK aggregation
@@ -42,7 +43,8 @@ function show_usage {
     echo "  -z <int>       Peak size (default: 20)"
     echo "  -f <int>       Fragment length (default: 25)"
     echo "  -n <str>       Base name for output (default: 'Combined')"
-    echo "  -a <str>       Additional HOMER findPeaks arguments (quoted string)"
+    echo "  -a <str>       Additional HOMER findPeaks arguments (quoted string)
+  --peak-caller <str> Peak caller: homer (default) or ctk"
     echo "  --ctk-dir <path>   Add CIMS/CITS site counts from CTK analysis"
     echo "  -g, --groups <file> Groups file for aggregation metrics"
     echo "  --cims-fdr <float> CIMS FDR threshold (default: 0.05)"
@@ -80,6 +82,7 @@ while [[ $# -gt 0 ]]; do
         -f) FRAG_LEN="$2"; shift 2 ;;
         -n) BASE_NAME="$2"; shift 2 ;;
         -a) ADV_HOMER_ARGS="$2"; shift 2 ;;
+        --peak-caller) PEAK_CALLER="$2"; shift 2 ;;
         --ctk-dir) CTK_DIR="$2"; shift 2 ;;
         -g|--groups|--ctk-group) GROUPS_FILE="$2"; shift 2 ;;
         --cims-fdr) CIMS_FDR="$2"; shift 2 ;;
@@ -119,115 +122,110 @@ log_info "PEAKittyPeak: Peak Calling Module"
 log_info "Input Dir:   $INPUT_BED_DIR"
 log_info "Input Files: $BED_COUNT"
 log_info "Mode:        $(if [[ "$AGGREGATE" == "true" ]]; then echo "AGGREGATE"; else echo "INDIVIDUAL"; fi)"
+log_info "Caller:      $PEAK_CALLER"
 log_info "Parameters:  Dist=$PEAK_DIST, Size=$PEAK_SIZE, Frag=$FRAG_LEN"
 
 # --- Function: Call Peaks ---
 call_peaks() {
     local input_file="$1"
     local output_name="$2"
-    
+    local out_dir="${output_name}_peaks"
+
     log_info "Processing: $output_name"
-    
-    # 1. Provide a temporary directory for tag outputs to avoid conflicts
-    local tag_dir="${output_name}_TagDir"
-    
-    # 2. Call Peaks (HOMER)
-    makeTagDirectory "$tag_dir/" "$input_file" -single -format bed > /dev/null 2>&1
-    
-    local cmd="findPeaks $tag_dir/ -o auto -style factor -L 2 -localSize 10000 -strand separate \
-        -minDist ${PEAK_DIST} -size ${PEAK_SIZE} -fragLength ${FRAG_LEN} ${ADV_HOMER_ARGS}"
-        
-    log_info "Running: findPeaks ..."
-    # Capture output but reduce noise
-    eval "$cmd" 2>&1 | grep -v "Job finished"
-    
-    # 3. Process Peaks
-    # findPeaks outputs to peaks.txt in the tag directory usually, unless -o specified
-    # Using -o auto, HOMER usually outputs to tagDir/peaks.txt
-    
-    if [[ -f "$tag_dir/peaks.txt" ]]; then
-        # Convert peaks.txt to BED format
+
+    # ----------------------------------------------------------------
+    # Peak calling: HOMER or CTK
+    # ----------------------------------------------------------------
+    if [[ "${PEAK_CALLER:-homer}" == "ctk" ]]; then
+        # --- CTK tag2peak.pl ---
+        local raw_peaks="peaks_raw.bed"
+        local cache_dir=$(mktemp -u "${TMPDIR:-/tmp}/tag2peak_cache.XXXXXX")
+
+        log_info "Running: tag2peak.pl ..."
+        $CONDA_PREFIX/bin/perl $(which tag2peak.pl) -big -ss -p 0.01 -minPH 2 -gap ${PEAK_DIST} \
+            -c "${cache_dir}" "${input_file}" "${raw_peaks}" 2>&1 | grep -v "^CMD="
+        local exit_code=${PIPESTATUS[0]}
+        rm -rf "$cache_dir"
+
+        if [[ $exit_code -ne 0 || ! -s "$raw_peaks" ]]; then
+            log_error "No peaks generated for $output_name"
+            rm -f "$raw_peaks"
+            return
+        fi
+
+        sort -k1,1 -k2,2n "$raw_peaks" > peaks_Sorted.bed
+        rm -f "$raw_peaks"
+
+        mkdir -p "$out_dir"
+        mkdir -p "${out_dir}/peakCoverage"
+        cp "$input_file" "$out_dir/${output_name}.bed"
+        mv peaks_Sorted.bed "$out_dir/"
+
+    else
+        # --- HOMER ---
+        local tag_dir="${output_name}_TagDir"
+
+        makeTagDirectory "$tag_dir/" "$input_file" -single -format bed > /dev/null 2>&1
+
+        local cmd="findPeaks $tag_dir/ -o auto -style factor -L 2 -localSize 10000 -strand separate \
+            -minDist ${PEAK_DIST} -size ${PEAK_SIZE} -fragLength ${FRAG_LEN} ${ADV_HOMER_ARGS}"
+
+        log_info "Running: findPeaks ..."
+        eval "$cmd" 2>&1 | grep -v "Job finished"
+
+        if [[ ! -f "$tag_dir/peaks.txt" ]]; then
+            log_error "No peaks generated for $output_name"
+            return
+        fi
+
         sed '/^[[:blank:]]*#/d;s/#.*//' "$tag_dir/peaks.txt" > peaksTemp.bed
         awk 'OFS="\t" {print $2, $3, $4, $1, $6, $5}' peaksTemp.bed > peaks.bed
         rm peaksTemp.bed
-        
-        # Sort
-        sort -k 1,1 -k2,2n peaks.bed > peaks_Sorted.bed
-        
-        # Organize Output
-        local out_dir="${output_name}_peaks"
+        sort -k1,1 -k2,2n peaks.bed > peaks_Sorted.bed
+
         mkdir -p "$out_dir"
         mkdir -p "${out_dir}/peakCoverage"
-        
         mv "$tag_dir" "$out_dir/"
-        # Copy input bed to output to preserve input
         cp "$input_file" "$out_dir/${output_name}.bed"
         mv peaks.bed "$out_dir/"
         mv peaks_Sorted.bed "$out_dir/"
-        
-        # 4. Coverage Analysis
-        local coverage_file="${out_dir}/${output_name}_peakMatrix.txt"
-        cp "${out_dir}/peaks_Sorted.bed" "$coverage_file"
-        
-        # Header String (TAB separated)
-        # Note: We construct this now but apply it at the very end
-        # Header String (TAB separated) - Initialize with BED fields
-        HEADER_STR="chr\tstart\tend\tname\tscore\tstrand"
-        
-        # 4a. Per-Sample Coverage (Restored v2 Logic)
-        log_info "Calculating per-sample coverage (bedtools)..."
-        
-        # Iterate over all BED files in the input directory
-        # This restores the "Read Counts per Sample" columns
-        for bed_file in "$INPUT_BED_DIR"/*.bed; do
-            if [[ -f "$bed_file" ]]; then
-                # Extract Sample Name
-                local s_name=$(basename "$bed_file" .bed)
-                s_name=${s_name%_collapsed} # Strip _collapsed if present
-                
-                # Skip if it matches the Combined output itself (to avoid self-inclusion)
-                if [[ "$s_name" == "$output_name" ]]; then continue; fi
-                
-                # bedtools coverage -s (force strandedness per user v2)
-                # -a: Peaks, -b: Sample Reads
-                bedtools coverage -s -a "${out_dir}/peaks_Sorted.bed" -b "$bed_file" > "temp_cov.txt"
-                
-                # Extract count column (Column 7 in bedtools coverage default output)
-                awk '{print $7}' "temp_cov.txt" > "col_count.txt"
-                
-                # Paste to Matrix
-                paste "$coverage_file" "col_count.txt" > "temp_paste.txt"
-                mv "temp_paste.txt" "$coverage_file"
-                
-                # Append Header Name with TC_ prefix (Tag Count)
-                HEADER_STR="${HEADER_STR}\tTC_${s_name}"
-                
-                # Cleanup
-                rm "temp_cov.txt" "col_count.txt" 2>/dev/null
-            fi
-        done
-        
-        # [BUG FIX] Prepend header NOW so downstream functions receive valid matrix
-        # Use simple echo instead of file
-        echo -e "$HEADER_STR" > colnames.txt
-        cat colnames.txt "$coverage_file" > temp_final.txt
-        mv temp_final.txt "$coverage_file"
-        rm colnames.txt
-        
-        # 5. [DISABLED] Group Coverage Columns (Sum/Avg) - Removed per user request
-        # if [[ -n "$GROUPS_FILE" ]]; then ... fi
-        
-        # 6. Add CTK CIMS/CITS columns if requested
-        if [[ -n "$CTK_DIR" ]]; then
-            log_info "Adding CTK columns..."
-            # Pass correct arguments: Matrix, PeaksBED, CTK_Dir, Thresholds, AND GroupsFile
-            add_ctk_columns_to_peak_matrix "$coverage_file" "${out_dir}/peaks_Sorted.bed" "$CTK_DIR" "$CIMS_FDR" "$CITS_PVALUE" "$GROUPS_FILE"
-        fi
-        
-        log_info "Peak calling for $output_name complete: $out_dir/"
-    else
-        log_error "No peaks generated for $output_name"
     fi
+
+    # ----------------------------------------------------------------
+    # Shared: Coverage Analysis (same for both callers)
+    # ----------------------------------------------------------------
+    local coverage_file="${out_dir}/${output_name}_peakMatrix.txt"
+    cp "${out_dir}/peaks_Sorted.bed" "$coverage_file"
+
+    HEADER_STR="chr\tstart\tend\tname\tscore\tstrand"
+
+    log_info "Calculating per-sample coverage (bedtools)..."
+    for bed_file in "$INPUT_BED_DIR"/*.bed; do
+        if [[ -f "$bed_file" ]]; then
+            local s_name=$(basename "$bed_file" .bed)
+            s_name=${s_name%_collapsed}
+            if [[ "$s_name" == "$output_name" ]]; then continue; fi
+
+            bedtools coverage -s -a "${out_dir}/peaks_Sorted.bed" -b "$bed_file" > "temp_cov.txt"
+            awk '{print $7}' "temp_cov.txt" > "col_count.txt"
+            paste "$coverage_file" "col_count.txt" > "temp_paste.txt"
+            mv "temp_paste.txt" "$coverage_file"
+            HEADER_STR="${HEADER_STR}\tTC_${s_name}"
+            rm "temp_cov.txt" "col_count.txt" 2>/dev/null
+        fi
+    done
+
+    echo -e "$HEADER_STR" > colnames.txt
+    cat colnames.txt "$coverage_file" > temp_final.txt
+    mv temp_final.txt "$coverage_file"
+    rm colnames.txt
+
+    if [[ -n "$CTK_DIR" ]]; then
+        log_info "Adding CTK columns..."
+        add_ctk_columns_to_peak_matrix "$coverage_file" "${out_dir}/peaks_Sorted.bed" "$CTK_DIR" "$CIMS_FDR" "$CITS_PVALUE" "$GROUPS_FILE"
+    fi
+
+    log_info "Peak calling for $output_name complete: $out_dir/"
 }
 
 
