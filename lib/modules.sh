@@ -767,7 +767,7 @@ run_collapse_pcr() {
 
     update_status "Collapsing"
     log_info "Collapsing PCR duplicates with CTK tag2collapse.pl..."
-    
+
     # Only use --random-barcode when UMI is present in read names
     local barcode_flag=""
     local weight_flags=""
@@ -849,8 +849,8 @@ run_peak_calling_ctk() {
     local raw_peaks="${out_dir}_raw.bed"
 
     echo "Running CTK tag2peak.pl..." > "$log_file"
-    $CONDA_PREFIX/bin/perl $(which tag2peak.pl) -big -ss -p 0.01 -minPH 2 -gap "${peak_dist}" \
-        -c "${cache_dir}" "${input_bed}" "${raw_peaks}" >> "$log_file" 2>&1
+    $CONDA_PREFIX/bin/perl $(which tag2peak.pl) -big -ss --valley-seeking -minPH 2 -gap "${peak_dist}" \
+        ${ADV_CTK_ARGS} -c "${cache_dir}" "${input_bed}" "${raw_peaks}" >> "$log_file" 2>&1
     local exit_code=$?
     rm -rf "$cache_dir"
 

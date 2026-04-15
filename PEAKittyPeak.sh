@@ -19,6 +19,8 @@ FRAG_LEN=25
 BASE_NAME="Combined"
 ADV_HOMER_ARGS="" # Additional arguments for findPeaks
 PEAK_CALLER="homer" # Peak caller: homer (default) or ctk
+ADV_CTK_ARGS=""    # Additional arguments for tag2peak.pl
+LOG_FILE="${LOG_FILE:-/dev/null}" # Use parent's log if set, otherwise discard
 WIZARD_MODE="false"
 CTK_DIR=""         # Optional: CTK analysis output directory
 CTK_GROUPS_FILE="" # Optional: groups file for CTK aggregation
@@ -83,6 +85,7 @@ while [[ $# -gt 0 ]]; do
         -n) BASE_NAME="$2"; shift 2 ;;
         -a) ADV_HOMER_ARGS="$2"; shift 2 ;;
         --peak-caller) PEAK_CALLER="$2"; shift 2 ;;
+        --ctk-args) ADV_CTK_ARGS="$2"; shift 2 ;;
         --ctk-dir) CTK_DIR="$2"; shift 2 ;;
         -g|--groups|--ctk-group) GROUPS_FILE="$2"; shift 2 ;;
         --cims-fdr) CIMS_FDR="$2"; shift 2 ;;
@@ -142,8 +145,8 @@ call_peaks() {
         local cache_dir=$(mktemp -u "${TMPDIR:-/tmp}/tag2peak_cache.XXXXXX")
 
         log_info "Running: tag2peak.pl ..."
-        $CONDA_PREFIX/bin/perl $(which tag2peak.pl) -big -ss -p 0.01 -minPH 2 -gap ${PEAK_DIST} \
-            -c "${cache_dir}" "${input_file}" "${raw_peaks}" 2>&1 | grep -v "^CMD="
+        $CONDA_PREFIX/bin/perl $(which tag2peak.pl) -big -ss --valley-seeking -minPH 2 -gap ${PEAK_DIST} \
+            ${ADV_CTK_ARGS} -c "${cache_dir}" "${input_file}" "${raw_peaks}" 2>&1 | grep -v "^CMD="
         local exit_code=${PIPESTATUS[0]}
         rm -rf "$cache_dir"
 

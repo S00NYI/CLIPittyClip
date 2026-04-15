@@ -31,6 +31,7 @@ PEAK_DIST=50
 PEAK_SIZE=20
 FRAG_LEN=25
 PEAK_CALLER="homer" # Peak caller: homer (default) or ctk
+ADV_CTK_ARGS=""    # Additional arguments for tag2peak.pl
 MISMATCH_MAX=2 # STAR default
 # ------------------------------------------------------------------
 # Usage
@@ -69,6 +70,7 @@ function show_usage {
     echo ""
     echo "ANALYSIS OPTIONS:"
     echo "  --peak-caller <str>      Peak caller: homer (default) or ctk
+  --ctk-args <str>         Additional tag2peak.pl arguments (quoted string)
   --run-ctk                Enable full CTK CIMS+CITS analysis"
     echo "  --run-cims               Enable CIMS analysis (mutation sites only)"
     echo "  --run-cits               Enable CITS analysis (truncation sites only)"
@@ -164,6 +166,7 @@ while [[ $# -gt 0 ]]; do
         -a|--adapter) ADAPTER_3="$2"; shift 2 ;;
         -k|--keep) KEEP_INTERMEDIATE="yes"; shift ;;
         --peak-caller) PEAK_CALLER=$(echo "$2" | tr '[:upper:]' '[:lower:]'); shift 2 ;;
+        --ctk-args) ADV_CTK_ARGS="$2"; shift 2 ;;
         --run-cims) RUN_CIMS=true; RUN_CTK="yes"; shift ;;
         --run-cits) RUN_CITS=true; RUN_CTK="yes"; shift ;;
         --run-ctk) RUN_CTK="yes"; RUN_CIMS=true; RUN_CITS=true; shift ;;
@@ -363,7 +366,7 @@ DEF_FASTP="--length_required 16 --average_qual 30"
 DEF_STAR="--outFilterMultimapNmax 10 --outFilterMismatchNmax ${ALIGN_MISMATCHES} --alignEndsType EndToEnd --outSAMattributes ... MD"
 DEF_BT2="--md --end-to-end (Standard Sensitivity)"
 DEF_HOMER="-style factor -L 2 -localSize 10000 -minDist ${PEAK_DIST:-50}"
-DEF_CTK="-big -ss -p 0.01 -minPH 2 -gap ${PEAK_DIST:-50}"
+DEF_CTK="-big -ss --valley-seeking -minPH 2 -gap ${PEAK_DIST:-50}"
 
 if [[ "$ADVANCED_MODE" == "true" ]]; then
     log_info "Mode:           ADVANCED (Using Overrides)"
@@ -377,6 +380,7 @@ if [[ "$ADVANCED_MODE" == "true" ]]; then
     log_info "Peak Caller:    $PEAK_CALLER"
     if [[ "$PEAK_CALLER" == "ctk" ]]; then
         log_info "CTK Defaults:   $DEF_CTK"
+        log_info "CTK Added:      ${ADV_CTK_ARGS:-(None)}"
     else
         log_info "Homer Defaults: $DEF_HOMER"
         log_info "Homer Added:    ${ADV_HOMER_ARGS:-(None)}"
@@ -389,6 +393,7 @@ else
     log_info "Peak Caller:    $PEAK_CALLER"
     if [[ "$PEAK_CALLER" == "ctk" ]]; then
         log_info "CTK Config:     $DEF_CTK"
+        log_info "CTK Added:      ${ADV_CTK_ARGS:-(None)}"
     else
         log_info "Homer Config:   $DEF_HOMER"
     fi
@@ -792,6 +797,7 @@ if [[ -n "$INPUT_DIR" ]]; then
     PEAK_LOG="$OUTPUT_ROOT/$DIR_PEAK_LOGS/Combined_PeakCalling.log"
     
     PEAK_CMD="$SCRIPT_DIR/PEAKittyPeak.sh -i \"$BED_DIR\" --aggregate -n \"Combined\" -p \"$PEAK_DIST\" -z \"$PEAK_SIZE\" -f \"$FRAG_LEN\" --peak-caller \"$PEAK_CALLER\""
+    if [[ -n "$ADV_CTK_ARGS" ]]; then PEAK_CMD="$PEAK_CMD --ctk-args \"$ADV_CTK_ARGS\""; fi
     if [[ -n "$DIR_CTK" ]]; then
         PEAK_CMD="$PEAK_CMD --ctk-dir \"$OUTPUT_ROOT/$DIR_CTK\""
     fi
