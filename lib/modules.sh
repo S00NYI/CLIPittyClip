@@ -1077,9 +1077,9 @@ add_matrix_columns() {
                 continue
             fi
             
-            # Sort bedgraphs for bedtools compatibility (same as STEP 5)
-            sort -k1,1 -k2,2n "$bg_pos" > "${sample}_pos_sorted.bg.tmp"
-            sort -k1,1 -k2,2n "$bg_neg" > "${sample}_neg_sorted.bg.tmp"
+            # Sort bedgraphs for bedtools compatibility (strip track header if present)
+            grep -v "^track" "$bg_pos" | sort -k1,1 -k2,2n > "${sample}_pos_sorted.bg.tmp"
+            grep -v "^track" "$bg_neg" | sort -k1,1 -k2,2n > "${sample}_neg_sorted.bg.tmp"
             
             for stat in sum mean max; do
                 # Run bedtools map on sorted files (same as STEP 5)
@@ -1131,9 +1131,9 @@ add_matrix_columns() {
                     continue
                 fi
                 
-                # Sort group bedgraphs for bedtools compatibility (and ensure TABs)
-                tr ' ' '\t' < "$grp_bg_pos" | sort -k1,1 -k2,2n > "${group}_pos_sorted.bg.tmp"
-                tr ' ' '\t' < "$grp_bg_neg" | sort -k1,1 -k2,2n > "${group}_neg_sorted.bg.tmp"
+                # Sort group bedgraphs for bedtools compatibility (strip track header, ensure TABs)
+                grep -v "^track" "$grp_bg_pos" | tr ' ' '\t' | sort -k1,1 -k2,2n > "${group}_pos_sorted.bg.tmp"
+                grep -v "^track" "$grp_bg_neg" | tr ' ' '\t' | sort -k1,1 -k2,2n > "${group}_neg_sorted.bg.tmp"
                 
                 for stat in sum mean max; do
                     bedtools map -a peaks_pos.tmp.bed -b "${group}_pos_sorted.bg.tmp" -c 4 -o "$stat" -null 0 > "bg_pos_${stat}.tmp"
@@ -2073,12 +2073,20 @@ run_coverage() {
     # Streaming samtools -> bedtools genomecov
     
     # Positive Strand
+    local pos_bg="${output_prefix}_pos.bedgraph"
+    local pos_name
+    pos_name=$(basename "$pos_bg")
+    echo "track type=bedGraph name=\"${pos_name}\" description=\"${pos_name}\"" > "$pos_bg"
     samtools view -h -e 'cigar !~ "N"' "$bam_file" | \
-    bedtools genomecov -ibam stdin -bg -strand + -scale "$scale" > "${output_prefix}_pos.bedgraph"
-    
+    bedtools genomecov -ibam stdin -bg -strand + -scale "$scale" >> "$pos_bg"
+
     # Negative Strand
+    local neg_bg="${output_prefix}_neg.bedgraph"
+    local neg_name
+    neg_name=$(basename "$neg_bg")
+    echo "track type=bedGraph name=\"${neg_name}\" description=\"${neg_name}\"" > "$neg_bg"
     samtools view -h -e 'cigar !~ "N"' "$bam_file" | \
-    bedtools genomecov -ibam stdin -bg -strand - -scale "$scale" > "${output_prefix}_neg.bedgraph"
+    bedtools genomecov -ibam stdin -bg -strand - -scale "$scale" >> "$neg_bg"
     
     
     log_info "Bedgraphs generated: ${output_prefix}_pos.bedgraph, ${output_prefix}_neg.bedgraph"
@@ -2134,10 +2142,13 @@ run_combined_bedgraph() {
                 # Average = sum(col 4..NF) / (NF-3)
                 
                 local output_file="$bedgraph_dir/COMBINED_BEDGRAPH/${group}_combined_${strand}.bedgraph"
-                
+                local out_name
+                out_name=$(basename "$output_file")
+                echo "track type=bedGraph name=\"${out_name}\" description=\"${out_name}\"" > "$output_file"
+
                 bedtools unionbedg -i $bg_files | \
                 awk -v N="$count" 'BEGIN{OFS="\t"} {sum=0; for(i=4;i<=NF;i++) sum+=$i; print $1,$2,$3,sum/N}' \
-                > "$output_file"
+                >> "$output_file"
                 
                 log_info "  Generatd: $(basename "$output_file") ($count replicates)"
             else
