@@ -763,6 +763,7 @@ run_collapse_pcr() {
     local input_bed="$1"
     local output_bed="$2"
     local umi_len="${3:-0}"  # Optional: UMI length, defaults to 0
+    local dedup_mode="${4:-true}"  # Was fastq2collapse.pl run? If not, no count in read names
 
     update_status "Collapsing"
     log_info "Collapsing PCR duplicates with CTK tag2collapse.pl..."
@@ -772,13 +773,20 @@ run_collapse_pcr() {
     local weight_flags=""
     if [ "${umi_len:-0}" -gt 0 ]; then
         barcode_flag="--random-barcode"
-        # CTK weight flags: use pre-collapse counts from fastq2collapse.pl
-        # --weight: use tag count as weight
-        # --weight-in-name: read count from #count# in read ID
-        # -EM 30: EM iterations for barcode collapse
-        # --seq-error-model alignment: estimate error from alignment
-        weight_flags="--weight --weight-in-name -EM 30 --seq-error-model alignment"
-        log_info "UMI mode (length=$umi_len): using random barcode collapse with EM weighting"
+        if [[ "$dedup_mode" == "true" ]]; then
+            # fastq2collapse.pl ran first: read names are READ#count#UMI
+            # --weight: use tag count as weight
+            # --weight-in-name: read count from #count# in read ID
+            # -EM 30: EM iterations for barcode collapse
+            # --seq-error-model alignment: estimate error from alignment
+            weight_flags="--weight --weight-in-name -EM 30 --seq-error-model alignment"
+            log_info "UMI mode (length=$umi_len): using random barcode collapse with EM weighting"
+        else
+            # No fastq2collapse.pl: read names are READ#UMI only, no count embedded
+            # Use EM barcode collapse without weight-in-name
+            weight_flags="-EM 30 --seq-error-model alignment"
+            log_info "UMI mode (length=$umi_len): using random barcode collapse (no pre-collapse counts)"
+        fi
     else
         log_info "No UMI: using position-only collapse"
     fi
