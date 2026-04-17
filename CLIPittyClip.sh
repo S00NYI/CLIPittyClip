@@ -913,6 +913,21 @@ if [[ -n "$INPUT_DIR" ]]; then
     exit 0
 fi
 
+# ── Auto-gzip plain .fastq/.fq files for -i mode ────────────────────────────────
+GLOBAL_GZIP_TMP=""
+if [[ -n "$INPUT_FILE" ]] && [[ "$INPUT_FILE" != *.gz ]]; then
+    tmp_base=$(basename "$INPUT_FILE")
+    tmp_base="${tmp_base%.fastq}"
+    tmp_base="${tmp_base%.fq}"
+    
+    console_msg "\n[PRE-PROCESSING]"
+    console_msg "  > Compressing $(basename "$INPUT_FILE") for processing..."
+    GLOBAL_GZIP_TMP="$(pwd)/${tmp_base}_tmp_input.fastq.gz"
+    gzip -c "$INPUT_FILE" > "$GLOBAL_GZIP_TMP"
+    INPUT_FILE="$GLOBAL_GZIP_TMP"
+    log_info "Auto-gzipped original input -> $GLOBAL_GZIP_TMP (original preserved)"
+fi
+
 # 0b. Demultiplexing (Recursive Branch)
 if [[ "$DEMUX" == "yes" ]]; then
     
@@ -1497,7 +1512,11 @@ if [[ "$DEMUX" == "yes" ]]; then
         console_msg "  > Console log: $TEMP_CONSOLE_LOG"
     fi
     
-    
+    # Cleanup temp gzip for plain fastq
+    if [[ -n "$GLOBAL_GZIP_TMP" ]] && [[ -f "$GLOBAL_GZIP_TMP" ]]; then
+        rm -f "$GLOBAL_GZIP_TMP"
+        log_info "Removed temp gzip: $GLOBAL_GZIP_TMP"
+    fi
     
     send_notification "CLIPittyClip: $(basename "$INPUT_FILE")" "Pipeline execution finished successfully. Duration: ${H}h ${M}m ${S}s"
     exit 0
@@ -1722,6 +1741,11 @@ fi
 if [[ "$KEEP_INTERMEDIATE" != "yes" ]]; then
     log_info "Cleaning up intermediate files..."
     rm -f "${BASENAME}_cleaned.fastq.gz" "${BASENAME}_raw.bed" "${BASENAME}_parsed.bed"
+fi
+
+if [[ -n "$GLOBAL_GZIP_TMP" ]] && [[ -f "$GLOBAL_GZIP_TMP" ]]; then
+    rm -f "$GLOBAL_GZIP_TMP"
+    log_info "Removed temp gzip: $GLOBAL_GZIP_TMP"
 fi
 
 log_info "Analysis Finished Successfully!"
