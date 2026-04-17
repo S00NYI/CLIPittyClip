@@ -531,7 +531,7 @@ if [[ -n "$INPUT_DIR" ]]; then
     EXTRA_FLAGS="$EXTRA_FLAGS -m $ALIGNER"
     if [[ "$ECLIP_MODE" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --eclip"; fi
     if [[ "$SKIP_NCRNA" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --skip-ncrna"; fi
-    EXTRA_FLAGS="$EXTRA_FLAGS --no-dedup"  # Assume pre-processed, skip dedup
+    if [[ "$DEDUP_MODE" == "false" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --no-dedup"; fi
     EXTRA_FLAGS="$EXTRA_FLAGS --child"
     
     console_msg "\n[BATCH ANALYSIS]"
@@ -1520,7 +1520,7 @@ check_dependency parseAlignment.pl
 
 run_parse_alignment "${BAM_FILE}" "${BASENAME}_parsed.bed" "${MUTATION_FILE}" "$GENOME_INDEX"
 
-run_collapse_pcr "${BASENAME}_parsed.bed" "${COLLAPSED_BED}" "${UMI_LEN}"
+run_collapse_pcr "${BASENAME}_parsed.bed" "${COLLAPSED_BED}" "${UMI_LEN}" "${DEDUP_MODE}"
 
 # 4. Coverage Analysis (Bedgraph)
 run_coverage "${COLLAPSED_BED}" "${BASENAME}" "$GENOME_INDEX/chrom.sizes" "${BAM_FILE}" # Pass genome file if available
@@ -1581,6 +1581,9 @@ if [[ "$RUN_CIMS" == "true" ]] || [[ "$RUN_CITS" == "true" ]]; then
     log_info "CTK Analysis complete. Output: $CTK_OUTPUT"
 fi
 
+# Finalize status line (prints "Done!" to end the Preprocessing > ... > Peaks > chain)
+update_status_done
+
 # Cleanup
 if [[ "$KEEP_INTERMEDIATE" != "yes" ]]; then
     log_info "Cleaning up intermediate files..."
@@ -1599,5 +1602,13 @@ S=$((DURATION%60))
 
 log_info "End Time: $(date '+%Y-%m-%d %H:%M:%S')"
 log_info "Total Duration: ${H}h ${M}m ${S}s"
+
+# Console completion summary (non-child mode only)
+if [[ "$CHILD_MODE" != "true" ]]; then
+    console_msg "\n[SUCCESS] Pipeline finished."
+    console_msg "End Time: $(date '+%Y-%m-%d %H:%M:%S')"
+    console_msg "Total Duration: ${H}h ${M}m ${S}s"
+    console_msg "Results in: $(pwd)"
+fi
 
 send_notification "CLIPittyClip: $BASENAME" "Analysis finished successfully. Duration: ${H}h ${M}m ${S}s"
