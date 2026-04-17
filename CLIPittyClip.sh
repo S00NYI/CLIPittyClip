@@ -1637,6 +1637,84 @@ fi
 # Finalize status line (prints "Done!" to end the Preprocessing > ... > Peaks > chain)
 update_status_done
 
+# ── Organize output (non-child single-file mode only) ──────────────────────────
+if [[ "$CHILD_MODE" != "true" ]]; then
+    # We are in ${BASENAME}_analysis/ right now.
+    # Create organized output root one level up alongside (not inside) _analysis/
+    SINGLE_OUTPUT_ROOT="$(dirname "$(pwd)")/${BASENAME}_output"
+    mkdir -p "$SINGLE_OUTPUT_ROOT"
+
+    SF_DIR_BAM="1_BAM"
+    SF_DIR_BED="2_COLLAPSED_BED"
+    SF_DIR_BG="3_BEDGRAPH"
+    SF_DIR_PEAKS="4_PEAKS"
+    SF_DIR_OTHERS="5_OTHERS"
+    SF_DIR_REPORTS="REPORTS"
+
+    mkdir -p "$SINGLE_OUTPUT_ROOT/$SF_DIR_BAM"
+    mkdir -p "$SINGLE_OUTPUT_ROOT/$SF_DIR_BED"
+    mkdir -p "$SINGLE_OUTPUT_ROOT/$SF_DIR_BG"
+    mkdir -p "$SINGLE_OUTPUT_ROOT/$SF_DIR_PEAKS"
+    mkdir -p "$SINGLE_OUTPUT_ROOT/$SF_DIR_OTHERS"
+    mkdir -p "$SINGLE_OUTPUT_ROOT/$SF_DIR_REPORTS"
+
+    # BAM and index
+    cp -f "${BASENAME}"*.bam "$SINGLE_OUTPUT_ROOT/$SF_DIR_BAM/" 2>/dev/null
+    cp -f "${BASENAME}"*.bai "$SINGLE_OUTPUT_ROOT/$SF_DIR_BAM/" 2>/dev/null
+
+    # Collapsed BED
+    cp -f "${COLLAPSED_BED:-${BASENAME}_collapsed.bed}" "$SINGLE_OUTPUT_ROOT/$SF_DIR_BED/" 2>/dev/null
+    cp -f "${MUTATION_FILE:-${BASENAME}_mutations.txt}" "$SINGLE_OUTPUT_ROOT/$SF_DIR_BED/" 2>/dev/null
+
+    # Bedgraphs and scale factors
+    cp -f "${BASENAME}"*.bedgraph "$SINGLE_OUTPUT_ROOT/$SF_DIR_BG/" 2>/dev/null
+    cp -f scale_factors.tsv "$SINGLE_OUTPUT_ROOT/$SF_DIR_BG/" 2>/dev/null
+
+    # Peaks (HOMER directory or CTK flat BED)
+    PEAK_DIR_NAME="${BASENAME}_peaks"
+    if [[ -d "$PEAK_DIR_NAME" ]]; then
+        cp -r "$PEAK_DIR_NAME" "$SINGLE_OUTPUT_ROOT/$SF_DIR_PEAKS/" 2>/dev/null
+        cp -f "${PEAK_DIR_NAME}_homer.log" "$SINGLE_OUTPUT_ROOT/$SF_DIR_PEAKS/" 2>/dev/null
+    else
+        cp -f "${BASENAME}_peaks_raw.bed" "$SINGLE_OUTPUT_ROOT/$SF_DIR_PEAKS/" 2>/dev/null
+        cp -f "${BASENAME}_peaks_ctk.log" "$SINGLE_OUTPUT_ROOT/$SF_DIR_PEAKS/" 2>/dev/null
+    fi
+
+    # CTK Analysis (CIMS/CITS)
+    for ctk_folder in "CTK_Analysis" "CIMS_Analysis" "CITS_Analysis"; do
+        if [[ -d "$ctk_folder" ]]; then
+            CTK_OUT_DIR=""
+            if [[ "$ctk_folder" == "CTK_Analysis" ]]; then CTK_OUT_DIR="5_CTK_Analysis"; fi
+            if [[ "$ctk_folder" == "CIMS_Analysis" ]]; then CTK_OUT_DIR="5_CIMS_Analysis"; fi
+            if [[ "$ctk_folder" == "CITS_Analysis" ]]; then CTK_OUT_DIR="5_CITS_Analysis"; fi
+            mkdir -p "$SINGLE_OUTPUT_ROOT/$CTK_OUT_DIR"
+            cp -r "$ctk_folder/"* "$SINGLE_OUTPUT_ROOT/$CTK_OUT_DIR/" 2>/dev/null
+            SF_DIR_CTK="$CTK_OUT_DIR"
+        fi
+    done
+
+    # ncRNA mapping output
+    if [[ -d "OTHERS/ncRNA_Mapping" ]]; then
+        mkdir -p "$SINGLE_OUTPUT_ROOT/$SF_DIR_OTHERS/ncRNA_Mapping"
+        cp -r "OTHERS/ncRNA_Mapping/"* "$SINGLE_OUTPUT_ROOT/$SF_DIR_OTHERS/ncRNA_Mapping/" 2>/dev/null
+    fi
+
+    # Reports: fastp, aligner logs, analysis log
+    mkdir -p "$SINGLE_OUTPUT_ROOT/$SF_DIR_REPORTS/FASTP_REPORT"
+    mkdir -p "$SINGLE_OUTPUT_ROOT/$SF_DIR_REPORTS/ALIGNER_LOGS"
+    cp -f "${BASENAME}"*_fastp.html "$SINGLE_OUTPUT_ROOT/$SF_DIR_REPORTS/FASTP_REPORT/" 2>/dev/null
+    cp -f "${BASENAME}"*_fastp.json "$SINGLE_OUTPUT_ROOT/$SF_DIR_REPORTS/FASTP_REPORT/" 2>/dev/null
+    cp -f "${BASENAME}"*.Log.final.out "$SINGLE_OUTPUT_ROOT/$SF_DIR_REPORTS/ALIGNER_LOGS/" 2>/dev/null
+    cp -f "${BASENAME}"*.Log.out "$SINGLE_OUTPUT_ROOT/$SF_DIR_REPORTS/ALIGNER_LOGS/" 2>/dev/null
+
+    # Move analysis log into REPORTS
+    if [[ -f "$LOG_FILE" ]]; then
+        cp "$LOG_FILE" "$SINGLE_OUTPUT_ROOT/$SF_DIR_REPORTS/detailed_output.log"
+    fi
+
+    log_info "Output organized: $SINGLE_OUTPUT_ROOT"
+fi
+
 # Cleanup
 if [[ "$KEEP_INTERMEDIATE" != "yes" ]]; then
     log_info "Cleaning up intermediate files..."
@@ -1658,10 +1736,21 @@ log_info "Total Duration: ${H}h ${M}m ${S}s"
 
 # Console completion summary (non-child mode only)
 if [[ "$CHILD_MODE" != "true" ]]; then
+    console_msg "\n[OUTPUT]"
+    console_msg "  All results saved to: $SINGLE_OUTPUT_ROOT/"
+    console_msg "  ├── 1_BAM/"
+    console_msg "  ├── 2_COLLAPSED_BED/"
+    console_msg "  ├── 3_BEDGRAPH/"
+    console_msg "  ├── 4_PEAKS/"
+    if [[ -n "${SF_DIR_CTK:-}" ]]; then
+        console_msg "  ├── ${SF_DIR_CTK}/"
+    fi
+    console_msg "  ├── 5_OTHERS/"
+    console_msg "  └── REPORTS/"
+
     console_msg "\n[SUCCESS] Pipeline finished."
     console_msg "End Time: $(date '+%Y-%m-%d %H:%M:%S')"
     console_msg "Total Duration: ${H}h ${M}m ${S}s"
-    console_msg "Results in: $(pwd)"
 fi
 
 send_notification "CLIPittyClip: $BASENAME" "Analysis finished successfully. Duration: ${H}h ${M}m ${S}s"
