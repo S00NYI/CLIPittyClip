@@ -10,7 +10,8 @@ install_*.txt
 install_log*.txt
 *.log
 
-# Editor/IDE
+# Editor/IDE/AI
 .vscode/
+.claude/
 *.swp
 *~
