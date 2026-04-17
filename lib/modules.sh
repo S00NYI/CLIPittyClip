@@ -2072,23 +2072,30 @@ run_coverage() {
     # Using 'cigar !~ "N"' to remove junction reads
     # Streaming samtools -> bedtools genomecov
     
-    # Positive Strand
-    local pos_bg="${output_prefix}_pos.bedgraph"
-    local pos_name
-    pos_name=$(basename "$pos_bg")
-    echo "track type=bedGraph name=\"${pos_name}\" description=\"${pos_name}\"" > "$pos_bg"
-    samtools view -h -e 'cigar !~ "N"' "$bam_file" | \
-    bedtools genomecov -ibam stdin -bg -strand + -scale "$scale" >> "$pos_bg"
+    # Extract sample name from output_prefix for track header
+    local sample_name
+    sample_name=$(basename "$output_prefix")
 
-    # Negative Strand
-    local neg_bg="${output_prefix}_neg.bedgraph"
-    local neg_name
-    neg_name=$(basename "$neg_bg")
-    echo "track type=bedGraph name=\"${neg_name}\" description=\"${neg_name}\"" > "$neg_bg"
+    # Positive Strand: generate sorted bedgraph then prepend track header
+    local pos_bg="${output_prefix}_pos.bedgraph"
+    local pos_tmp="${output_prefix}_pos.bedgraph.tmp"
     samtools view -h -e 'cigar !~ "N"' "$bam_file" | \
-    bedtools genomecov -ibam stdin -bg -strand - -scale "$scale" >> "$neg_bg"
-    
-    
+    bedtools genomecov -ibam stdin -bg -strand + -scale "$scale" | \
+    sort -k1,1 -k2,2n > "$pos_tmp"
+    echo "track type=bedGraph name=\"${sample_name}\" description=\"Positive Strand\"" > "$pos_bg"
+    cat "$pos_tmp" >> "$pos_bg"
+    rm -f "$pos_tmp"
+
+    # Negative Strand: generate sorted bedgraph then prepend track header
+    local neg_bg="${output_prefix}_neg.bedgraph"
+    local neg_tmp="${output_prefix}_neg.bedgraph.tmp"
+    samtools view -h -e 'cigar !~ "N"' "$bam_file" | \
+    bedtools genomecov -ibam stdin -bg -strand - -scale "$scale" | \
+    sort -k1,1 -k2,2n > "$neg_tmp"
+    echo "track type=bedGraph name=\"${sample_name}\" description=\"Negative Strand\"" > "$neg_bg"
+    cat "$neg_tmp" >> "$neg_bg"
+    rm -f "$neg_tmp"
+
     log_info "Bedgraphs generated: ${output_prefix}_pos.bedgraph, ${output_prefix}_neg.bedgraph"
 }
 
@@ -2142,15 +2149,24 @@ run_combined_bedgraph() {
                 # Average = sum(col 4..NF) / (NF-3)
                 
                 local output_file="$bedgraph_dir/COMBINED_BEDGRAPH/${group}_combined_${strand}.bedgraph"
-                local out_name
-                out_name=$(basename "$output_file")
-                echo "track type=bedGraph name=\"${out_name}\" description=\"${out_name}\"" > "$output_file"
+                local strand_desc
+                if [[ "$strand" == "pos" ]]; then
+                    strand_desc="Combined Positive Strand"
+                else
+                    strand_desc="Combined Negative Strand"
+                fi
+                local combined_tmp="${output_file}.tmp"
 
-                bedtools unionbedg -i $bg_files | \
-                awk -v N="$count" 'BEGIN{OFS="\t"} {sum=0; for(i=4;i<=NF;i++) sum+=$i; print $1,$2,$3,sum/N}' \
-                >> "$output_file"
-                
-                log_info "  Generatd: $(basename "$output_file") ($count replicates)"
+                # Strip track headers from inputs before unionbedg, then sort and average
+                for bg in $bg_files; do grep -v "^track" "$bg"; done | \
+                bedtools unionbedg -i stdin | \
+                awk -v N="$count" 'BEGIN{OFS="\t"} {sum=0; for(i=4;i<=NF;i++) sum+=$i; print $1,$2,$3,sum/N}' | \
+                sort -k1,1 -k2,2n > "$combined_tmp"
+                echo "track type=bedGraph name=\"${group}\" description=\"${strand_desc}\"" > "$output_file"
+                cat "$combined_tmp" >> "$output_file"
+                rm -f "$combined_tmp"
+
+                log_info "  Generated: $(basename "$output_file") ($count replicates)"
             else
                 log_warning "  No bedgraph files found for group $group ($strand)"
             fi
