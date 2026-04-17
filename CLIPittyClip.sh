@@ -554,6 +554,8 @@ if [[ -n "$INPUT_DIR" ]]; then
     if [[ "$ECLIP_MODE" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --eclip"; fi
     if [[ "$SKIP_NCRNA" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --skip-ncrna"; fi
     if [[ "$DEDUP_MODE" == "false" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --no-dedup"; fi
+    EXTRA_FLAGS="$EXTRA_FLAGS --peak-caller $PEAK_CALLER"
+    if [[ -n "$ADV_CTK_ARGS" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --ctk-args \"$ADV_CTK_ARGS\""; fi
     EXTRA_FLAGS="$EXTRA_FLAGS --child"
     
     console_msg "\n[BATCH ANALYSIS]"
@@ -1017,7 +1019,9 @@ if [[ "$DEMUX" == "yes" ]]; then
     # Generally, pass --no-dedup to child to avoid double-dedup.
     
     EXTRA_FLAGS="$EXTRA_FLAGS --no-dedup"
-    
+    EXTRA_FLAGS="$EXTRA_FLAGS --peak-caller $PEAK_CALLER"
+    if [[ -n "$ADV_CTK_ARGS" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --ctk-args \"$ADV_CTK_ARGS\""; fi
+
     # Pass --child to suppress header in sub-calls
     EXTRA_FLAGS="$EXTRA_FLAGS --child"
 
