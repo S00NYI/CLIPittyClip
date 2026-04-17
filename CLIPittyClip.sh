@@ -532,12 +532,11 @@ if [[ -n "$INPUT_DIR" ]]; then
     console_msg "\n[DIRECTORY INPUT MODE]"
     console_msg "  > Input Directory: $INPUT_DIR"
     
-    # Count files
-    SAMPLE_FILES=("$INPUT_DIR"/*.fastq.gz "$INPUT_DIR"/*.fq.gz)
-    # Filter to only existing files
-    SAMPLE_FILES=($(ls "$INPUT_DIR"/*.fastq.gz "$INPUT_DIR"/*.fq.gz 2>/dev/null))
+    # Collect .fastq.gz, .fq.gz, .fastq, and .fq files
+    SAMPLE_FILES=($(ls "$INPUT_DIR"/*.fastq.gz "$INPUT_DIR"/*.fq.gz \
+                      "$INPUT_DIR"/*.fastq "$INPUT_DIR"/*.fq 2>/dev/null))
     total_samples=${#SAMPLE_FILES[@]}
-    
+
     console_msg "  > Found $total_samples sample files"
     
     # Build extra flags for child processes
@@ -559,7 +558,7 @@ if [[ -n "$INPUT_DIR" ]]; then
     EXTRA_FLAGS="$EXTRA_FLAGS --child"
     
     console_msg "\n[BATCH ANALYSIS]"
-    
+
     current_sample=0
     for sample in "${SAMPLE_FILES[@]}"; do
         if [ -f "$sample" ]; then
@@ -567,30 +566,49 @@ if [[ -n "$INPUT_DIR" ]]; then
             sample_name=$(basename "$sample")
             sample_name="${sample_name%.fastq.gz}"
             sample_name="${sample_name%.fq.gz}"
-            
+            sample_name="${sample_name%.fastq}"
+            sample_name="${sample_name%.fq}"
+
+            # Auto-gzip plain .fastq/.fq files (preserve originals)
+            sample_input="$sample"
+            gzip_tmp=""
+            if [[ "$sample" != *.gz ]]; then
+                console_msg "  > Compressing $(basename "$sample") for processing..."
+                gzip_tmp="${sample_name}_tmp_input.fastq.gz"
+                gzip -c "$sample" > "$gzip_tmp"
+                sample_input="$gzip_tmp"
+                log_info "Auto-gzipped $sample -> $gzip_tmp (original preserved)"
+            fi
+
             printf "  %2d/%-2d %-20s : " "$current_sample" "$total_samples" "$sample_name"
-            
+
             echo "[BATCH] Launching analysis for sample: $sample_name" >> "$LOG_FILE"
-            
+
             self_script="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
-            
+
             cmd="bash $self_script \
-                -i $sample \
+                -i $sample_input \
                 -x $GENOME_INDEX \
                 -t $THREADS \
                 -u $UMI_LEN \
                 -a $ADAPTER_3 \
                 -o ${sample_name} \
                 $EXTRA_FLAGS"
-            
+
             $cmd
-            
+
             if [ $? -eq 0 ]; then
                 update_status_done
                 echo "[BATCH] Sample $sample_name analysis complete." >> "$LOG_FILE"
             else
                 echo -e "${RED}FAILED${NC}"
                 log_error ">>> Sample $sample_name analysis FAILED."
+            fi
+
+            # Cleanup gzip temp if created
+            if [[ -n "$gzip_tmp" && -f "$gzip_tmp" ]]; then
+                rm -f "$gzip_tmp"
+                log_info "Removed temp gzip: $gzip_tmp"
             fi
         fi
     done
