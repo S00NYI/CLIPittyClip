@@ -70,8 +70,8 @@ function show_usage {
     echo ""
     echo "ANALYSIS OPTIONS:"
     echo "  --peak-caller <str>      Peak caller: homer (default) or ctk
-  --ctk-args <str>         Additional tag2peak.pl arguments (quoted string)
-  --run-ctk                Enable full CTK CIMS+CITS analysis"
+  --ctk-args <str>         Additional tag2peak.pl arguments (quoted string)"
+    echo "  --run-cims-cits          Enable full CTK CIMS+CITS analysis"
     echo "  --run-cims               Enable CIMS analysis (mutation sites only)"
     echo "  --run-cits               Enable CITS analysis (truncation sites only)"
     echo "  --cims-iter <int>        CIMS permutation iterations (default: 5)"
@@ -169,7 +169,10 @@ while [[ $# -gt 0 ]]; do
         --ctk-args) ADV_CTK_ARGS="$2"; shift 2 ;;
         --run-cims) RUN_CIMS=true; RUN_CTK="yes"; shift ;;
         --run-cits) RUN_CITS=true; RUN_CTK="yes"; shift ;;
-        --run-ctk) RUN_CTK="yes"; RUN_CIMS=true; RUN_CITS=true; shift ;;
+        --run-cims-cits) RUN_CTK="yes"; RUN_CIMS=true; RUN_CITS=true; shift ;;
+        --run-ctk) # Deprecated alias for --run-cims-cits
+            echo -e "\033[0;33m[DEPRECATED]\033[0m --run-ctk is deprecated. Use --run-cims-cits instead." >&2
+            RUN_CTK="yes"; RUN_CIMS=true; RUN_CITS=true; shift ;;
         --cims-iter) CIMS_ITERATIONS="$2"; shift 2 ;;
         --cims-fdr) CIMS_FDR="$2"; shift 2 ;;
         --cits-pval) CITS_PVALUE="$2"; shift 2 ;;
