@@ -7,6 +7,28 @@
 
 A comprehensive, single-command CLIP-seq data analysis pipeline from FASTQ to peaks and crosslink sites.
 
+## Update Log (v3.1.0 / v3.0.2)
+This release focuses on heavily expanding CTK feature support, providing cleaner outputs, and patching edge cases in directory and single-file processing.
+
+**New Features (v3.1.0):**
+- **Peak Caller Selection**: Added `--peak-caller` flag supporting `ctk` (`tag2peak.pl`) and `homer` (default).
+- **Custom CTK Arguments**: Added `--ctk-args` pass-through for custom `tag2peak.pl` arguments.
+- **Track Headers**: Added strict sorting and UCSC track headers to all output BedGraph files for immediate visualization compatibility.
+- **Uncompressed FASTQ Support**: Added support for plain `.fastq` and `.fq` files in both single-file (`-i`) and directory modes (`-d`). They are auto-gzipped into temporary file, which will be removed after the pipeline finishes.
+- **Organized Outputs**: Upgraded the generic `_analysis` directory in the single-file (`-i`) execution into the same organized, numbered folders used in Demultiplex and Batch modes.
+- **Flag Renaming**: Renamed `--run-ctk` to `--run-cims-cits` for explicit clarity. (The deprecated `--run-ctk` alias will still function with a warning).
+
+**Bug Fixes (v3.0.2):**
+- **Directory Mode Deduplication**: Fixed an issue where `-d` batch mode unintentionally skipped PCR deduplication by hardcoding `--no-dedup`. Children processes now inherit the parent `DEDUP_MODE` properly.
+- **Weight Assignments**: Avoided applying duplicate weights formatting if deduplication wasn't run.
+- **Peak Aggregation**: CTK peak tag files (flat BED) are now fully supported, bypassing the bug where aggregation expected a HOMER `_peaks` directory layout.
+- **Completion Output**: Missing CLI completion messaging and `Done!` status lines in single-file modes have been restored.
+- **Standalone Safety**: Added a `/dev/null` fallback for `LOG_FILE` variables to resolve crashes when running `PEAKittyPeak.sh` standalone.
+
+## Planned Updates (Future Releases)
+- **Wizard Mode Overhaul**: The interactive `--wizard` mode will be updated to fully support the selection of peak callers (HOMER vs CTK) and adaptive prompts based on the chosen caller.
+- **BigWig Support**: Future support for direct BigWig conversion of coverage tracks (`bedGraphToBigWig`).
+
 ## Overview
 
 CLIPittyClip v3.0 provides a complete, modernized workflow for CLIP-seq analysis:
