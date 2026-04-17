@@ -9,6 +9,9 @@ source "${SCRIPT_DIR}/lib/utils.sh"
 source "${SCRIPT_DIR}/lib/modules.sh"
 source "${SCRIPT_DIR}/lib/wizard.sh"
 
+# Fallback: if LOG_FILE not set by parent pipeline, discard log output
+LOG_FILE="${LOG_FILE:-/dev/null}"
+
 # Default Values
 PEAK_DIST=50
 PEAK_SIZE=20
