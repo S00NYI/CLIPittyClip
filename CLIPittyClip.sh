@@ -702,14 +702,23 @@ if [[ -n "$INPUT_DIR" ]]; then
                 cp "$extracted_chroms" "$OUTPUT_ROOT/$DIR_BG/chrom.sizes"
             fi
             
-            # 4. Peak folder
+            # 4. Peak folder (HOMER produces a directory; CTK produces flat BED + log files)
             peak_dir="${sample_out}/${sample_name}_peaks"
             if [[ -d "$peak_dir" ]]; then
+                # HOMER: copy the tag directory
                 cp -r "$peak_dir" "$OUTPUT_ROOT/$DIR_PEAKS/SAMPLE_PEAKS/"
+                peak_log="${peak_dir}_homer.log"
+            else
+                # CTK: copy the flat BED output into a named subdirectory
+                local ctk_peak_bed="${sample_out}/${sample_name}_peaks_raw.bed"
+                if [[ -f "$ctk_peak_bed" ]]; then
+                    mkdir -p "$OUTPUT_ROOT/$DIR_PEAKS/SAMPLE_PEAKS/${sample_name}_peaks"
+                    cp "$ctk_peak_bed" "$OUTPUT_ROOT/$DIR_PEAKS/SAMPLE_PEAKS/${sample_name}_peaks/"
+                fi
+                peak_log="${sample_out}/${sample_name}_peaks_ctk.log"
             fi
-            
+
             # Peak calling log
-            peak_log="${peak_dir}_homer.log"
             if [[ -f "$peak_log" ]]; then
                 cp "$peak_log" "$OUTPUT_ROOT/$DIR_IND_PEAK_LOGS/${sample_name}_PeakCalling.log"
             fi
@@ -1218,24 +1227,23 @@ if [[ "$DEMUX" == "yes" ]]; then
                     cp "$extracted_chroms" "$OUTPUT_ROOT/$DIR_BG/chrom.sizes"
                  fi
 
-                # 4. Peaks (Folder)
+                # 4. Peaks (HOMER produces a directory; CTK produces flat BED + log files)
                 peak_dir="${analysis_dir}/${sample_name}_peaks"
                 if [[ -d "$peak_dir" ]]; then
+                    # HOMER: copy the tag directory
                     cp -r "$peak_dir" "$OUTPUT_ROOT/$DIR_PEAKS/SAMPLE_PEAKS/"
+                    peak_log="${peak_dir}_homer.log"
+                else
+                    # CTK: copy the flat BED output into a named subdirectory
+                    local ctk_peak_bed="${analysis_dir}/${sample_name}_peaks_raw.bed"
+                    if [[ -f "$ctk_peak_bed" ]]; then
+                        mkdir -p "$OUTPUT_ROOT/$DIR_PEAKS/SAMPLE_PEAKS/${sample_name}_peaks"
+                        cp "$ctk_peak_bed" "$OUTPUT_ROOT/$DIR_PEAKS/SAMPLE_PEAKS/${sample_name}_peaks/"
+                    fi
+                    peak_log="${analysis_dir}/${sample_name}_peaks_ctk.log"
                 fi
 
-                # 5. CTK Analysis (CIMS/CITS) - check for new folder names
-                for ctk_folder in "CTK_Analysis" "CIMS_Analysis" "CITS_Analysis"; do
-                    if [[ -d "$analysis_dir/$ctk_folder" ]]; then
-                        mkdir -p "$OUTPUT_ROOT/5_${ctk_folder}"
-                        cp -r "$analysis_dir/$ctk_folder/"* "$OUTPUT_ROOT/5_${ctk_folder}/" 2>/dev/null
-                        break
-                    fi
-                done
-                    
-                # 4.1. Individual Peak Log (Created by updated modules.sh)
-                # It was created as ${peak_dir}_homer.log
-                peak_log="${peak_dir}_homer.log"
+                # 4.1. Individual Peak Log
                 if [[ -f "$peak_log" ]]; then
                     cp "$peak_log" "$OUTPUT_ROOT/$DIR_IND_PEAK_LOGS/${sample_name}_PeakCalling.log"
                 fi
