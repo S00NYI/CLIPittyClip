@@ -832,6 +832,14 @@ run_peak_calling_homer() {
     findPeaks "${out_dir}" -o auto -style factor -L 2 -localSize 10000 -strand separate \
         -minDist "${peak_dist}" -size "${peak_size}" -fragLength "${frag_len}" $ADV_HOMER_ARGS >> "$log_file" 2>&1
 
+    if [[ -f "${out_dir}/peaks.txt" ]]; then
+        echo "Converting peaks.txt to BED format..." >> "$log_file"
+        sed '/^[[:blank:]]*#/d;s/#.*//' "${out_dir}/peaks.txt" > "${out_dir}/peaksTemp.bed"
+        awk 'OFS="\t" {print $2, $3, $4, $1, $6, $5}' "${out_dir}/peaksTemp.bed" > "${out_dir}/peaks.bed"
+        rm "${out_dir}/peaksTemp.bed"
+        sort -k1,1 -k2,2n "${out_dir}/peaks.bed" > "${out_dir}/peaks_Sorted.bed"
+    fi
+
     log_info "Peak calling complete. Log saved to $log_file"
 }
 

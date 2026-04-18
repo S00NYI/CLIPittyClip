@@ -200,24 +200,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 # ------------------------------------------------------------------
-# Log File Initialization (Post-Parsing)
+# Pre-Wizard Config Checking
 # ------------------------------------------------------------------
-# If CHILD_MODE, we suppress main log creation to avoid spamming root dir.
-if [[ "$CHILD_MODE" == "true" ]]; then
-    LOG_FILE="/dev/null"
-    TEMP_CONSOLE_LOG=""  # No console log for child processes
-else
-    # Enable console output capture for parent process only
-    # Derive log name from input file if available
-    # Derive log name from input file if available
-    # User Request: Fixed name "console_output.log"
-    TEMP_CONSOLE_LOG="console_output.log"
-    
-    # exec > >(tee -a "$TEMP_CONSOLE_LOG") 2>&1
-    # We clear the log first to avoid appending to old runs
-    > "$TEMP_CONSOLE_LOG"
-    exec > >(tee -a "$TEMP_CONSOLE_LOG") 2>&1
-    # Use absolute path so redirects work correctly even if we cd later
 # Check for existing config in current directory (e.g. from parent process or previous run)
 if [[ -f "analysis_config.env" ]]; then
     # We only source if we are NOT running the wizard right now (child process)
@@ -256,9 +240,31 @@ if [[ "$WIZARD_MODE" == "true" ]]; then
     PEAK_SIZE="$WIZ_PEAK_SIZE"
     FRAG_LEN="$WIZ_FRAG_LEN"
     ADV_HOMER_ARGS="$WIZ_HOMER_ARGS"
+    
+    # Important bugfix: fastp arguments from advanced wizard
+    # We map WIZ_FASTP_ARGS so the standard CLI loop can process it
+    if [[ -n "$WIZ_FASTP_ARGS" ]]; then
+        ADV_FASTP_ARGS="$WIZ_FASTP_ARGS"
+    fi
 fi
 
-# Log file setup
+# ------------------------------------------------------------------
+# Log File Initialization (Post-Parsing / Post-Wizard)
+# ------------------------------------------------------------------
+# If CHILD_MODE, we suppress main log creation to avoid spamming root dir.
+if [[ "$CHILD_MODE" == "true" ]]; then
+    LOG_FILE="/dev/null"
+    TEMP_CONSOLE_LOG=""  # No console log for child processes
+else
+    # Enable console output capture for parent process only
+    # Derived from user requested fixed name
+    TEMP_CONSOLE_LOG="console_output.log"
+    
+    # Enable tee redirection AFTER wizard to prevent capturing UI ANSI color codes
+    > "$TEMP_CONSOLE_LOG"
+    exec > >(tee -a "$TEMP_CONSOLE_LOG") 2>&1
+
+    # Log file setup
     # User Request: Fixed name "detailed_output.log"
     LOG_FILE="$(pwd)/detailed_output.log"
     # Overwrite if exists
@@ -886,10 +892,12 @@ if [[ -n "$INPUT_DIR" ]]; then
             "$OUTPUT_ROOT/$DIR_BG" "$OUTPUT_ROOT/$DIR_BG/scale_factors.tsv" \
             "$GROUPS_FILE"
         
+        # Promote sorted peak bed to clearly named FINAL target
+        mv "$PEAKS_BED" "$OUTPUT_ROOT/$DIR_PEAKS/COMBINED_PEAKS/FINAL_COMBINED_PEAKS.bed" 2>/dev/null
+        
         # Cleanup intermediate peak files to save disk space
         rm -f "$OUTPUT_ROOT/$DIR_PEAKS/COMBINED_PEAKS/COMBINED.bed" \
-              "$OUTPUT_ROOT/$DIR_PEAKS/COMBINED_PEAKS/peaks.bed" \
-              "$PEAKS_BED"
+              "$OUTPUT_ROOT/$DIR_PEAKS/COMBINED_PEAKS/peaks.bed"
     fi
 
     send_notification "CLIPittyClip Batch" "Analysis complete for $total_samples samples in $(basename "$INPUT_DIR")"
@@ -1681,25 +1689,27 @@ if [[ "$CHILD_MODE" != "true" ]]; then
     mkdir -p "$SINGLE_OUTPUT_ROOT/$SF_DIR_REPORTS"
 
     # BAM and index
-    cp -f "${BASENAME}"*.bam "$SINGLE_OUTPUT_ROOT/$SF_DIR_BAM/" 2>/dev/null
-    cp -f "${BASENAME}"*.bai "$SINGLE_OUTPUT_ROOT/$SF_DIR_BAM/" 2>/dev/null
+    mv "${BASENAME}"*.bam "$SINGLE_OUTPUT_ROOT/$SF_DIR_BAM/" 2>/dev/null
+    mv "${BASENAME}"*.bai "$SINGLE_OUTPUT_ROOT/$SF_DIR_BAM/" 2>/dev/null
 
     # Collapsed BED
-    cp -f "${COLLAPSED_BED:-${BASENAME}_collapsed.bed}" "$SINGLE_OUTPUT_ROOT/$SF_DIR_BED/" 2>/dev/null
-    cp -f "${MUTATION_FILE:-${BASENAME}_mutations.txt}" "$SINGLE_OUTPUT_ROOT/$SF_DIR_BED/" 2>/dev/null
+    mv "${COLLAPSED_BED:-${BASENAME}_collapsed.bed}" "$SINGLE_OUTPUT_ROOT/$SF_DIR_BED/" 2>/dev/null
+    mv "${MUTATION_FILE:-${BASENAME}_mutations.txt}" "$SINGLE_OUTPUT_ROOT/$SF_DIR_BED/" 2>/dev/null
 
     # Bedgraphs and scale factors
-    cp -f "${BASENAME}"*.bedgraph "$SINGLE_OUTPUT_ROOT/$SF_DIR_BG/" 2>/dev/null
-    cp -f scale_factors.tsv "$SINGLE_OUTPUT_ROOT/$SF_DIR_BG/" 2>/dev/null
+    mv "${BASENAME}"*.bedgraph "$SINGLE_OUTPUT_ROOT/$SF_DIR_BG/" 2>/dev/null
+    mv scale_factors.tsv "$SINGLE_OUTPUT_ROOT/$SF_DIR_BG/" 2>/dev/null
 
     # Peaks (HOMER directory or CTK flat BED)
     PEAK_DIR_NAME="${BASENAME}_peaks"
     if [[ -d "$PEAK_DIR_NAME" ]]; then
-        cp -r "$PEAK_DIR_NAME" "$SINGLE_OUTPUT_ROOT/$SF_DIR_PEAKS/" 2>/dev/null
-        cp -f "${PEAK_DIR_NAME}_homer.log" "$SINGLE_OUTPUT_ROOT/$SF_DIR_PEAKS/" 2>/dev/null
+        mv "$PEAK_DIR_NAME" "$SINGLE_OUTPUT_ROOT/$SF_DIR_PEAKS/" 2>/dev/null
+        mv "${PEAK_DIR_NAME}_homer.log" "$SINGLE_OUTPUT_ROOT/$SF_DIR_PEAKS/" 2>/dev/null
+        # Duplicate the unified BED format up to root for immediate visibility
+        cp "$SINGLE_OUTPUT_ROOT/$SF_DIR_PEAKS/$PEAK_DIR_NAME/peaks_Sorted.bed" "$SINGLE_OUTPUT_ROOT/$SF_DIR_PEAKS/FINAL_PEAKS.bed" 2>/dev/null
     else
-        cp -f "${BASENAME}_peaks_raw.bed" "$SINGLE_OUTPUT_ROOT/$SF_DIR_PEAKS/" 2>/dev/null
-        cp -f "${BASENAME}_peaks_ctk.log" "$SINGLE_OUTPUT_ROOT/$SF_DIR_PEAKS/" 2>/dev/null
+        mv "${BASENAME}_peaks_raw.bed" "$SINGLE_OUTPUT_ROOT/$SF_DIR_PEAKS/FINAL_PEAKS.bed" 2>/dev/null
+        mv "${BASENAME}_peaks_ctk.log" "$SINGLE_OUTPUT_ROOT/$SF_DIR_PEAKS/" 2>/dev/null
     fi
 
     # CTK Analysis (CIMS/CITS)
@@ -1718,20 +1728,25 @@ if [[ "$CHILD_MODE" != "true" ]]; then
     # ncRNA mapping output
     if [[ -d "OTHERS/ncRNA_Mapping" ]]; then
         mkdir -p "$SINGLE_OUTPUT_ROOT/$SF_DIR_OTHERS/ncRNA_Mapping"
-        cp -r "OTHERS/ncRNA_Mapping/"* "$SINGLE_OUTPUT_ROOT/$SF_DIR_OTHERS/ncRNA_Mapping/" 2>/dev/null
+        mv "OTHERS/ncRNA_Mapping/"* "$SINGLE_OUTPUT_ROOT/$SF_DIR_OTHERS/ncRNA_Mapping/" 2>/dev/null
     fi
 
     # Reports: fastp, aligner logs, analysis log
     mkdir -p "$SINGLE_OUTPUT_ROOT/$SF_DIR_REPORTS/FASTP_REPORT"
     mkdir -p "$SINGLE_OUTPUT_ROOT/$SF_DIR_REPORTS/ALIGNER_LOGS"
-    cp -f "${BASENAME}"*_fastp.html "$SINGLE_OUTPUT_ROOT/$SF_DIR_REPORTS/FASTP_REPORT/" 2>/dev/null
-    cp -f "${BASENAME}"*_fastp.json "$SINGLE_OUTPUT_ROOT/$SF_DIR_REPORTS/FASTP_REPORT/" 2>/dev/null
-    cp -f "${BASENAME}"*.Log.final.out "$SINGLE_OUTPUT_ROOT/$SF_DIR_REPORTS/ALIGNER_LOGS/" 2>/dev/null
-    cp -f "${BASENAME}"*.Log.out "$SINGLE_OUTPUT_ROOT/$SF_DIR_REPORTS/ALIGNER_LOGS/" 2>/dev/null
+    mv "${BASENAME}"*_fastp.html "$SINGLE_OUTPUT_ROOT/$SF_DIR_REPORTS/FASTP_REPORT/" 2>/dev/null
+    mv "${BASENAME}"*_fastp.json "$SINGLE_OUTPUT_ROOT/$SF_DIR_REPORTS/FASTP_REPORT/" 2>/dev/null
+    
+    if [[ "$ALIGNER" == "bowtie2" ]]; then
+        echo -e "Bowtie2 does not generate standalone log files like STAR does.\nAll mapping statistics for this run are recorded in the main console_output.log." > "$SINGLE_OUTPUT_ROOT/$SF_DIR_REPORTS/ALIGNER_LOGS/README_Bowtie2_LOGS.txt"
+    else
+        mv "${BASENAME}"*.Log.final.out "$SINGLE_OUTPUT_ROOT/$SF_DIR_REPORTS/ALIGNER_LOGS/" 2>/dev/null
+        mv "${BASENAME}"*.Log.out "$SINGLE_OUTPUT_ROOT/$SF_DIR_REPORTS/ALIGNER_LOGS/" 2>/dev/null
+    fi
 
     # Move analysis log into REPORTS
     if [[ -f "$LOG_FILE" ]]; then
-        cp "$LOG_FILE" "$SINGLE_OUTPUT_ROOT/$SF_DIR_REPORTS/detailed_output.log"
+        mv "$LOG_FILE" "$SINGLE_OUTPUT_ROOT/$SF_DIR_REPORTS/detailed_output.log"
     fi
 
     log_info "Output organized: $SINGLE_OUTPUT_ROOT"
@@ -1740,7 +1755,18 @@ fi
 # Cleanup
 if [[ "$KEEP_INTERMEDIATE" != "yes" ]]; then
     log_info "Cleaning up intermediate files..."
-    rm -f "${BASENAME}_cleaned.fastq.gz" "${BASENAME}_raw.bed" "${BASENAME}_parsed.bed"
+    if [[ -n "$SINGLE_OUTPUT_ROOT" ]]; then
+        # Single mode cleans entire scratch directory natively
+        cd ..
+        rm -rf "${BASENAME}_analysis"
+    else
+        rm -f "${BASENAME}_cleaned.fastq.gz" "${BASENAME}_raw.bed" "${BASENAME}_parsed.bed"
+    fi
+else
+    # Even if keeping intermediates, we must return to base dir in single-mode
+    if [[ -n "$SINGLE_OUTPUT_ROOT" ]]; then
+        cd ..
+    fi
 fi
 
 if [[ -n "$GLOBAL_GZIP_TMP" ]] && [[ -f "$GLOBAL_GZIP_TMP" ]]; then
@@ -1749,7 +1775,7 @@ if [[ -n "$GLOBAL_GZIP_TMP" ]] && [[ -f "$GLOBAL_GZIP_TMP" ]]; then
 fi
 
 log_info "Analysis Finished Successfully!"
-log_info "Results in: $(pwd)"
+log_info "Results in: ${SINGLE_OUTPUT_ROOT#../}"
 
 # Calculate Duration
 PIPELINE_END=$(date +%s)
@@ -1778,6 +1804,14 @@ if [[ "$CHILD_MODE" != "true" ]]; then
     console_msg "\n[SUCCESS] Pipeline finished."
     console_msg "End Time: $(date '+%Y-%m-%d %H:%M:%S')"
     console_msg "Total Duration: ${H}h ${M}m ${S}s"
+    
+    # Final step: capture the floating console_output.log 
+    if [[ -f "$TEMP_CONSOLE_LOG" ]]; then
+        if [[ -n "$SINGLE_OUTPUT_ROOT" ]]; then
+            # Strip ../ from the relative path since we are back in root
+            mv "$TEMP_CONSOLE_LOG" "${SINGLE_OUTPUT_ROOT#../}/REPORTS/console_output.log" 2>/dev/null
+        fi
+    fi
 fi
 
 send_notification "CLIPittyClip: $BASENAME" "Analysis finished successfully. Duration: ${H}h ${M}m ${S}s"
