@@ -110,6 +110,7 @@ if [[ "$WIZARD_MODE" == "true" ]]; then
     if [[ -n "$WIZ_PEAK_CALLER" ]]; then
         PEAK_CALLER="$WIZ_PEAK_CALLER"
     fi
+    
     if [[ -n "$WIZ_CTK_PEAK_ARGS" ]]; then
         ADV_CTK_ARGS="$WIZ_CTK_PEAK_ARGS"
     fi
