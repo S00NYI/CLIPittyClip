@@ -17,6 +17,7 @@ This release focuses on heavily expanding CTK feature support, providing cleaner
 - **Uncompressed FASTQ Support**: Added support for plain `.fastq` and `.fq` files in both single-file (`-i`) and directory modes (`-d`). They are auto-gzipped into temporary file, which will be removed after the pipeline finishes.
 - **Organized Outputs**: Upgraded the generic `_analysis` directory in the single-file (`-i`) execution into the same organized, numbered folders used in Demultiplex and Batch modes.
 - **Flag Renaming**: Renamed `--run-ctk` to `--run-cims-cits` for explicit clarity. (The deprecated `--run-ctk` alias will still function with a warning).
+- **Interactive Wizard Mode Overhaul**: The interactive `--wizard` mode fully supports the selection of peak callers (HOMER vs CTK) and features adaptive prompts based on the chosen caller.
 
 **Bug Fixes (v3.0.2):**
 - **Directory Mode Deduplication**: Fixed an issue where `-d` batch mode unintentionally skipped PCR deduplication by hardcoding `--no-dedup`. Children processes now inherit the parent `DEDUP_MODE` properly.
@@ -25,9 +26,7 @@ This release focuses on heavily expanding CTK feature support, providing cleaner
 - **Completion Output**: Missing CLI completion messaging and `Done!` status lines in single-file modes have been restored.
 - **Standalone Safety**: Added a `/dev/null` fallback for `LOG_FILE` variables to resolve crashes when running `PEAKittyPeak.sh` standalone.
 
-## Planned Updates (Future Releases)
-- **Wizard Mode Overhaul**: The interactive `--wizard` mode will be updated to fully support the selection of peak callers (HOMER vs CTK) and adaptive prompts based on the chosen caller.
-- **BigWig Support**: Future support for direct BigWig conversion of coverage tracks (`bedGraphToBigWig`).
+
 
 ## Overview
 
