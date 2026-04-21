@@ -12,7 +12,7 @@ This release focuses on heavily expanding CTK feature support, providing cleaner
 
 **New Features (v3.1.0):**
 - **Peak Caller Selection**: Added `--peak-caller` flag supporting `ctk` (`tag2peak.pl`) and `homer` (default).
-- **Custom CTK Arguments**: Added `--ctk-args` pass-through for custom `tag2peak.pl` arguments.
+- **Custom Peak Caller Arguments**: Added `--peak-caller-args` pass-through for custom `tag2peak.pl` or `findPeaks` arguments.
 - **Track Headers**: Added strict sorting and UCSC track headers to all output BedGraph files for immediate visualization compatibility.
 - **Uncompressed FASTQ Support**: Added support for plain `.fastq` and `.fq` files in both single-file (`-i`) and directory modes (`-d`). They are auto-gzipped into temporary file, which will be removed after the pipeline finishes.
 - **Organized Outputs**: Upgraded the generic `_analysis` directory in the single-file (`-i`) execution into the same organized, numbered folders used in Demultiplex and Batch modes.
@@ -234,7 +234,7 @@ Run `CLIPittyClip.sh --help` for full usage.
 | Short | Long | Type | Default | Description |
 |-------|------|------|---------|-------------|
 | — | `--peak-caller` | str | homer | Peak caller: `homer` or `ctk` (tag2peak.pl) |
-| — | `--ctk-args` | str | — | Additional `tag2peak.pl` arguments (quoted string) |
+| — | `--peak-caller-args` | str | — | Additional peak caller arguments (quoted string) |
 
 ### CTK Analysis Options
 

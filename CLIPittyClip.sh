@@ -31,7 +31,7 @@ PEAK_DIST=50
 PEAK_SIZE=20
 FRAG_LEN=25
 PEAK_CALLER="homer" # Peak caller: homer (default) or ctk
-ADV_CTK_ARGS=""    # Additional arguments for tag2peak.pl
+ADV_PEAK_CALLER_ARGS=""    # Additional arguments for peak caller (homer or ctk)
 MISMATCH_MAX=2 # STAR default
 # ------------------------------------------------------------------
 # Usage
@@ -69,8 +69,8 @@ function show_usage {
     echo "  --align-mismatches <int> Max alignment mismatches (default: 2, STAR only)"
     echo ""
     echo "ANALYSIS OPTIONS:"
-    echo "  --peak-caller <str>      Peak caller: homer (default) or ctk
-  --ctk-args <str>         Additional tag2peak.pl arguments (quoted string)"
+    echo "  --peak-caller <str>      Peak caller: homer (default) or ctk"
+    echo "  --peak-caller-args <str> Additional peak caller arguments (quoted string)"
     echo "  --run-cims-cits          Enable full CTK CIMS+CITS analysis"
     echo "  --run-cims               Enable CIMS analysis (mutation sites only)"
     echo "  --run-cits               Enable CITS analysis (truncation sites only)"
@@ -166,7 +166,7 @@ while [[ $# -gt 0 ]]; do
         -a|--adapter) ADAPTER_3="$2"; shift 2 ;;
         -k|--keep) KEEP_INTERMEDIATE="yes"; shift ;;
         --peak-caller) PEAK_CALLER=$(echo "$2" | tr '[:upper:]' '[:lower:]'); shift 2 ;;
-        --ctk-args) ADV_CTK_ARGS="$2"; shift 2 ;;
+        --peak-caller-args) ADV_PEAK_CALLER_ARGS="$2"; shift 2 ;;
         --run-cims) RUN_CIMS=true; RUN_CTK="yes"; shift ;;
         --run-cits) RUN_CITS=true; RUN_CTK="yes"; shift ;;
         --run-cims-cits) RUN_CTK="yes"; RUN_CIMS=true; RUN_CITS=true; shift ;;
@@ -239,7 +239,7 @@ if [[ "$WIZARD_MODE" == "true" ]]; then
     PEAK_DIST="$WIZ_PEAK_DIST"
     PEAK_SIZE="$WIZ_PEAK_SIZE"
     FRAG_LEN="$WIZ_FRAG_LEN"
-    ADV_HOMER_ARGS="$WIZ_HOMER_ARGS"
+    ADV_PEAK_CALLER_ARGS="$WIZ_HOMER_ARGS"
     
     if [[ -n "$WIZ_PEAK_CALLER" ]]; then
         PEAK_CALLER="$WIZ_PEAK_CALLER"
@@ -247,7 +247,7 @@ if [[ "$WIZARD_MODE" == "true" ]]; then
     
     if [[ -n "$WIZ_CTK_PEAK_ARGS" ]]; then
         # Prefix the arguments so they append properly to default CTK args
-        ADV_CTK_ARGS="$WIZ_CTK_PEAK_ARGS"
+        ADV_PEAK_CALLER_ARGS="$WIZ_CTK_PEAK_ARGS"
     fi
     
     # Important bugfix: fastp arguments from advanced wizard
@@ -398,10 +398,10 @@ if [[ "$ADVANCED_MODE" == "true" ]]; then
     log_info "Peak Caller:    $PEAK_CALLER"
     if [[ "$PEAK_CALLER" == "ctk" ]]; then
         log_info "CTK Defaults:   $DEF_CTK"
-        log_info "CTK Added:      ${ADV_CTK_ARGS:-(None)}"
+        log_info "CTK Added:      ${ADV_PEAK_CALLER_ARGS:-(None)}"
     else
         log_info "Homer Defaults: $DEF_HOMER"
-        log_info "Homer Added:    ${ADV_HOMER_ARGS:-(None)}"
+        log_info "Homer Added:    ${ADV_PEAK_CALLER_ARGS:-(None)}"
     fi
 else
     log_info "Mode:           STANDARD"
@@ -411,7 +411,7 @@ else
     log_info "Peak Caller:    $PEAK_CALLER"
     if [[ "$PEAK_CALLER" == "ctk" ]]; then
         log_info "CTK Config:     $DEF_CTK"
-        log_info "CTK Added:      ${ADV_CTK_ARGS:-(None)}"
+        log_info "CTK Added:      ${ADV_PEAK_CALLER_ARGS:-(None)}"
     else
         log_info "Homer Config:   $DEF_HOMER"
     fi
@@ -572,7 +572,7 @@ if [[ -n "$INPUT_DIR" ]]; then
     if [[ "$SKIP_NCRNA" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --skip-ncrna"; fi
     if [[ "$DEDUP_MODE" == "false" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --no-dedup"; fi
     EXTRA_FLAGS="$EXTRA_FLAGS --peak-caller $PEAK_CALLER"
-    if [[ -n "$ADV_CTK_ARGS" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --ctk-args \"$ADV_CTK_ARGS\""; fi
+    if [[ -n "$ADV_PEAK_CALLER_ARGS" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --peak-caller-args \"$ADV_PEAK_CALLER_ARGS\""; fi
     EXTRA_FLAGS="$EXTRA_FLAGS --child"
     
     console_msg "\n[BATCH ANALYSIS]"
@@ -844,7 +844,7 @@ if [[ -n "$INPUT_DIR" ]]; then
     PEAK_LOG="$OUTPUT_ROOT/$DIR_PEAK_LOGS/Combined_PeakCalling.log"
     
     PEAK_CMD="$SCRIPT_DIR/PEAKittyPeak.sh -i \"$BED_DIR\" --aggregate -n \"Combined\" -p \"$PEAK_DIST\" -z \"$PEAK_SIZE\" -f \"$FRAG_LEN\" --peak-caller \"$PEAK_CALLER\""
-    if [[ -n "$ADV_CTK_ARGS" ]]; then PEAK_CMD="$PEAK_CMD --ctk-args \"$ADV_CTK_ARGS\""; fi
+    if [[ -n "$ADV_PEAK_CALLER_ARGS" ]]; then PEAK_CMD="$PEAK_CMD --peak-caller-args \"$ADV_PEAK_CALLER_ARGS\""; fi
     if [[ -n "$DIR_CTK" ]]; then
         PEAK_CMD="$PEAK_CMD --ctk-dir \"$OUTPUT_ROOT/$DIR_CTK\""
     fi
@@ -1082,7 +1082,7 @@ if [[ "$DEMUX" == "yes" ]]; then
     
     EXTRA_FLAGS="$EXTRA_FLAGS --no-dedup"
     EXTRA_FLAGS="$EXTRA_FLAGS --peak-caller $PEAK_CALLER"
-    if [[ -n "$ADV_CTK_ARGS" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --ctk-args \"$ADV_CTK_ARGS\""; fi
+    if [[ -n "$ADV_PEAK_CALLER_ARGS" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --peak-caller-args \"$ADV_PEAK_CALLER_ARGS\""; fi
 
     # Pass --child to suppress header in sub-calls
     EXTRA_FLAGS="$EXTRA_FLAGS --child"

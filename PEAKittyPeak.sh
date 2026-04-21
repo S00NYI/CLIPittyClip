@@ -17,9 +17,8 @@ PEAK_DIST=50
 PEAK_SIZE=20
 FRAG_LEN=25
 BASE_NAME="Combined"
-ADV_HOMER_ARGS="" # Additional arguments for findPeaks
+ADV_PEAK_CALLER_ARGS="" # Additional arguments for the peak caller
 PEAK_CALLER="homer" # Peak caller: homer (default) or ctk
-ADV_CTK_ARGS=""    # Additional arguments for tag2peak.pl
 LOG_FILE="${LOG_FILE:-/dev/null}" # Use parent's log if set, otherwise discard
 WIZARD_MODE="false"
 CTK_DIR=""         # Optional: CTK analysis output directory
@@ -45,8 +44,8 @@ function show_usage {
     echo "  -z <int>       Peak size (default: 20)"
     echo "  -f <int>       Fragment length (default: 25)"
     echo "  -n <str>       Base name for output (default: 'Combined')"
-    echo "  -a <str>       Additional HOMER findPeaks arguments (quoted string)
-  --peak-caller <str> Peak caller: homer (default) or ctk"
+    echo "  --peak-caller-args <str> Additional peak caller arguments (quoted string)"
+    echo "  --peak-caller <str> Peak caller: homer (default) or ctk"
     echo "  --ctk-dir <path>   Add CIMS/CITS site counts from CTK analysis"
     echo "  -g, --groups <file> Groups file for aggregation metrics"
     echo "  --cims-fdr <float> CIMS FDR threshold (default: 0.05)"
@@ -83,9 +82,8 @@ while [[ $# -gt 0 ]]; do
         -z) PEAK_SIZE="$2"; shift 2 ;;
         -f) FRAG_LEN="$2"; shift 2 ;;
         -n) BASE_NAME="$2"; shift 2 ;;
-        -a) ADV_HOMER_ARGS="$2"; shift 2 ;;
+        --peak-caller-args) ADV_PEAK_CALLER_ARGS="$2"; shift 2 ;;
         --peak-caller) PEAK_CALLER="$2"; shift 2 ;;
-        --ctk-args) ADV_CTK_ARGS="$2"; shift 2 ;;
         --ctk-dir) CTK_DIR="$2"; shift 2 ;;
         -g|--groups|--ctk-group) GROUPS_FILE="$2"; shift 2 ;;
         --cims-fdr) CIMS_FDR="$2"; shift 2 ;;
@@ -105,14 +103,14 @@ if [[ "$WIZARD_MODE" == "true" ]]; then
     PEAK_SIZE="$WIZ_PEAK_SIZE"
     FRAG_LEN="$WIZ_FRAG_LEN"
     BASE_NAME="$WIZ_OUTPUT_NAME"
-    ADV_HOMER_ARGS="$WIZ_HOMER_ARGS"
+    ADV_PEAK_CALLER_ARGS="$WIZ_HOMER_ARGS"
     
     if [[ -n "$WIZ_PEAK_CALLER" ]]; then
         PEAK_CALLER="$WIZ_PEAK_CALLER"
     fi
     
     if [[ -n "$WIZ_CTK_PEAK_ARGS" ]]; then
-        ADV_CTK_ARGS="$WIZ_CTK_PEAK_ARGS"
+        ADV_PEAK_CALLER_ARGS="$WIZ_CTK_PEAK_ARGS"
     fi
     # Wizard currently assumes CWD/BED, can be updated later if needed
 fi
@@ -154,7 +152,7 @@ call_peaks() {
 
         log_info "Running: tag2peak.pl ..."
         $CONDA_PREFIX/bin/perl $(which tag2peak.pl) -big -ss --valley-seeking -minPH 2 -gap ${PEAK_DIST} \
-            ${ADV_CTK_ARGS} -c "${cache_dir}" "${input_file}" "${raw_peaks}" 2>&1 | grep -v "^CMD="
+            ${ADV_PEAK_CALLER_ARGS} -c "${cache_dir}" "${input_file}" "${raw_peaks}" 2>&1 | grep -v "^CMD="
         local exit_code=${PIPESTATUS[0]}
         rm -rf "$cache_dir"
 
@@ -179,7 +177,7 @@ call_peaks() {
         makeTagDirectory "$tag_dir/" "$input_file" -single -format bed > /dev/null 2>&1
 
         local cmd="findPeaks $tag_dir/ -o auto -style factor -L 2 -localSize 10000 -strand separate \
-            -minDist ${PEAK_DIST} -size ${PEAK_SIZE} -fragLength ${FRAG_LEN} ${ADV_HOMER_ARGS}"
+            -minDist ${PEAK_DIST} -size ${PEAK_SIZE} -fragLength ${FRAG_LEN} ${ADV_PEAK_CALLER_ARGS}"
 
         log_info "Running: findPeaks ..."
         eval "$cmd" 2>&1 | grep -v "Job finished"

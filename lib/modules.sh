@@ -830,7 +830,7 @@ run_peak_calling_homer() {
 
     echo "Running HOMER findPeaks..." >> "$log_file"
     findPeaks "${out_dir}" -o auto -style factor -L 2 -localSize 10000 -strand separate \
-        -minDist "${peak_dist}" -size "${peak_size}" -fragLength "${frag_len}" $ADV_HOMER_ARGS >> "$log_file" 2>&1
+        -minDist "${peak_dist}" -size "${peak_size}" -fragLength "${frag_len}" $ADV_PEAK_CALLER_ARGS >> "$log_file" 2>&1
 
     if [[ -f "${out_dir}/peaks.txt" ]]; then
         echo "Converting peaks.txt to BED format..." >> "$log_file"
@@ -858,7 +858,7 @@ run_peak_calling_ctk() {
 
     echo "Running CTK tag2peak.pl..." > "$log_file"
     $CONDA_PREFIX/bin/perl $(which tag2peak.pl) -big -ss --valley-seeking -minPH 2 -gap "${peak_dist}" \
-        ${ADV_CTK_ARGS} -c "${cache_dir}" "${input_bed}" "${raw_peaks}" >> "$log_file" 2>&1
+        ${ADV_PEAK_CALLER_ARGS} -c "${cache_dir}" "${input_bed}" "${raw_peaks}" >> "$log_file" 2>&1
     local exit_code=$?
     rm -rf "$cache_dir"
 
