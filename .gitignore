@@ -13,5 +13,6 @@ install_log*.txt
 # Editor/IDE/AI
 .vscode/
 .claude/
+.agents/
 *.swp
 *~
