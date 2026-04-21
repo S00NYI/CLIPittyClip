@@ -86,6 +86,24 @@ EOF
 }
 
 #-------------------------------------------------------------------------------
+# Detect system library paths dynamically
+# Handles Debian/Ubuntu (x86_64-linux-gnu) and Fedora/RHEL (x86_64-linux)
+#-------------------------------------------------------------------------------
+detect_lib_paths() {
+    # Try multiarch path first (Debian/Ubuntu)
+    if [[ -d "/usr/lib/x86_64-linux-gnu" ]]; then
+        SYS_LIB_DIR="/usr/lib/x86_64-linux-gnu"
+    elif [[ -d "/usr/lib64" ]]; then
+        # Fedora/RHEL fallback
+        SYS_LIB_DIR="/usr/lib64"
+    else
+        SYS_LIB_DIR="/usr/lib"
+    fi
+    SYS_INC_DIR="/usr/include"
+    print_info "Detected system library path: $SYS_LIB_DIR"
+}
+
+#-------------------------------------------------------------------------------
 # Parse Arguments
 #-------------------------------------------------------------------------------
 while [[ $# -gt 0 ]]; do
@@ -157,6 +175,28 @@ if ! command -v gcc &> /dev/null; then
     print_info "Run: sudo apt-get install build-essential"
 fi
 
+# Check and install required system libraries for CPAN modules
+print_info "Checking system libraries for CPAN builds..."
+MISSING_PKGS=()
+if ! dpkg -l libexpat1-dev &> /dev/null 2>&1; then
+    MISSING_PKGS+=("libexpat1-dev")
+fi
+if ! dpkg -l libdb-dev &> /dev/null 2>&1; then
+    MISSING_PKGS+=("libdb-dev")
+fi
+if [[ ${#MISSING_PKGS[@]} -gt 0 ]]; then
+    print_info "Installing missing system libraries: ${MISSING_PKGS[*]}"
+    sudo apt-get install -y "${MISSING_PKGS[@]}" || {
+        print_warning "Could not install system libraries automatically."
+        print_info "Please run: sudo apt-get install ${MISSING_PKGS[*]}"
+    }
+else
+    print_success "System libraries for CPAN already present"
+fi
+
+# Detect system library paths
+detect_lib_paths
+
 #-------------------------------------------------------------------------------
 # Step 2: Check if environment exists
 #-------------------------------------------------------------------------------
@@ -177,13 +217,20 @@ fi
 
 #-------------------------------------------------------------------------------
 # Step 3: Create conda environment
+# FIX: Write YAML to a temp file instead of piping via stdin (-f -)
+# mamba 2.4.0 introduced a regression where reading from stdin fails with
+# "failed to open -: No such file or directory". Writing to a temp file and
+# passing it via -f avoids this entirely. The temp file is cleaned up
+# unconditionally after env creation via EXIT trap.
 #-------------------------------------------------------------------------------
 if [[ -z "$SKIP_CONDA" ]]; then
     print_step "Creating conda environment '${ENV_NAME}'..."
     print_info "This may take several minutes..."
 
-    # Create the environment from inline YAML
-    $CONDA_CMD env create -n "$ENV_NAME" -f - <<'YAML_ENV'
+    TMPENV=$(mktemp /tmp/clipittyclip_env_XXXXXX.yml)
+    trap 'rm -f "$TMPENV"' EXIT
+
+    cat > "$TMPENV" <<'YAML_ENV'
 name: clipittyclip
 channels:
   - conda-forge
@@ -195,19 +242,25 @@ dependencies:
   - libxml2
   - libxslt
   - openssl
-  
+
+  # Conda compiler toolchain
+  # Required because conda's perl package expects x86_64-conda-linux-gnu-gcc,
+  # not the system gcc. Without this, all XS/C CPAN modules fail to build.
+  - gcc_linux-64
+  - gxx_linux-64
+
   # Alignment & Processing
   - bedtools
   - samtools>=1.15
   - htslib
   - bowtie2
   - star>=2.7
-  
+
   # CLIP-specific
   - cutadapt
   - fastp
   - seqkit
-  
+
   # Python packages
   - python>=3.10
   - pandas
@@ -215,13 +268,18 @@ dependencies:
   - scipy
   - seaborn
   - matplotlib
-  
+
   # SSL/Certs
   - ca-certificates
   - certifi
 YAML_ENV
 
-    if [[ $? -eq 0 ]]; then
+    $CONDA_CMD env create -n "$ENV_NAME" -f "$TMPENV"
+    EXIT_CODE=$?
+    rm -f "$TMPENV"
+    trap - EXIT
+
+    if [[ $EXIT_CODE -eq 0 ]]; then
         print_success "Conda environment created successfully"
     else
         print_error "Failed to create conda environment"
@@ -238,13 +296,57 @@ print_step "Installing Perl dependencies via CPAN..."
 eval "$(conda shell.bash hook)"
 conda activate "$ENV_NAME"
 
+# FIX: Create xlocale.h stub
+# Conda's perl 5.32 was built on an older system where xlocale.h existed as a
+# separate header file. Modern Linux (glibc 2.26+) removed it, folding its
+# contents into locale.h. This stub redirects perl's include to the right place.
+# The check prevents overwriting if it already exists.
+if [[ ! -f "$CONDA_PREFIX/include/xlocale.h" ]]; then
+    print_info "Creating xlocale.h compatibility stub..."
+    echo '#include <locale.h>' > "$CONDA_PREFIX/include/xlocale.h"
+    print_success "xlocale.h stub created"
+fi
+
+# FIX: Force absolute compiler path via CC export
+# Conda's perl Config.pm stores the compiler as a path relative to the conda
+# prefix (e.g. ./..//bin/x86_64-conda-linux-gnu-gcc). This relative path breaks
+# when cpanm runs builds from temporary directories outside the prefix.
+# Exporting CC as an absolute path overrides this and ensures the compiler is
+# always found regardless of working directory.
+export CC
+CC=$(which x86_64-conda-linux-gnu-gcc 2>/dev/null || which gcc)
+print_info "Using compiler: $CC"
+
 # Check if cpanm is available, if not install it
 if ! command -v cpanm &> /dev/null; then
     print_info "Installing cpanminus..."
     curl -L https://cpanmin.us | perl - App::cpanminus 2>/dev/null || true
 fi
 
-# Install only the modules CTK actually needs (not full BioPerl)
+# FIX: Install XML::Parser with explicit library paths
+# The conda perl build system only searches its own prefix and a few hardcoded
+# paths for libraries. libexpat is installed system-wide but not in those paths.
+# Passing LIBS and INC via --configure-args tells Makefile.PL exactly where to
+# find expat headers and libraries.
+print_info "Installing XML::Parser (required for Bio::SeqIO dependency chain)..."
+cpanm --notest --configure-args="LIBS=-L${SYS_LIB_DIR} -lexpat INC=-I${SYS_INC_DIR}" XML::Parser 2>/dev/null || true
+if perl -MXML::Parser -e '1' 2>/dev/null; then
+    print_success "XML::Parser installed successfully"
+else
+    print_warning "XML::Parser installation failed - Bio::SeqIO may not work"
+fi
+
+# FIX: Install DB_File with explicit library paths
+# Same issue as XML::Parser — libdb is system-wide but not in conda's search
+# path. The db.h header is found via the explicit INC path.
+print_info "Installing DB_File (required for Bio::SeqIO)..."
+cpanm --notest --configure-args="LIBS=-L${SYS_LIB_DIR} -ldb INC=-I${SYS_INC_DIR}" DB_File 2>/dev/null || true
+if perl -MDB_File -e '1' 2>/dev/null; then
+    print_success "DB_File installed successfully"
+else
+    print_warning "DB_File installation failed - some BioPerl features may not work"
+fi
+
 print_info "Installing Math::CDF (required for CIMS/CITS)..."
 cpanm --notest Math::CDF 2>/dev/null || true
 if perl -MMath::CDF -e '1' 2>/dev/null; then
@@ -314,12 +416,11 @@ else
     print_info "Downloading HOMER..."
     mkdir -p "$HOMER_DIR"
     cd "$HOMER_DIR"
-    
-    # Download and install HOMER
+
     wget -q http://homer.ucsd.edu/homer/configureHomer.pl -O configureHomer.pl || {
         print_error "Failed to download HOMER"
     }
-    
+
     print_info "Installing HOMER (minimal configuration)..."
     perl configureHomer.pl -install homer 2>/dev/null || {
         print_warning "HOMER installation had issues, but may still work"
@@ -330,6 +431,9 @@ print_success "HOMER installed to $HOMER_DIR"
 
 #-------------------------------------------------------------------------------
 # Step 7: Configure shell environment
+# FIX: Strip existing CLIPittyClip/CTK/HOMER entries before re-adding them.
+# On reinstall, the old entries would otherwise accumulate in .bashrc, causing
+# duplicate PATH entries and potential conflicts.
 #-------------------------------------------------------------------------------
 print_step "Configuring shell environment..."
 
@@ -345,36 +449,30 @@ else
     touch "$SHELL_RC"
 fi
 
+# Remove any existing CLIPittyClip/CTK/HOMER entries to avoid duplication
+print_info "Removing any existing PATH entries from $SHELL_RC..."
+sed -i '/# CLIPittyClip$/,/^$/d' "$SHELL_RC" 2>/dev/null || true
+sed -i '/# CTK (CLIP Tool Kit)$/,/^$/d' "$SHELL_RC" 2>/dev/null || true
+sed -i '/# HOMER$/,/^$/d' "$SHELL_RC" 2>/dev/null || true
+
 # Add CLIPittyClip to PATH
-if grep -q "CLIPittyClip" "$SHELL_RC" 2>/dev/null; then
-    print_warning "CLIPittyClip already configured in $SHELL_RC"
-else
-    echo "" >> "$SHELL_RC"
-    echo "# CLIPittyClip" >> "$SHELL_RC"
-    echo "export PATH=\"\$PATH:${SCRIPT_DIR}\"" >> "$SHELL_RC"
-    print_success "Added CLIPittyClip to PATH"
-fi
+echo "" >> "$SHELL_RC"
+echo "# CLIPittyClip" >> "$SHELL_RC"
+echo "export PATH=\"\$PATH:${SCRIPT_DIR}\"" >> "$SHELL_RC"
+print_success "Added CLIPittyClip to PATH"
 
 # Add CTK to PATH and PERL5LIB
-if grep -q "CTK" "$SHELL_RC" 2>/dev/null; then
-    print_warning "CTK already in PATH"
-else
-    echo "" >> "$SHELL_RC"
-    echo "# CTK (CLIP Tool Kit)" >> "$SHELL_RC"
-    echo "export PATH=\"\$PATH:${CTK_DIR}\"" >> "$SHELL_RC"
-    echo "export PERL5LIB=\"\$PERL5LIB:${CZPLIB_DIR}\"" >> "$SHELL_RC"
-    print_success "Added CTK to PATH and PERL5LIB"
-fi
+echo "" >> "$SHELL_RC"
+echo "# CTK (CLIP Tool Kit)" >> "$SHELL_RC"
+echo "export PATH=\"\$PATH:${CTK_DIR}\"" >> "$SHELL_RC"
+echo "export PERL5LIB=\"\$PERL5LIB:${CZPLIB_DIR}\"" >> "$SHELL_RC"
+print_success "Added CTK to PATH and PERL5LIB"
 
 # Add HOMER to PATH
-if grep -q "HOMER" "$SHELL_RC" 2>/dev/null; then
-    print_warning "HOMER already in PATH"
-else
-    echo "" >> "$SHELL_RC"
-    echo "# HOMER" >> "$SHELL_RC"
-    echo "export PATH=\"\$PATH:${HOMER_DIR}/bin\"" >> "$SHELL_RC"
-    print_success "Added HOMER to PATH"
-fi
+echo "" >> "$SHELL_RC"
+echo "# HOMER" >> "$SHELL_RC"
+echo "export PATH=\"\$PATH:${HOMER_DIR}/bin\"" >> "$SHELL_RC"
+print_success "Added HOMER to PATH"
 
 # Set execute permissions on scripts
 chmod +x "$SCRIPT_DIR/CLIPittyClip.sh" 2>/dev/null || true

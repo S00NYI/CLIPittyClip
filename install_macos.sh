@@ -322,6 +322,17 @@ chmod +x "$CONDA_BIN/x86_64-apple-darwin13.4.0-ranlib"
 chmod +x "$CONDA_BIN/x86_64-apple-darwin13.4.0-ld"
 print_success "Compiler wrappers created"
 
+# FIX: Create xlocale.h compatibility stub
+# Conda's perl 5.32 was built expecting xlocale.h, which was removed in
+# macOS Catalina (10.15) and later. This stub redirects to locale.h which
+# now contains the same definitions. The existence check prevents overwriting
+# on reinstall.
+if [[ ! -f "$CONDA_PREFIX/include/xlocale.h" ]]; then
+    print_info "Creating xlocale.h compatibility stub..."
+    echo '#include <locale.h>' > "$CONDA_PREFIX/include/xlocale.h"
+    print_success "xlocale.h stub created"
+fi
+
 # Set compiler flags for Homebrew libraries
 if [[ -d "/opt/homebrew/opt/openssl" ]]; then
     # Apple Silicon
@@ -441,36 +452,31 @@ if [[ ! -f "$SHELL_RC" ]]; then
     SHELL_RC="$HOME/.bash_profile"
 fi
 
+# FIX: Remove existing entries before re-adding to prevent duplicate PATH
+# entries accumulating across reinstalls.
+print_info "Removing any existing PATH entries from $SHELL_RC..."
+sed -i '' '/# CLIPittyClip$/,/^$/d' "$SHELL_RC" 2>/dev/null || true
+sed -i '' '/# CTK (CLIP Tool Kit)$/,/^$/d' "$SHELL_RC" 2>/dev/null || true
+sed -i '' '/# HOMER$/,/^$/d' "$SHELL_RC" 2>/dev/null || true
+
 # Add CLIPittyClip to PATH
-if grep -q "CLIPittyClip" "$SHELL_RC" 2>/dev/null; then
-    print_warning "CLIPittyClip already configured in $SHELL_RC"
-else
-    echo "" >> "$SHELL_RC"
-    echo "# CLIPittyClip" >> "$SHELL_RC"
-    echo "export PATH=\"\$PATH:${SCRIPT_DIR}\"" >> "$SHELL_RC"
-    print_success "Added CLIPittyClip to PATH"
-fi
+echo "" >> "$SHELL_RC"
+echo "# CLIPittyClip" >> "$SHELL_RC"
+echo "export PATH=\"\$PATH:${SCRIPT_DIR}\"" >> "$SHELL_RC"
+print_success "Added CLIPittyClip to PATH"
 
 # Add CTK to PATH and PERL5LIB
-if ! grep -q "ctk" "$SHELL_RC" 2>/dev/null; then
-    echo "" >> "$SHELL_RC"
-    echo "# CTK (CLIP Tool Kit)" >> "$SHELL_RC"
-    echo "export PATH=\"\$PATH:${CTK_DIR}\"" >> "$SHELL_RC"
-    echo "export PERL5LIB=\"\$PERL5LIB:${CTK_DIR}/czplib\"" >> "$SHELL_RC"
-    print_success "Added CTK to PATH and PERL5LIB"
-else
-    print_warning "CTK already in PATH"
-fi
+echo "" >> "$SHELL_RC"
+echo "# CTK (CLIP Tool Kit)" >> "$SHELL_RC"
+echo "export PATH=\"\$PATH:${CTK_DIR}\"" >> "$SHELL_RC"
+echo "export PERL5LIB=\"\$PERL5LIB:${CTK_DIR}/czplib\"" >> "$SHELL_RC"
+print_success "Added CTK to PATH and PERL5LIB"
 
 # Add HOMER to PATH
-if ! grep -q "homer" "$SHELL_RC" 2>/dev/null; then
-    echo "" >> "$SHELL_RC"
-    echo "# HOMER" >> "$SHELL_RC"
-    echo "export PATH=\"\$PATH:${HOMER_DIR}/bin\"" >> "$SHELL_RC"
-    print_success "Added HOMER to PATH"
-else
-    print_warning "HOMER already in PATH"
-fi
+echo "" >> "$SHELL_RC"
+echo "# HOMER" >> "$SHELL_RC"
+echo "export PATH=\"\$PATH:${HOMER_DIR}/bin\"" >> "$SHELL_RC"
+print_success "Added HOMER to PATH"
 
 # Set execute permissions on CLIPittyClip scripts
 chmod +x "$SCRIPT_DIR/CLIPittyClip.sh" 2>/dev/null || true
