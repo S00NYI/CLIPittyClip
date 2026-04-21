@@ -241,6 +241,15 @@ if [[ "$WIZARD_MODE" == "true" ]]; then
     FRAG_LEN="$WIZ_FRAG_LEN"
     ADV_HOMER_ARGS="$WIZ_HOMER_ARGS"
     
+    if [[ -n "$WIZ_PEAK_CALLER" ]]; then
+        PEAK_CALLER="$WIZ_PEAK_CALLER"
+    fi
+    
+    if [[ -n "$WIZ_CTK_PEAK_ARGS" ]]; then
+        # Prefix the arguments so they append properly to default CTK args
+        ADV_CTK_ARGS="$WIZ_CTK_PEAK_ARGS"
+    fi
+    
     # Important bugfix: fastp arguments from advanced wizard
     # We map WIZ_FASTP_ARGS so the standard CLI loop can process it
     if [[ -n "$WIZ_FASTP_ARGS" ]]; then
