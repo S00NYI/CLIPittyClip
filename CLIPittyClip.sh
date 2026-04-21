@@ -1711,6 +1711,42 @@ if [[ "$CHILD_MODE" != "true" ]]; then
         mv "${BASENAME}_peaks_raw.bed" "$SINGLE_OUTPUT_ROOT/$SF_DIR_PEAKS/FINAL_PEAKS.bed" 2>/dev/null
         mv "${BASENAME}_peaks_ctk.log" "$SINGLE_OUTPUT_ROOT/$SF_DIR_PEAKS/" 2>/dev/null
     fi
+    
+    # -------------------------------------------------------------------------
+    # Single-File Peak Matrix Generation (Unification with Batch mode)
+    # -------------------------------------------------------------------------
+    sample_bed="$SINGLE_OUTPUT_ROOT/$SF_DIR_BED/${COLLAPSED_BED:-${BASENAME}_collapsed.bed}"
+    final_peaks="$SINGLE_OUTPUT_ROOT/$SF_DIR_PEAKS/FINAL_PEAKS.bed"
+    scale_tsv="$SINGLE_OUTPUT_ROOT/$SF_DIR_BG/scale_factors.tsv"
+    
+    if [[ -f "$final_peaks" && -f "$sample_bed" ]]; then
+        console_msg "  > Generating coverage matrix for Single Sequence..."
+        
+        # 1. Raw tag coverage
+        coverage_file="$SINGLE_OUTPUT_ROOT/$SF_DIR_PEAKS/FINAL_PEAK_MATRIX.txt"
+        cp "$final_peaks" "$coverage_file"
+        
+        bedtools coverage -s -a "$final_peaks" -b "$sample_bed" > "temp_cov.txt"
+        awk '{print $7}' "temp_cov.txt" > "col_count.txt"
+        paste "$coverage_file" "col_count.txt" > "temp_paste.txt"
+        mv "temp_paste.txt" "$coverage_file"
+        
+        s_name="${BASENAME}"
+        HEADER_STR="chr\tstart\tend\tname\tscore\tstrand\tTC_${s_name}"
+        echo -e "$HEADER_STR" > "colnames.txt"
+        cat "colnames.txt" "$coverage_file" > "temp_final.txt"
+        mv "temp_final.txt" "$coverage_file"
+        
+        rm -f "temp_cov.txt" "col_count.txt" "colnames.txt" 2>/dev/null
+        
+        # 2. Add Normalized TC columns
+        if [[ -f "$scale_tsv" ]]; then
+            console_msg "  > Normalizing single-sample tag counts..."
+            add_matrix_columns "$coverage_file" "$final_peaks" "$SINGLE_OUTPUT_ROOT/$SF_DIR_BG" "$scale_tsv" ""
+        else
+            console_msg "  > Warning: scale_factors.tsv missing, skipping Normalization."
+        fi
+    fi
 
     # CTK Analysis (CIMS/CITS)
     for ctk_folder in "CTK_Analysis" "CIMS_Analysis" "CITS_Analysis"; do
