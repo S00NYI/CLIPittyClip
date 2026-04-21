@@ -147,6 +147,7 @@ function run_demultiplexing {
     local cmd="cutadapt \
         -e $error_rate --no-indels \
         -m 1 \
+        --action=none \
         -g file:$fasta_barcodes \
         -o \"demux_fastq/{name}.fastq.gz\" \
         $work_input \
@@ -329,6 +330,8 @@ run_preprocessing() {
     local sample_size="$6"
     local dedup_mode="$7"
     local eclip_mode="${8:-false}"  # eCLIP mode: UMI in header, use adapter FASTA
+    local bc_len="${9:-0}"
+    local spacer_len="${10:-0}"
     
     update_status_first "Preprocessing"
     log_info "Starting preprocessing..."
@@ -431,6 +434,8 @@ run_preprocessing() {
         # Standard mode: single adapter and UMI extraction
         if [ -n "$adapter3" ]; then cmd+=" --adapter_sequence ${adapter3}"; fi
         if [ "$umi_len" -gt 0 ]; then cmd+=" --umi --umi_loc=read1 --umi_len=${umi_len} --umi_delim=#"; fi
+        local front_trim=$(( bc_len + spacer_len ))
+        if [ "$front_trim" -gt 0 ]; then cmd+=" --trim_front1 ${front_trim}"; fi
         if [ "$sample_size" -gt 0 ]; then cmd+=" --reads_to_process $sample_size"; fi
         
         log_info "Running: $cmd"

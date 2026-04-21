@@ -26,6 +26,8 @@ DEMUX="no"    # handled by fastp automatically for UMI, but for sample demux we 
 BARCODE_FILE=""
 INPUT_DIR=""  # Directory mode for pre-demultiplexed FASTQs
 UMI_LEN=0
+BC_LEN=""
+SPACER_LEN="3"
 ADAPTER_3="GTGTCAGTCACTTCCAGCGG" # L32 default
 PEAK_DIST=50
 PEAK_SIZE=20
@@ -59,6 +61,8 @@ function show_usage {
     echo ""
     echo "PREPROCESSING OPTIONS:"
     echo "  -u, --umi-length <int>   UMI length (e.g., 7 for CoCLIP)"
+    echo "  --bc-len <int>           Barcode length to trim (auto-detected if -b is provided)"
+    echo "  --spacer-len <int>       Spacer length to trim after barcode (default: 3)"
     echo "  -a, --adapter <str>      3' adapter sequence (default: L32)"
     echo "  --no-dedup               Disable FASTQ deduplication (default: ON)"
     echo "  --eclip                  ENCODE eCLIP mode: UMI in header, uses all eCLIP adapters"
@@ -163,6 +167,8 @@ while [[ $# -gt 0 ]]; do
         -o|--output) EXP_ID="$2"; shift 2 ;;
         -t|--threads) THREADS="$2"; shift 2 ;;
         -u|--umi-length) UMI_LEN="$2"; shift 2 ;;
+        --bc-len) BC_LEN="$2"; shift 2 ;;
+        --spacer-len) SPACER_LEN="$2"; shift 2 ;;
         -a|--adapter) ADAPTER_3="$2"; shift 2 ;;
         -k|--keep) KEEP_INTERMEDIATE="yes"; shift ;;
         --peak-caller) PEAK_CALLER=$(echo "$2" | tr '[:upper:]' '[:lower:]'); shift 2 ;;
@@ -298,6 +304,21 @@ if [[ -z "$GENOME_INDEX" ]]; then
     show_usage
     exit 1
 fi
+
+# Barcode length validation
+if [[ -n "$BARCODE_FILE" ]]; then
+    bc_file_len=$(awk '!/^#/{print length($2); exit}' "$BARCODE_FILE")
+    if [[ -z "$bc_file_len" ]]; then
+        log_error "Failed to read barcode length from $BARCODE_FILE"
+        exit 1
+    fi
+    if [[ -n "$BC_LEN" && "$BC_LEN" != "$bc_file_len" ]]; then
+        log_error "Conflict: --bc-len ($BC_LEN) does not match the barcode length in file ($bc_file_len)."
+        exit 1
+    fi
+    BC_LEN="$bc_file_len"
+fi
+BC_LEN="${BC_LEN:-0}"
 
 # Resolve absolute paths
 if [[ -n "$INPUT_FILE" ]]; then
@@ -573,6 +594,8 @@ if [[ -n "$INPUT_DIR" ]]; then
     if [[ "$DEDUP_MODE" == "false" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --no-dedup"; fi
     EXTRA_FLAGS="$EXTRA_FLAGS --peak-caller $PEAK_CALLER"
     if [[ -n "$ADV_PEAK_CALLER_ARGS" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --peak-caller-args \"$ADV_PEAK_CALLER_ARGS\""; fi
+    if [[ -n "$BC_LEN" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --bc-len $BC_LEN"; fi
+    if [[ -n "$SPACER_LEN" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --spacer-len $SPACER_LEN"; fi
     EXTRA_FLAGS="$EXTRA_FLAGS --child"
     
     console_msg "\n[BATCH ANALYSIS]"
@@ -1083,6 +1106,8 @@ if [[ "$DEMUX" == "yes" ]]; then
     EXTRA_FLAGS="$EXTRA_FLAGS --no-dedup"
     EXTRA_FLAGS="$EXTRA_FLAGS --peak-caller $PEAK_CALLER"
     if [[ -n "$ADV_PEAK_CALLER_ARGS" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --peak-caller-args \"$ADV_PEAK_CALLER_ARGS\""; fi
+    if [[ -n "$BC_LEN" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --bc-len $BC_LEN"; fi
+    if [[ -n "$SPACER_LEN" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --spacer-len $SPACER_LEN"; fi
 
     # Pass --child to suppress header in sub-calls
     EXTRA_FLAGS="$EXTRA_FLAGS --child"
@@ -1565,7 +1590,7 @@ LOG_FILE="${BASENAME}_analysis.log" # redirect log to inside analysis dir
 log_info "Working directory: $(pwd)"
 
 # 1. Preprocessing
-run_preprocessing "$INPUT_FILE" "$BASENAME" "$UMI_LEN" "$ADAPTER_3" "$THREADS" "$SAMPLE_SIZE" "$DEDUP_MODE" "$ECLIP_MODE"
+run_preprocessing "$INPUT_FILE" "$BASENAME" "$UMI_LEN" "$ADAPTER_3" "$THREADS" "$SAMPLE_SIZE" "$DEDUP_MODE" "$ECLIP_MODE" "$BC_LEN" "$SPACER_LEN"
 
 # 1b. ncRNA Pre-filtering (if enabled and index exists)
 CLEANED_FASTQ="${BASENAME}_cleaned.fastq.gz"
