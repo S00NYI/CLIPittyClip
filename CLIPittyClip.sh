@@ -1079,6 +1079,8 @@ if [[ "$DEMUX" == "yes" ]]; then
     EXTRA_FLAGS="$EXTRA_FLAGS -m $ALIGNER"
     if [[ "$ECLIP_MODE" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --eclip"; fi
     if [[ "$FILTER_NCRNA" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --filter-ncrna"; fi
+    # Pool was already deduped above; tell children to skip dedup
+    EXTRA_FLAGS="$EXTRA_FLAGS --no-dedup"
     
     EXTRA_FLAGS="$EXTRA_FLAGS --peak-caller $PEAK_CALLER"
     if [[ -n "$ADV_PEAK_CALLER_ARGS" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --peak-caller-args \"$ADV_PEAK_CALLER_ARGS\""; fi
@@ -1571,23 +1573,25 @@ if [[ -n "$EXP_ID" ]]; then
     BASENAME="$EXP_ID"
 fi
 
+# ── Deduplication ────────────────────────────────────────────────────────────────
+# Runs based on DEDUP_MODE only. CHILD_MODE controls console output, not execution.
+if [[ "$CHILD_MODE" != "true" ]]; then console_msg "\n[DEDUPLICATING]"; fi
+if [[ "$DEDUP_MODE" == "true" ]]; then
+    if [[ "$CHILD_MODE" != "true" ]]; then print_section_item "Deduplicating Reads (fastq2collapse.pl)"; fi
+    DEDUP_OUT="$(pwd)/${BASENAME}_dedup.fastq.gz"
+    if run_dedup "$INPUT_FILE" "$DEDUP_OUT"; then
+        INPUT_FILE="$DEDUP_OUT"
+        if [[ "$CHILD_MODE" != "true" ]]; then print_section_item "Deduplication Complete"; fi
+    else
+        log_warning "Deduplication failed. Using original input."
+        rm -f "$DEDUP_OUT"
+    fi
+else
+    if [[ "$CHILD_MODE" != "true" ]]; then print_section_item "Deduplication Disabled (--no-dedup)"; fi
+fi
+
 # ── Section Headers (non-child mode only) ─────────────────────────────────────
 if [[ "$CHILD_MODE" != "true" ]]; then
-    console_msg "\n[DEDUPLICATING]"
-    if [[ "$DEDUP_MODE" == "true" ]]; then
-        print_section_item "Deduplicating Reads (fastq2collapse.pl)"
-        DEDUP_OUT="${BASENAME}_dedup.fastq.gz"
-        if run_dedup "$INPUT_FILE" "$DEDUP_OUT"; then
-            INPUT_FILE="$DEDUP_OUT"
-            print_section_item "Deduplication Complete"
-        else
-            log_warning "Deduplication failed. Using original input."
-            rm -f "$DEDUP_OUT"
-        fi
-    else
-        print_section_item "Deduplication Disabled (--no-dedup)"
-    fi
-
     console_msg "\n[DEMULTIPLEXING]"
     print_section_item "No Barcode File Provided"
     print_section_item "Skipping Demultiplexing"
