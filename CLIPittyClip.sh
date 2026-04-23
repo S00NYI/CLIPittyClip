@@ -1876,6 +1876,37 @@ S=$((DURATION%60))
 log_info "End Time: $(date '+%Y-%m-%d %H:%M:%S')"
 log_info "Total Duration: ${H}h ${M}m ${S}s"
 
+# ncRNA Filtering Summary (non-child mode, single-file only)
+if [[ "$CHILD_MODE" != "true" ]] && [[ "$FILTER_NCRNA" == "true" ]]; then
+    ncrna_stats_sf="${SINGLE_OUTPUT_ROOT}/${SF_DIR_OTHERS}/ncRNA_Mapping/${BASENAME}_ncrna_stats.txt"
+    if [[ -f "$ncrna_stats_sf" ]]; then
+        console_msg "\n[ncRNA FILTERING SUMMARY]"
+        printf "  %-25s %-15s %-15s %s\n" "Sample" "ncRNA Reads" "Total Reads" "% Filtered"
+        console_msg "  ----------------------------------------------------------------"
+        align_rate=$(grep "overall alignment rate" "$ncrna_stats_sf" | grep -oE "[0-9]+\.[0-9]+%" || echo "N/A")
+        total=$(grep "reads; of these:" "$ncrna_stats_sf" | grep -oE "^[0-9]+" || echo "N/A")
+        aligned=$(grep "aligned exactly 1 time" "$ncrna_stats_sf" | grep -oE "^[[:space:]]*[0-9]+" | tr -d ' ' || echo "0")
+        multi=$(grep "aligned >1 times" "$ncrna_stats_sf" | grep -oE "^[[:space:]]*[0-9]+" | tr -d ' ' || echo "0")
+        ncrna_reads=$(( ${aligned:-0} + ${multi:-0} ))
+        printf "  %-25s %-15s %-15s %s\n" "$BASENAME" "$ncrna_reads" "${total:-N/A}" "${align_rate:-N/A}"
+        console_msg "  ----------------------------------------------------------------"
+    fi
+fi
+
+# Mapping Depth Summary (non-child mode, single-file only)
+if [[ "$CHILD_MODE" != "true" ]]; then
+    scale_sf="${SINGLE_OUTPUT_ROOT}/${SF_DIR_BG}/scale_factors.tsv"
+    if [[ -f "$scale_sf" ]]; then
+        console_msg "\n[MAPPING DEPTH SUMMARY]"
+        printf "  %-25s %-15s %s\n" "Sample" "Mapped Reads" "Scale Factor"
+        console_msg "  ----------------------------------------------------------------"
+        while IFS=$'\t' read -r sample reads scale; do
+            printf "  %-25s %-15s %s\n" "$sample" "$reads" "$scale"
+        done < "$scale_sf"
+        console_msg "  ----------------------------------------------------------------"
+    fi
+fi
+
 # Console completion summary (non-child mode only)
 if [[ "$CHILD_MODE" != "true" ]]; then
     console_msg "\n[OUTPUT]"
