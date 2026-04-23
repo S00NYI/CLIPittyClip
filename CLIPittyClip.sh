@@ -1729,7 +1729,11 @@ if [[ "$CHILD_MODE" != "true" ]]; then
     SF_DIR_BED="2_COLLAPSED_BED"
     SF_DIR_BG="3_BEDGRAPH"
     SF_DIR_PEAKS="4_PEAKS"
-    SF_DIR_OTHERS="5_OTHERS"
+    if [[ "$RUN_CIMS" == "true" ]] || [[ "$RUN_CITS" == "true" ]]; then
+        SF_DIR_OTHERS="6_OTHERS"
+    else
+        SF_DIR_OTHERS="5_OTHERS"
+    fi
     SF_DIR_REPORTS="REPORTS"
 
     mkdir -p "$SINGLE_OUTPUT_ROOT/$SF_DIR_BAM"
@@ -1885,7 +1889,7 @@ if [[ "$CHILD_MODE" != "true" ]]; then
     if [[ -n "${SF_DIR_CTK:-}" ]]; then
         console_msg "  ├── ${SF_DIR_CTK}/"
     fi
-    console_msg "  ├── 5_OTHERS/"
+    console_msg "  ├── ${SF_DIR_OTHERS}/"
     console_msg "  └── REPORTS/"
 
     console_msg "\n[SUCCESS] Pipeline finished."
