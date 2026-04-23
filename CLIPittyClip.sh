@@ -1353,6 +1353,18 @@ if [[ "$DEMUX" == "yes" ]]; then
                     cp "$analysis_dir"/OTHERS/ncRNA_Mapping/*_ncrna.bam* "$OUTPUT_ROOT/$DIR_OTHERS/ncRNA_Mapping/" 2>/dev/null
                 fi
                 
+                # CTK Analysis outputs
+                if [[ "$RUN_CIMS" == "true" ]] || [[ "$RUN_CITS" == "true" ]]; then
+                    CTK_DEST="$OUTPUT_ROOT/5_CTK_Analysis"
+                    mkdir -p "$CTK_DEST"
+                    for ctk_dir in CTK_Analysis CIMS_Analysis CITS_Analysis; do
+                        if [[ -d "$analysis_dir/$ctk_dir" ]]; then
+                            mkdir -p "$CTK_DEST/$sample_name"
+                            mv "$analysis_dir/$ctk_dir" "$CTK_DEST/$sample_name/" 2>/dev/null
+                        fi
+                    done
+                fi
+
                 # Pipeline Log (The child specific one)
                 # It's named ${sample_name}_analysis.log inside the dir
                 cp "$analysis_dir"/*.log "$OUTPUT_ROOT/$DIR_REPORTS/SAMPLES/${sample_name}_detailed.log" 2>/dev/null
