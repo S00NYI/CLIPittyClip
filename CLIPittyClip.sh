@@ -87,7 +87,7 @@ function show_usage {
     echo "  -g, --groups <file>      Groups file for bedgraph/peak grouping"
     echo "  --ctk-group              Enable group CTK analysis (pools samples in groups.txt)"
     echo "  -s, --sample <int>       Test mode: process only first N reads"
-    echo "  --skip-ncrna             Disable ncRNA pre-filtering (on by default)"
+    echo "  --filter-ncrna           Enable ncRNA pre-filtering (off by default)"
     echo ""
     echo "OUTPUT OPTIONS:"
     echo "  -k, --keep               Keep intermediate files (in OUTPUT/OTHERS/sample_analysis/)"
@@ -121,7 +121,7 @@ CHILD_MODE="false"
 DEDUP_MODE="true" # Always on by default per user request
 NOTIFY_MODE="false"
 WIZARD_MODE="false"
-SKIP_NCRNA="false"  # ncRNA filtering is ON by default
+FILTER_NCRNA="false"  # ncRNA filtering is OFF by default; enable with --filter-ncrna
 ALIGNER="star" # Default aligner
 ECLIP_MODE="false"  # ENCODE eCLIP mode (UMI in header, multiple adapters)
 FILTER_CHR="true"   # Filter to canonical chromosomes (chr1-22, X, Y, M) - default ON
@@ -193,7 +193,7 @@ while [[ $# -gt 0 ]]; do
         --demux-mismatches) DEMUX_MISMATCHES="$2"; shift 2 ;;
         --align-mismatches) ALIGN_MISMATCHES="$2"; shift 2 ;;
         --no-dedup) DEDUP_MODE="false"; shift ;;
-        --skip-ncrna) SKIP_NCRNA="true"; shift ;;
+        --filter-ncrna) FILTER_NCRNA="true"; shift ;;
         --eclip) ECLIP_MODE="true"; shift ;;
         --no-chr-filter) FILTER_CHR="false"; shift ;;
         --notification) NOTIFY_MODE="true"; shift ;;
@@ -590,7 +590,7 @@ if [[ -n "$INPUT_DIR" ]]; then
     if [[ "$SAMPLE_SIZE" -gt 0 ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --sample $SAMPLE_SIZE"; fi
     EXTRA_FLAGS="$EXTRA_FLAGS -m $ALIGNER"
     if [[ "$ECLIP_MODE" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --eclip"; fi
-    if [[ "$SKIP_NCRNA" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --skip-ncrna"; fi
+    if [[ "$FILTER_NCRNA" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --filter-ncrna"; fi
     if [[ "$DEDUP_MODE" == "false" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --no-dedup"; fi
     EXTRA_FLAGS="$EXTRA_FLAGS --peak-caller $PEAK_CALLER"
     if [[ -n "$ADV_PEAK_CALLER_ARGS" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --peak-caller-args \"$ADV_PEAK_CALLER_ARGS\""; fi
@@ -1078,7 +1078,7 @@ if [[ "$DEMUX" == "yes" ]]; then
     # Pass Aligner choice
     EXTRA_FLAGS="$EXTRA_FLAGS -m $ALIGNER"
     if [[ "$ECLIP_MODE" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --eclip"; fi
-    if [[ "$SKIP_NCRNA" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --skip-ncrna"; fi
+    if [[ "$FILTER_NCRNA" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --filter-ncrna"; fi
     
     EXTRA_FLAGS="$EXTRA_FLAGS --peak-caller $PEAK_CALLER"
     if [[ -n "$ADV_PEAK_CALLER_ARGS" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --peak-caller-args \"$ADV_PEAK_CALLER_ARGS\""; fi
@@ -1607,7 +1607,7 @@ run_fastp "$INPUT_FILE" "$BASENAME" "$UMI_LEN" "$ADAPTER_3" "$THREADS" "$SAMPLE_
 
 # 1b. ncRNA Pre-filtering (if enabled and index exists)
 CLEANED_FASTQ="${BASENAME}_cleaned.fastq.gz"
-if [[ "$SKIP_NCRNA" == "false" ]]; then
+if [[ "$FILTER_NCRNA" == "true" ]]; then
     NCRNA_INDEX_DIR=$(check_ncrna_index "$GENOME_INDEX")
     if [[ -n "$NCRNA_INDEX_DIR" ]]; then
         NCRNA_OUTPUT_DIR="OTHERS/ncRNA_Mapping"
