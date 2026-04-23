@@ -799,7 +799,10 @@ if [[ -n "$INPUT_DIR" ]]; then
             cp "$sample_out"/*_fastp.json "$OUTPUT_ROOT/$DIR_REPORTS/FASTP_REPORT/" 2>/dev/null
             
             # Aligner-specific logs
-            if [[ "$ALIGNER" != "bowtie2" ]]; then
+            if [[ "$ALIGNER" == "bowtie2" ]]; then
+                echo -e "Bowtie2 does not generate standalone log files like STAR does.\nAll mapping statistics for this run are recorded in the main detailed_output.log." \
+                    > "$OUTPUT_ROOT/$DIR_REPORTS/ALIGNER_LOGS/README_Bowtie2_LOGS.txt"
+            else
                 cp "$sample_out"/*Log.final.out "$OUTPUT_ROOT/$DIR_REPORTS/ALIGNER_LOGS/" 2>/dev/null
                 cp "$sample_out"/*Log.out "$OUTPUT_ROOT/$DIR_REPORTS/ALIGNER_LOGS/DETAILED_LOGS_CAN_BE_DELETED/" 2>/dev/null
             fi
@@ -1333,8 +1336,8 @@ if [[ "$DEMUX" == "yes" ]]; then
                 
                 # Aligner-specific logs
                 if [[ "$ALIGNER" == "bowtie2" ]]; then
-                    # Bowtie2 logs (summary is part of stderr, captured in sample log)
-                    :  # No separate log files for Bowtie2
+                    echo -e "Bowtie2 does not generate standalone log files like STAR does.\nAll mapping statistics for this run are recorded in the main detailed_output.log." \
+                        > "$OUTPUT_ROOT/$DIR_REPORTS/ALIGNER_LOGS/README_Bowtie2_LOGS.txt"
                 else
                     # STAR logs
                     cp "$analysis_dir"/*Log.final.out "$OUTPUT_ROOT/$DIR_REPORTS/ALIGNER_LOGS/" 2>/dev/null
