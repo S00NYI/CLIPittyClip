@@ -2170,14 +2170,25 @@ run_combined_bedgraph() {
                 fi
                 local combined_tmp="${output_file}.tmp"
 
-                # Strip track headers from inputs before unionbedg, then sort and average
-                for bg in $bg_files; do grep -v "^track" "$bg"; done | \
-                bedtools unionbedg -i stdin | \
+                # unionbedg cannot read multiple files from stdin — strip track
+                # headers to individual temp files and pass as explicit args
+                local tmp_dir
+                tmp_dir=$(mktemp -d)
+                local tmp_files=()
+                for bg in $bg_files; do
+                    local tmp_bg="${tmp_dir}/$(basename "$bg")"
+                    grep -v "^track" "$bg" > "$tmp_bg"
+                    tmp_files+=("$tmp_bg")
+                done
+
+                bedtools unionbedg -i "${tmp_files[@]}" | \
                 awk -v N="$count" 'BEGIN{OFS="\t"} {sum=0; for(i=4;i<=NF;i++) sum+=$i; print $1,$2,$3,sum/N}' | \
                 sort -k1,1 -k2,2n > "$combined_tmp"
                 echo "track type=bedGraph name=\"${group}\" description=\"${strand_desc}\"" > "$output_file"
                 cat "$combined_tmp" >> "$output_file"
                 rm -f "$combined_tmp"
+                rm -rf "$tmp_dir"
+
 
                 log_info "  Generated: $(basename "$output_file") ($count replicates)"
             else
