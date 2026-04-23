@@ -320,26 +320,56 @@ strip_eclip_barcode() {
     fi
 }
 
-# 1. Preprocessing with fastp
-run_preprocessing() {
+# 1a. Deduplication (standalone step)
+# Runs fastq2collapse.pl on input, writes deduplicated reads to output_file.
+# Returns 0 on success, 1 on failure (caller handles fallback + messaging).
+run_dedup() {
+    local input_file="$1"
+    local output_file="$2"   # full path to output .fastq.gz
+
+    log_info "Deduplication: Running fastq2collapse.pl..."
+    local temp_out="${output_file%.gz}"  # uncompressed intermediate
+
+    if [[ "$input_file" == *.gz ]]; then
+        local temp_in="${output_file%.fastq.gz}_input_temp.fastq"
+        gzip -dc "$input_file" > "$temp_in"
+        fastq2collapse.pl "$temp_in" "$temp_out" 2>> "${LOG_FILE}"
+        rm -f "$temp_in"
+    else
+        fastq2collapse.pl "$input_file" "$temp_out" 2>> "${LOG_FILE}"
+    fi
+
+    if [[ $? -eq 0 && -s "$temp_out" ]]; then
+        gzip -c "$temp_out" > "$output_file"
+        rm -f "$temp_out"
+        log_info "Deduplication complete: $output_file"
+        return 0
+    else
+        rm -f "$temp_out" "$output_file"
+        log_warning "fastq2collapse.pl failed or produced empty output."
+        return 1
+    fi
+}
+
+# 1b. Adapter trimming and quality filtering with fastp
+run_fastp() {
     local input_file="$1"
     local output_prefix="$2"
-    local umi_len="$3" 
+    local umi_len="$3"
     local adapter3="$4"
     local threads="$5"
     local sample_size="$6"
-    local dedup_mode="$7"
-    local eclip_mode="${8:-false}"  # eCLIP mode: UMI in header, use adapter FASTA
-    local bc_len="${9:-0}"
-    local spacer_len="${10:-0}"
-    
-    update_status_first "Preprocessing"
-    log_info "Starting preprocessing..."
-    
+    local eclip_mode="${7:-false}"  # eCLIP mode: UMI in header, use adapter FASTA
+    local bc_len="${8:-0}"
+    local spacer_len="${9:-0}"
+
+    update_status_first "Adapter Trimming"
+    log_info "Starting adapter trimming..."
+
     # Get path to eCLIP adapter FASTA (same dir as this script)
     local script_dir="$(dirname "${BASH_SOURCE[0]}")"
     local eclip_adapters_fasta="${script_dir}/eclip_adapters.fa"
-    
+
     #==========================================================================
     # eCLIP MODE: CTK documentation workflow
     # 1. UMI header → sequence
@@ -349,11 +379,11 @@ run_preprocessing() {
     #==========================================================================
     if [[ "$eclip_mode" == "true" ]]; then
         log_info "eCLIP mode: Preprocessing workflow (collapse before trim)"
-        
+
         # Step 1: Detect and validate UMI length
         local detected_umi_len=$(detect_eclip_umi_length "$input_file" "$umi_len")
         umi_len="$detected_umi_len"
-        
+
         # Step 2: Move UMI from header to sequence
         update_status_first "eCLIP Preprocessing"
         echo -ne "(UMI to Sequence"
@@ -363,9 +393,8 @@ run_preprocessing() {
             log_error "Failed to reformat eCLIP UMI to sequence"
             exit 1
         fi
-        
+
         # Step 3: Collapse exact duplicates FIRST (with UMI in sequence)
-        # This matches non-eCLIP flow where collapse happens before fastp
         echo -ne " → Collapsing"
         local collapsed_file="${output_prefix}_collapsed.fastq"
         local collapsed_file_gz="${output_prefix}_collapsed.fastq.gz"
@@ -377,7 +406,7 @@ run_preprocessing() {
         fi
         gzip -c "$collapsed_file" > "$collapsed_file_gz"
         rm -f "${output_prefix}_umi_temp.fastq" "$collapsed_file" "$umi_seq_file"
-        
+
         # Step 4: Strip UMI from sequence, attach to header after count
         echo -ne " → Extract UMI"
         local stripped_file="${output_prefix}_stripped.fastq.gz"
@@ -387,7 +416,7 @@ run_preprocessing() {
             log_error "stripBarcode.pl failed"
             exit 1
         fi
-        
+
         # Step 5: Adapter trimming with fastp (AFTER collapse for efficiency)
         echo -ne " → Adapter Trim) > "
         local final_file="${output_prefix}_cleaned.fastq.gz"
@@ -402,97 +431,50 @@ run_preprocessing() {
         if [ "$sample_size" -gt 0 ]; then fastp_cmd+=" --reads_to_process $sample_size"; fi
         log_info "Running: $fastp_cmd"
         execute_cmd "$fastp_cmd"
-        rm -f "$stripped_file"  # Cleanup intermediate
-        
-        # Check fastp succeeded
+        rm -f "$stripped_file"
+
         if [[ ! -s "$final_file" ]]; then
             log_error "fastp failed to create cleaned file"
             exit 1
         fi
-        
+
         log_info "eCLIP preprocessing complete: $final_file"
         log_info "Read ID format: READ#count#UMI (CTK-compatible)"
         return 0
     fi
-    
+
     #==========================================================================
     # NON-eCLIP MODE: Standard workflow
-    # 1. Dedup with fastq2collapse.pl (if enabled)
-    # 2. fastp (with --umi for UMI extraction)
+    # fastp: adapter trim, quality filter, optional UMI extraction
     #==========================================================================
-    log_info "Standard mode: fastp with UMI extraction"
-    
-    # Define Fastp Command Function
-    run_fastp_cmd() {
-        local in_f="$1"
-        local cmd="fastp -i ${in_f} -o ${output_prefix}_cleaned.fastq.gz \
-            --thread ${threads} \
-            --length_required 16 \
-            --average_qual 30 \
-            --html ${output_prefix}_fastp.html \
-            --json ${output_prefix}_fastp.json"
-        # Standard mode: single adapter and UMI extraction
-        if [ -n "$adapter3" ]; then cmd+=" --adapter_sequence ${adapter3}"; fi
-        if [ "$umi_len" -gt 0 ]; then cmd+=" --umi --umi_loc=read1 --umi_len=${umi_len} --umi_delim=#"; fi
-        local front_trim=$(( bc_len + spacer_len ))
-        if [ "$front_trim" -gt 0 ]; then cmd+=" --trim_front1 ${front_trim}"; fi
-        if [ "$sample_size" -gt 0 ]; then cmd+=" --reads_to_process $sample_size"; fi
-        
-        log_info "Running: $cmd"
-        execute_cmd "$cmd"
-    }
+    log_info "Standard mode: fastp adapter trimming"
 
-    local final_input="$input_file"
-    local temp_dedup=""
-    
-    # 1. Deduplication (fastq2collapse.pl) - Tracks duplicate counts for CTK
-    if [ "$dedup_mode" == "true" ]; then
-        update_status "  Deduplicating (CTK)" 
-        log_info "Deduplication: Running fastq2collapse.pl (tracks duplicate counts for tag2collapse)..."
-        temp_dedup="${output_prefix}_dedup_temp.fastq"
-        local temp_dedup_gz="${output_prefix}_dedup_temp.fastq.gz"
-        
-        if [[ "$input_file" == *.gz ]]; then
-            local temp_input="${output_prefix}_input_temp.fastq"
-            gzip -dc "$input_file" > "$temp_input"
-            fastq2collapse.pl "$temp_input" "$temp_dedup" 2>> "${LOG_FILE}"
-            rm -f "$temp_input"
-        else
-            fastq2collapse.pl "$input_file" "$temp_dedup" 2>> "${LOG_FILE}"
-        fi
-        
-        if [[ $? -eq 0 && -s "$temp_dedup" ]]; then
-             gzip -c "$temp_dedup" > "$temp_dedup_gz"
-             rm -f "$temp_dedup"
-             final_input="$temp_dedup_gz"
-             temp_dedup="$temp_dedup_gz"
-             log_info "Deduplication complete."
-             update_status "  Preprocessing (Fastp)"
-        else
-             log_warning "fastq2collapse.pl failed. Reverting to original input."
-             rm -f "$temp_dedup" "$temp_dedup_gz"
-             temp_dedup=""
-        fi
-    fi
+    local fastp_cmd="fastp -i ${input_file} -o ${output_prefix}_cleaned.fastq.gz \
+        --thread ${threads} \
+        --length_required 16 \
+        --average_qual 30 \
+        --html ${output_prefix}_fastp.html \
+        --json ${output_prefix}_fastp.json"
+    if [ -n "$adapter3" ]; then fastp_cmd+=" --adapter_sequence ${adapter3}"; fi
+    if [ "$umi_len" -gt 0 ]; then fastp_cmd+=" --umi --umi_loc=read1 --umi_len=${umi_len} --umi_delim=#"; fi
+    local front_trim=$(( bc_len + spacer_len ))
+    if [ "$front_trim" -gt 0 ]; then fastp_cmd+=" --trim_front1 ${front_trim}"; fi
+    if [ "$sample_size" -gt 0 ]; then fastp_cmd+=" --reads_to_process $sample_size"; fi
 
-    # 2. Run Fastp
-    run_fastp_cmd "$final_input"
+    log_info "Running: $fastp_cmd"
+    execute_cmd "$fastp_cmd"
     local exit_code=$?
-    
-    # Cleanup temp dedup file
-    if [[ -n "$temp_dedup" && -f "$temp_dedup" ]]; then
-        rm "$temp_dedup"
-    fi
 
     if [ $exit_code -eq 0 ]; then
-        log_info "Preprocessing complete."
+        log_info "Adapter trimming complete."
     else
         log_error "fastp failed."
         exit 1
     fi
 }
 
-# 1b. ncRNA Pre-filtering with Bowtie2
+# 1c. ncRNA Pre-filtering with Bowtie2
+
 # Filters out rRNA, tRNA, and other ncRNA reads before genome alignment
 # Input: FASTQ from fastp
 # Output: Unmapped reads (for genome alignment), Mapped reads (QC)

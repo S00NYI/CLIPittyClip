@@ -978,27 +978,13 @@ if [[ "$DEMUX" == "yes" ]]; then
     if [[ "$DEDUP_MODE" == "true" ]]; then
         console_msg "\n[DEDUPLICATING]"
         print_section_item "Deduplicating Pooled Reads (fastq2collapse.pl)"
-        
-        dedup_temp="pooled_dedup.fastq"
-        dedup_temp_gz="pooled_dedup.fastq.gz"
-        
-        # Use fastq2collapse.pl to track duplicate counts for CTK compatibility
-        if [[ "$INPUT_FILE" == *.gz ]]; then
-            gzip -dc "$INPUT_FILE" > pooled_input_temp.fastq
-            fastq2collapse.pl pooled_input_temp.fastq "$dedup_temp" 2>> "${LOG_FILE}"
-            rm -f pooled_input_temp.fastq
-        else
-            fastq2collapse.pl "$INPUT_FILE" "$dedup_temp" 2>> "${LOG_FILE}"
-        fi
-        
-        if [[ $? -eq 0 && -s "$dedup_temp" ]]; then
-            gzip -c "$dedup_temp" > "$dedup_temp_gz"
-            rm -f "$dedup_temp"
-            WORK_INPUT="$dedup_temp_gz"
-            print_section_item "Deduplicating Complete"
+        DEDUP_OUT="pooled_dedup.fastq.gz"
+        if run_dedup "$INPUT_FILE" "$DEDUP_OUT"; then
+            WORK_INPUT="$DEDUP_OUT"
+            print_section_item "Deduplication Complete"
         else
             log_warning "Deduplication failed. Using original file."
-            rm -f "$dedup_temp" "$dedup_temp_gz"
+            rm -f "$DEDUP_OUT"
             WORK_INPUT="$INPUT_FILE"
         fi
     else
@@ -1094,19 +1080,6 @@ if [[ "$DEMUX" == "yes" ]]; then
     if [[ "$ECLIP_MODE" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --eclip"; fi
     if [[ "$SKIP_NCRNA" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --skip-ncrna"; fi
     
-    # We already deduped the pooled file before demux (if DEDUP_MODE was true).
-    # So we explicitly tell child processes NOT to dedup again to save time.
-    # Note: If user passed --no-dedup, DEDUP_MODE is false, so we don't care (default child is true though).
-    # Wait, default child is true. So we MUST pass --no-dedup regardless of parent mode?
-    # Yes, because the split files are coming from a potentially deduped source.
-    # Even if they weren't deduped (parent --no-dedup), deduping individual split files is less efficient 
-    # than pool dedup, but maybe user wants it? 
-    # Logic: Parent DEDUP_MODE controls the whole workflow.
-    # If Parent DEDUP=true -> Pool Dedup -> Split -> Child (should not dedup).
-    # If Parent DEDUP=false -> No Pool Dedup -> Split -> Child (should not dedup? or follow parent?)
-    # Generally, pass --no-dedup to child to avoid double-dedup.
-    
-    EXTRA_FLAGS="$EXTRA_FLAGS --no-dedup"
     EXTRA_FLAGS="$EXTRA_FLAGS --peak-caller $PEAK_CALLER"
     if [[ -n "$ADV_PEAK_CALLER_ARGS" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --peak-caller-args \"$ADV_PEAK_CALLER_ARGS\""; fi
     if [[ -n "$BC_LEN" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --bc-len $BC_LEN"; fi
@@ -1598,6 +1571,31 @@ if [[ -n "$EXP_ID" ]]; then
     BASENAME="$EXP_ID"
 fi
 
+# ── Section Headers (non-child mode only) ─────────────────────────────────────
+if [[ "$CHILD_MODE" != "true" ]]; then
+    console_msg "\n[DEDUPLICATING]"
+    if [[ "$DEDUP_MODE" == "true" ]]; then
+        print_section_item "Deduplicating Reads (fastq2collapse.pl)"
+        DEDUP_OUT="${BASENAME}_dedup.fastq.gz"
+        if run_dedup "$INPUT_FILE" "$DEDUP_OUT"; then
+            INPUT_FILE="$DEDUP_OUT"
+            print_section_item "Deduplication Complete"
+        else
+            log_warning "Deduplication failed. Using original input."
+            rm -f "$DEDUP_OUT"
+        fi
+    else
+        print_section_item "Deduplication Disabled (--no-dedup)"
+    fi
+
+    console_msg "\n[DEMULTIPLEXING]"
+    print_section_item "No Barcode File Provided"
+    print_section_item "Skipping Demultiplexing"
+
+    console_msg "\n[ANALYSIS]"
+    printf "   1/1  %-20s : " "$BASENAME"
+fi
+
 # Directory Setup
 mkdir -p "${BASENAME}_analysis"
 cd "${BASENAME}_analysis" || exit 1
@@ -1605,7 +1603,7 @@ LOG_FILE="${BASENAME}_analysis.log" # redirect log to inside analysis dir
 log_info "Working directory: $(pwd)"
 
 # 1. Preprocessing
-run_preprocessing "$INPUT_FILE" "$BASENAME" "$UMI_LEN" "$ADAPTER_3" "$THREADS" "$SAMPLE_SIZE" "$DEDUP_MODE" "$ECLIP_MODE" "$BC_LEN" "$SPACER_LEN"
+run_fastp "$INPUT_FILE" "$BASENAME" "$UMI_LEN" "$ADAPTER_3" "$THREADS" "$SAMPLE_SIZE" "$ECLIP_MODE" "$BC_LEN" "$SPACER_LEN"
 
 # 1b. ncRNA Pre-filtering (if enabled and index exists)
 CLEANED_FASTQ="${BASENAME}_cleaned.fastq.gz"
