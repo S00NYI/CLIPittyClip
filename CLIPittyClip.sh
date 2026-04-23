@@ -27,7 +27,7 @@ BARCODE_FILE=""
 INPUT_DIR=""  # Directory mode for pre-demultiplexed FASTQs
 UMI_LEN=0
 BC_LEN=""
-SPACER_LEN="3"
+SPACER_LEN="0"
 ADAPTER_3="GTGTCAGTCACTTCCAGCGG" # L32 default
 PEAK_DIST=50
 PEAK_SIZE=20
@@ -62,7 +62,7 @@ function show_usage {
     echo "PREPROCESSING OPTIONS:"
     echo "  -u, --umi-length <int>   UMI length (e.g., 7 for CoCLIP)"
     echo "  --bc-len <int>           Barcode length to trim (auto-detected if -b is provided)"
-    echo "  --spacer-len <int>       Spacer length to trim after barcode (default: 3)"
+    echo "  --spacer-len <int>       Spacer length to trim after barcode (default: 0)"
     echo "  -a, --adapter <str>      3' adapter sequence (default: L32)"
     echo "  --no-dedup               Disable FASTQ deduplication (default: ON)"
     echo "  --eclip                  ENCODE eCLIP mode: UMI in header, uses all eCLIP adapters"
