@@ -1699,7 +1699,9 @@ if [[ "$RUN_CIMS" == "true" ]] || [[ "$RUN_CITS" == "true" ]]; then
 fi
 
 # Finalize status line (prints "Done!" to end the Preprocessing > ... > Peaks > chain)
-update_status_done
+if [[ "$CHILD_MODE" != "true" ]]; then
+    update_status_done
+fi
 
 # ── Organize output (non-child single-file mode only) ──────────────────────────
 if [[ "$CHILD_MODE" != "true" ]]; then
