@@ -162,7 +162,9 @@ reformat_eclip_umi_to_sequence() {
     # Write to temp file first, then gzip (avoids macOS pipe buffering issues)
     local temp_output="${output_fastq%.gz}"
 
-    gunzip -c "$input_fastq" | awk -v umi_len="$umi_len" -v umi_qual="$umi_qual" '
+    local _read_cmd="gunzip -c"
+    [[ "$input_fastq" != *.gz ]] && _read_cmd="cat"
+    $_read_cmd "$input_fastq" | awk -v umi_len="$umi_len" -v umi_qual="$umi_qual" '
     BEGIN { OFS="" }
     {
         if (NR % 4 == 1) {
