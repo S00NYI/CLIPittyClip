@@ -1855,6 +1855,12 @@ if [[ "$KEEP_INTERMEDIATE" != "yes" ]]; then
         # Single mode cleans entire scratch directory natively
         cd ..
         rm -rf "${BASENAME}_analysis"
+        # Also remove the dedup temp file — it was created in the parent dir
+        # before cd-ing into the analysis subdir, so rm -rf above misses it
+        if [[ -n "$DEDUP_OUT" && -f "$DEDUP_OUT" ]]; then
+            rm -f "$DEDUP_OUT"
+            log_info "Removed dedup temp file: $(basename "$DEDUP_OUT")"
+        fi
     else
         rm -f "${BASENAME}_cleaned.fastq" "${BASENAME}_raw.bed" "${BASENAME}_parsed.bed"
     fi
