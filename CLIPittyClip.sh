@@ -345,7 +345,7 @@ fi
 # Output Root & Working Directory (parent process only)
 # ------------------------------------------------------------------
 # OUTPUT_ROOT: where organized results go.
-# WORK_DIR:    OUTPUT_ROOT/.work/ — scratch space for ALL intermediate files.
+# WORK_DIR:    OUTPUT_ROOT/TEMP/ — scratch space for ALL intermediate files.
 #
 # Rules for OUTPUT_ROOT:
 #   -o /absolute/path  → use exactly as given
@@ -369,7 +369,7 @@ if [[ "$CHILD_MODE" != "true" ]]; then
             OUTPUT_ROOT="${INPUT_PARENT}/$(basename "$INPUT_DIR")_output"
         fi
     fi
-    WORK_DIR="${OUTPUT_ROOT}/.work"
+    WORK_DIR="${OUTPUT_ROOT}/TEMP"
     mkdir -p "${OUTPUT_ROOT}/REPORTS" "$WORK_DIR"
 fi
 
@@ -643,6 +643,7 @@ if [[ -n "$INPUT_DIR" ]]; then
     if [[ "$KEEP_INTERMEDIATE" == "yes" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS -k"; fi
     if [[ "$SAMPLE_SIZE" -gt 0 ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --sample $SAMPLE_SIZE"; fi
     EXTRA_FLAGS="$EXTRA_FLAGS -m $ALIGNER"
+    if [[ -n "$ALIGN_MISMATCHES" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --align-mismatches $ALIGN_MISMATCHES"; fi
     if [[ -n "$ECLIP_MODE" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --eclip $ECLIP_MODE"; fi
     if [[ "$FILTER_NCRNA" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --filter-ncrna"; fi
     if [[ "$DEDUP_MODE" == "false" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --no-dedup"; fi
@@ -751,6 +752,8 @@ if [[ -n "$INPUT_DIR" ]]; then
         sample_name=$(basename "$sample")
         sample_name="${sample_name%.fastq.gz}"
         sample_name="${sample_name%.fq.gz}"
+        sample_name="${sample_name%.fastq}"
+        sample_name="${sample_name%.fq}"
         sample_out="${WORK_DIR}/${sample_name}_analysis"
         
         if [[ -d "$sample_out" ]]; then
@@ -880,6 +883,8 @@ if [[ -n "$INPUT_DIR" ]]; then
                 sample_name=$(basename "$sample")
                 sample_name="${sample_name%.fastq.gz}"
                 sample_name="${sample_name%.fq.gz}"
+                sample_name="${sample_name%.fastq}"
+                sample_name="${sample_name%.fq}"
                 # Read from aggregated location (sample_out was deleted after collection)
                 ncrna_stats="${OUTPUT_ROOT}/${DIR_OTHERS}/ncRNA_Mapping/${sample_name}_ncrna_stats.txt"
 
@@ -1084,6 +1089,7 @@ if [[ "$DEMUX" == "yes" ]]; then
     
     # Pass Aligner choice
     EXTRA_FLAGS="$EXTRA_FLAGS -m $ALIGNER"
+    if [[ -n "$ALIGN_MISMATCHES" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --align-mismatches $ALIGN_MISMATCHES"; fi
     if [[ -n "$ECLIP_MODE" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --eclip $ECLIP_MODE"; fi
     if [[ "$FILTER_NCRNA" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --filter-ncrna"; fi
     # Pool was already deduped above; tell children to skip dedup

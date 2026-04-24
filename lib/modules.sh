@@ -1795,9 +1795,6 @@ CIMS_SCRIPT
             
             local filtered_count=$(grep -v "^#" "$output_file" | wc -l)
             log_info "CIMS filtered: $filtered_count sites (FDR < $cims_fdr)"
-            
-            # Cleanup unwanted CIMS intermediates
-            rm -f mutations_matched.txt deletions.bed substitutions.bed 2>/dev/null
         fi
     else
         echo -e "[WARNING] CIMS produced empty output: $output_file" >> "${LOG_FILE}"
@@ -1875,14 +1872,16 @@ deletion_chunk="${output_dir}/${chunk_name}.del.bed"
 output_chunk="${output_dir}/${chunk_name}.cits.bed"
 cache_dir=$(mktemp -u "${TMPDIR:-/tmp}/cits_cache.XXXXXX")
 export PERL5LIB="${CONDA_PREFIX}/lib/czplib:$PERL5LIB"
-# Only run CITS if collapsed chunk exists (deletion chunk can be empty)
+# Only run CITS if collapsed chunk exists (deletion chunk may be absent/empty)
 if [[ -s "$chunk_file" ]]; then
-    if [[ -s "$deletion_chunk" ]]; then
-        CITS.pl -big -c "$cache_dir" -p "$pvalue" --gap "$gap" "$chunk_file" "$deletion_chunk" "$output_chunk" >/dev/null 2>&1
-    else
-        # No deletions for this chromosome - run without deletion filtering
-        touch "$output_chunk"
+    actual_del="$deletion_chunk"
+    if [[ ! -s "$deletion_chunk" ]]; then
+        # No deletions for this chromosome: pass an empty file so CITS.pl
+        # retains all reads as truncation candidates rather than skipping entirely
+        actual_del=$(mktemp "${TMPDIR:-/tmp}/empty_del.XXXXXX")
     fi
+    CITS.pl -big -c "$cache_dir" -p "$pvalue" --gap "$gap" "$chunk_file" "$actual_del" "$output_chunk" >/dev/null 2>&1
+    [[ "$actual_del" != "$deletion_chunk" ]] && rm -f "$actual_del"
 fi
 rm -rf "$cache_dir" 2>/dev/null
 CITS_SCRIPT
@@ -1937,7 +1936,6 @@ CITS_SCRIPT
         
         # Remove intermediate raw file
         rm -f "$cits_raw"
-        rm -f mutations_matched.txt deletions.bed substitutions.bed 2>/dev/null
     else
         echo -e "[WARNING] CITS produced empty output" >> "${LOG_FILE}"
         echo -ne "${YELLOW}[WARNING] Empty Output${NC} > "
