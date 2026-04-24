@@ -11,6 +11,8 @@ A comprehensive, single-command CLIP-seq data analysis pipeline from FASTQ to pe
 This release introduces a new preprocessing-only standalone script, a GEO deposit mode, significant runtime improvements via lazy decompression, and cleaner output directory management.
 
 **New Features (v3.2.0):**
+- **Hash-Based Deduplication Engine**: Replaced `fastq2collapse.pl` (CTK) with a new Python-based collapse engine (`lib/fastq_collapse_hash.py`). Uses an O(n) hash (Counter) approach with no disk spill, delivering significant speedups on large pooled libraries. Output format is identical to `fastq2collapse.pl` (`@id#COUNT`), ensuring full compatibility with downstream CTK tools. A sort-based fallback (`awk | sort | uniq`) is used automatically if Python 3 is unavailable.
+- **Modular Deduplication** (`lib/dedup.sh`): Deduplication logic is now a standalone library module sourced by all scripts. Eliminates redundant gzip round-trips — the dedup step accepts and emits plain `.fastq` by default.
 - **PREPittyPrep.sh**: New standalone preprocessing script. Runs the full CLIP-seq preprocessing stack (dedup → demux → fastp) and stops before alignment, producing ready-to-map `*_prepped.fastq.gz` files. Supports single-file, pooled+demux, and directory batch modes.
 - **GEO Mode** (`PREPittyPrep.sh --geo`): Raw barcode-based demultiplexing only — reads are split by barcode and written exactly as received (no dedup, no adapter trimming). Intended for GEO/SRA deposit of pooled library FASTQs.
 - **Lazy Gzip**: All internal pipeline steps now operate on plain (uncompressed) `.fastq` files. Gzip compression is only applied to final output products, eliminating redundant compress/decompress cycles between steps for significant runtime improvement on large libraries.
@@ -228,6 +230,21 @@ Run `CLIPittyClip.sh --help` for full usage.
 | `-a` | `--adapter` | string | L32 | 3' adapter sequence |
 | — | `--eclip` | bool | false | ENCODE eCLIP mode |
 | — | `--no-dedup` | bool | — | Disable FASTQ deduplication (default: ON) |
+
+## Deduplication
+
+CLIPittyClip uses a custom hash-based deduplication engine (`lib/fastq_collapse_hash.py`) as a drop-in replacement for CTK's `fastq2collapse.pl`.
+
+**Engine selection (automatic):**
+
+| Priority | Engine | Algorithm | Notes |
+|----------|--------|-----------|-------|
+| 1st | `fastq_collapse_hash.py` | O(n) hash (Python `Counter`) | No disk spill; requires Python 3 |
+| 2nd | `awk \| sort \| uniq` | O(n log n) sort-based | Automatic fallback; mirrors `fastq2collapse.pl` exactly |
+
+**Output format:** `@read_id#COUNT` — identical to `fastq2collapse.pl`, fully compatible with all downstream CTK tools (`tag2collapse.pl`, `parseAlignment.pl`, etc.).
+
+**To disable:** Pass `--no-dedup` to skip deduplication entirely (e.g., for pre-deduplicated inputs or eCLIP data already processed upstream).
 
 ### Demultiplexing Options
 
