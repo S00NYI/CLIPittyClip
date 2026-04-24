@@ -325,27 +325,6 @@ Condition_B_Rep2    Condition_B
 
 ```
 
-### PREPittyPrep.sh
-```
-{INPUT}_prepped/
-├── PREPPED_FASTQ/           # Ready-to-map gzipped FASTQs (*_prepped.fastq.gz)
-├── 0_DEMUX_FASTQ/           # Split FASTQs  ← only kept with -k (demux mode)
-└── REPORTS/
-    ├── FASTP_REPORT/        # HTML/JSON QC reports per sample
-    └── detailed_output.log
-
-```
-
-### PREPittyPrep.sh --geo
-```
-{INPUT}_GEO/
-├── sample1.fastq.gz         # Reads split by barcode, unmodified
-├── sample2.fastq.gz
-├── md5sums.txt              # Standard MD5 checksums for all FASTQs (for GEO upload)
-├── ...
-└── unknown.fastq.gz         # Unmatched reads
-
-```
 
 ## Peak Matrix Metrics
 
@@ -452,6 +431,26 @@ This is the fastq directly from ENCODE before any barcode/UMI processing.
 ### PREPittyPrep.sh
 Standalone preprocessing module. Runs dedup → demux (optional) → fastp and stops before alignment, producing clean, ready-to-map `*_prepped.fastq.gz` files. No genome index required.
 
+**Output Structure:**
+```text
+{INPUT}_prepped/
+├── PREPPED_FASTQ/           # Ready-to-map gzipped FASTQs (*_prepped.fastq.gz)
+├── 0_DEMUX_FASTQ/           # Split FASTQs  ← only kept with -k (demux mode)
+└── REPORTS/
+    ├── FASTP_REPORT/        # HTML/JSON QC reports per sample
+    └── detailed_output.log
+```
+
+**GEO Deposit Output Structure:**
+```text
+{INPUT}_GEO/
+├── sample1.fastq.gz         # Reads split by barcode, unmodified
+├── sample2.fastq.gz
+├── md5sums.txt              # Standard MD5 checksums for all FASTQs (for GEO upload)
+├── ...
+└── unknown.fastq.gz         # Unmatched reads
+```
+
 **Input modes:**
 
 | Mode | Flags | Behavior |
@@ -459,7 +458,7 @@ Standalone preprocessing module. Runs dedup → demux (optional) → fastp and s
 | Single file | `-i reads.fastq.gz` | dedup → fastp → `_prepped.fastq.gz` |
 | Pooled + demux | `-i pool.fastq.gz -b barcodes.txt` | dedup → cutadapt split → per-sample fastp |
 | Directory batch | `-d /path/to/samples/` | per-file: dedup → fastp |
-| GEO deposit | `--geo -i pool.fastq.gz -b barcodes.txt` | raw cutadapt split only, no modification |
+| GEO deposit | `--geo -i pool.fastq.gz -b barcodes.txt` | raw cutadapt split only, no modification. md5 checksum values output as a text file |
 
 **Key options:**
 - `-u <int>`: UMI length for extraction (default: 0)
