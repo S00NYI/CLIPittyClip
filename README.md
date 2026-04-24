@@ -192,6 +192,7 @@ Run `CLIPittyClip.sh --help` for full usage.
 |-------|------|------|---------|-------------|
 | `-t` | `--threads` | int | 1 | Number of threads |
 | `-m` | `--mapper` | string | star | Mapper: `star` or `bowtie2` |
+| — | `--align-mismatches` | int | 2 | Max alignment mismatches (STAR only) |
 | `-v` | `--verbose` | bool | false | Enable verbose logging |
 | `-h` | `--help` | — | — | Show help message |
 
@@ -203,6 +204,7 @@ Run `CLIPittyClip.sh --help` for full usage.
 | `-a` | `--adapter` | string | L32 | 3' adapter sequence |
 | — | `--eclip` | string | — | eCLIP mode: `pe` (paired-end) or `se` (single-end) |
 | — | `--no-dedup` | bool | — | Disable FASTQ deduplication (default: ON) |
+| — | `--filter-ncrna` | bool | false | Enable ncRNA pre-filtering (opt-in) |
 
 ## Deduplication
 
@@ -225,8 +227,6 @@ CLIPittyClip uses a custom hash-based deduplication engine (`lib/fastq_collapse_
 |-------|------|------|---------|-------------|
 | `-b` | `--barcodes` | path | — | Barcode file (enables demultiplexing) |
 | — | `--demux-mismatches` | int | 1 | Max barcode mismatches |
-| — | `--align-mismatches` | int | 2 | Max alignment mismatches (STAR only) |
-| — | `--filter-ncrna` | bool | false | Enable ncRNA pre-filtering (opt-in) |
 
 ### Peak Calling Options
 
