@@ -929,7 +929,7 @@ if [[ -n "$INPUT_DIR" ]]; then
     console_msg "\n[COMPLETE]"
     console_msg "  > Duration: ${H}h ${M}m ${S}s"
     console_msg "  > Output: $OUTPUT_ROOT/"
-    console_msg "  > Console log: $OUTPUT_ROOT/$DIR_REPORTS/${TEMP_CONSOLE_LOG:-CLIPittyClip.log}"
+    console_msg "  > Console log: $TEMP_CONSOLE_LOG"
     
 
     
@@ -1543,7 +1543,13 @@ if [[ -z "$ECLIP_MODE" ]]; then
     if [[ "$CHILD_MODE" != "true" ]]; then console_msg "\n[DEDUPLICATING]"; fi
     if [[ "$DEDUP_MODE" == "true" ]]; then
         if [[ "$CHILD_MODE" != "true" ]]; then print_section_item "Deduplicating Reads"; fi
-        DEDUP_OUT="${WORK_DIR}/${BASENAME}_dedup.fastq"
+        # Children's CWD is already WORK_DIR (set by parent subshell);
+        # use $(pwd) for an absolute path without needing $WORK_DIR to be set.
+        if [[ "$CHILD_MODE" != "true" ]]; then
+            DEDUP_OUT="${WORK_DIR}/${BASENAME}_dedup.fastq"
+        else
+            DEDUP_OUT="$(pwd)/${BASENAME}_dedup.fastq"
+        fi
         if run_dedup "$INPUT_FILE" "$DEDUP_OUT"; then
             INPUT_FILE="$DEDUP_OUT"
             if [[ "$CHILD_MODE" != "true" ]]; then print_section_item "Deduplication Complete"; fi
@@ -1566,9 +1572,16 @@ if [[ "$CHILD_MODE" != "true" ]]; then
     printf "   1/1  %-20s : " "$BASENAME"
 fi
 
-# Directory Setup — work inside WORK_DIR so no files are created in CWD
-mkdir -p "${WORK_DIR}/${BASENAME}_analysis"
-cd "${WORK_DIR}/${BASENAME}_analysis" || exit 1
+# Directory Setup — work inside WORK_DIR so no files are created in CWD.
+# Parent single-file: use explicit $WORK_DIR path.
+# Children: CWD is already WORK_DIR (set by parent subshell), so use $(pwd).
+if [[ "$CHILD_MODE" != "true" ]]; then
+    _WORK_ANALYSIS="${WORK_DIR}/${BASENAME}_analysis"
+else
+    _WORK_ANALYSIS="$(pwd)/${BASENAME}_analysis"
+fi
+mkdir -p "$_WORK_ANALYSIS"
+cd "$_WORK_ANALYSIS" || exit 1
 LOG_FILE="${BASENAME}_analysis.log" # redirect log to inside analysis dir
 log_info "Working directory: $(pwd)"
 
