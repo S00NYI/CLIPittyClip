@@ -159,69 +159,6 @@ CLIPittyClip.sh --eclip pe -d /path/to/samples/ -x /path/to/star_index -t 8 --ru
 CLIPittyClip.sh --eclip se -i reads.fastq.gz -x /path/to/star_index -t 8
 ```
 
-## eCLIP Analysis Modes
-
-CLIPittyClip supports two eCLIP protocols, selected via `--eclip <pe|se>`.
-
----
-
-### eCLIP Paired-End Mode (`--eclip pe`)
-
-For ENCODE eCLIP paired-end data after inline-barcode demultiplexing by `eclipdemux`.
-
-```bash
-# PE eCLIP — batch (typical for ENCODE downloads)
-CLIPittyClip.sh --eclip pe -d /path/to/eclip_fastqs/ -x /path/to/star_index -t 8
-
-# PE eCLIP with CIMS/CITS analysis
-CLIPittyClip.sh --eclip pe -d /path/to/eclip_fastqs/ -x /path/to/star_index -t 8 --run-cims --run-cits
-```
-
-**Expected input:** Read 2, post-eclipdemux format — UMI already moved to read header by `eclipdemux`.
-Read header format: `@NTACGTTGAT:NB501168:530:HJ3WMBGXF:...`
-
-**Preprocessing workflow:**
-1. **Validate input** — confirms R2 with UMI in header (colon-prefix format); exits with a clear error if wrong file is supplied
-2. **UMI to sequence** — prepends the UMI back onto the read sequence for deduplication
-3. **Deduplicating** — exact-duplicate collapse using hash-based engine (UMI-aware)
-4. **Extract UMI** — strips UMI from sequence into CTK-compatible header format (`@READ#count#UMI`)
-5. **Adapter Trim** — fastp with full eCLIP adapter set (`eclip_adapters.fa`: inline barcodes + TruSeq R2)
-
-**Ignored options:** `-u` (UMI length is auto-detected from header), `-a` (adapter is hardcoded to `eclip_adapters.fa`)
-
-> **Note:** `--eclip pe` only affects preprocessing. CIMS/CITS analysis requires separate `--run-cims`/`--run-cits` flags.
-
----
-
-### eCLIP Single-End Mode (`--eclip se`)
-
-For single-end eCLIP (seCLIP) data following the Blue et al. 2022 protocol.
-
-```bash
-# SE eCLIP — single file
-CLIPittyClip.sh --eclip se -i sample_R1.fastq.gz -x /path/to/star_index -t 8
-
-# SE eCLIP — batch directory
-CLIPittyClip.sh --eclip se -d /path/to/seclip_fastqs/ -x /path/to/star_index -t 8
-```
-
-**Expected input:** Raw Read 1, unprocessed — UMI is the first 10nt of the read sequence.
-This is the fastq directly from ENCODE before any barcode/UMI processing.
-
-**Hardcoded parameters (Blue et al. 2022 — not user-configurable):**
-- UMI length: 10nt
-- Adapter: TruSeq Read 1 (`AGATCGGAAGAGCACACGTCTGAACTCCAGTCAC`)
-
-**Preprocessing workflow:**
-1. **Validate input** — confirms R1 with UMI in sequence; exits with a clear error if a pre-processed or R2 file is supplied
-2. **Deduplicating** — exact-duplicate collapse on full read (UMI + cDNA sequence together)
-3. **Extract UMI** — strips first 10nt into CTK-compatible header format (`@READ#count#UMI`)
-4. **Adapter Trim** — fastp with TruSeq R1 adapter
-
-**Ignored options:** `-u` (UMI length hardcoded to 10nt), `-a` (TruSeq R1 is hardcoded)
-
-> **Note:** `--eclip se` uses the same downstream alignment, PCR collapse, and peak-calling steps as all other modes. Only preprocessing differs.
-
 ## Input Modes
 
 | Mode | Flag | Use Case |
@@ -404,6 +341,7 @@ Condition_B_Rep2    Condition_B
 {INPUT}_GEO/
 ├── sample1.fastq.gz         # Reads split by barcode, unmodified
 ├── sample2.fastq.gz
+├── md5sums.txt              # Standard MD5 checksums for all FASTQs (for GEO upload)
 ├── ...
 └── unknown.fastq.gz         # Unmatched reads
 
@@ -446,33 +384,70 @@ The `COMBINED_peakMatrix.txt` file contains up to 54+ advanced metrics summarizi
    1/3 Sample1 : Preprocessing > Mapping (STAR) > Processing Alignment > Collapsing > Bedgraph > Peaks > CIMS > CITS > Done!
 ```
 
-## Standalone Tools
+## eCLIP Analysis Modes
 
-### MAPittyMap.sh
-Standalone mapping module for aligning FASTQ files to a reference genome.
-
-**Required inputs:**
-- `-i <path>`: Input FASTQ file (gzipped)
-- `-x <path>`: Path to genome index directory
-
-**Key options:**
-- `-t <int>`: Number of threads (default: 1)
-- `-m, --mapper <star|bowtie2>`: Alignment tool (default: star)
-- `-o <path>`: Output directory
-- `-w, --wizard`: Launch interactive configuration wizard
-
-```bash
-# Using STAR
-MAPittyMap.sh -i reads.fastq.gz -x /path/to/star_index -t 8 -m star
-
-# Using Bowtie2
-MAPittyMap.sh -i reads.fastq.gz -x /path/to/bt2_index -t 8 -m bowtie2
-
-# Interactive wizard mode for custom aligner settings
-MAPittyMap.sh -i reads.fastq.gz -x /path/to/star_index -t 8 -w
-```
+CLIPittyClip supports two eCLIP protocols, selected via `--eclip <pe|se>`.
 
 ---
+
+### eCLIP Paired-End Mode (`--eclip pe`)
+
+For ENCODE eCLIP paired-end data after inline-barcode demultiplexing by `eclipdemux`.
+
+```bash
+# PE eCLIP — batch (typical for ENCODE downloads)
+CLIPittyClip.sh --eclip pe -d /path/to/eclip_fastqs/ -x /path/to/star_index -t 8
+
+# PE eCLIP with CIMS/CITS analysis
+CLIPittyClip.sh --eclip pe -d /path/to/eclip_fastqs/ -x /path/to/star_index -t 8 --run-cims --run-cits
+```
+
+**Expected input:** Read 2, post-eclipdemux format — UMI already moved to read header by `eclipdemux`.
+Read header format: `@NTACGTTGAT:NB501168:530:HJ3WMBGXF:...`
+
+**Preprocessing workflow:**
+1. **Validate input** — confirms R2 with UMI in header (colon-prefix format); exits with a clear error if wrong file is supplied
+2. **UMI to sequence** — prepends the UMI back onto the read sequence for deduplication
+3. **Deduplicating** — exact-duplicate collapse using hash-based engine (UMI-aware)
+4. **Extract UMI** — strips UMI from sequence into CTK-compatible header format (`@READ#count#UMI`)
+5. **Adapter Trim** — fastp with full eCLIP adapter set (`eclip_adapters.fa`: inline barcodes + TruSeq R2)
+
+**Ignored options:** `-u` (UMI length is auto-detected from header), `-a` (adapter is hardcoded to `eclip_adapters.fa`)
+
+> **Note:** `--eclip pe` only affects preprocessing. CIMS/CITS analysis requires separate `--run-cims`/`--run-cits` flags.
+
+---
+
+### eCLIP Single-End Mode (`--eclip se`)
+
+For single-end eCLIP (seCLIP) data following the Blue et al. 2022 protocol.
+
+```bash
+# SE eCLIP — single file
+CLIPittyClip.sh --eclip se -i sample_R1.fastq.gz -x /path/to/star_index -t 8
+
+# SE eCLIP — batch directory
+CLIPittyClip.sh --eclip se -d /path/to/seclip_fastqs/ -x /path/to/star_index -t 8
+```
+
+**Expected input:** Raw Read 1, unprocessed — UMI is the first 10nt of the read sequence.
+This is the fastq directly from ENCODE before any barcode/UMI processing.
+
+**Hardcoded parameters (Blue et al. 2022 — not user-configurable):**
+- UMI length: 10nt
+- Adapter: TruSeq Read 1 (`AGATCGGAAGAGCACACGTCTGAACTCCAGTCAC`)
+
+**Preprocessing workflow:**
+1. **Validate input** — confirms R1 with UMI in sequence; exits with a clear error if a pre-processed or R2 file is supplied
+2. **Deduplicating** — exact-duplicate collapse on full read (UMI + cDNA sequence together)
+3. **Extract UMI** — strips first 10nt into CTK-compatible header format (`@READ#count#UMI`)
+4. **Adapter Trim** — fastp with TruSeq R1 adapter
+
+**Ignored options:** `-u` (UMI length hardcoded to 10nt), `-a` (TruSeq R1 is hardcoded)
+
+> **Note:** `--eclip se` uses the same downstream alignment, PCR collapse, and peak-calling steps as all other modes. Only preprocessing differs.
+
+## Standalone Tools
 
 ### PREPittyPrep.sh
 Standalone preprocessing module. Runs dedup → demux (optional) → fastp and stops before alignment, producing clean, ready-to-map `*_prepped.fastq.gz` files. No genome index required.
@@ -513,6 +488,32 @@ PREPittyPrep.sh -i pool.fastq.gz -b barcodes.txt -u 7 --geo -o my_GEO
 ```
 
 > **Note:** `PREPittyPrep.sh` output is fully compatible with `MAPittyMap.sh` and `CLIPittyClip.sh -d` for downstream alignment.
+
+---
+
+### MAPittyMap.sh
+Standalone mapping module for aligning FASTQ files to a reference genome.
+
+**Required inputs:**
+- `-i <path>`: Input FASTQ file (gzipped)
+- `-x <path>`: Path to genome index directory
+
+**Key options:**
+- `-t <int>`: Number of threads (default: 1)
+- `-m, --mapper <star|bowtie2>`: Alignment tool (default: star)
+- `-o <path>`: Output directory
+- `-w, --wizard`: Launch interactive configuration wizard
+
+```bash
+# Using STAR
+MAPittyMap.sh -i reads.fastq.gz -x /path/to/star_index -t 8 -m star
+
+# Using Bowtie2
+MAPittyMap.sh -i reads.fastq.gz -x /path/to/bt2_index -t 8 -m bowtie2
+
+# Interactive wizard mode for custom aligner settings
+MAPittyMap.sh -i reads.fastq.gz -x /path/to/star_index -t 8 -w
+```
 
 ---
 
