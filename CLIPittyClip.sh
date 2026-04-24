@@ -979,7 +979,7 @@ if [[ "$DEMUX" == "yes" ]]; then
     if [[ "$DEDUP_MODE" == "true" ]]; then
         console_msg "\n[DEDUPLICATING]"
         print_section_item "Deduplicating Pooled Reads"
-        DEDUP_OUT="pooled_dedup.fastq.gz"
+        DEDUP_OUT="pooled_dedup.fastq"
         if run_dedup "$INPUT_FILE" "$DEDUP_OUT"; then
             WORK_INPUT="$DEDUP_OUT"
             print_section_item "Deduplication Complete"
@@ -1003,8 +1003,8 @@ if [[ "$DEMUX" == "yes" ]]; then
     print_section_item "Demultiplexing Complete"
     
     # Cleanup dedup temp file
-    if [[ -f "pooled_dedup.fastq.gz" ]]; then
-        rm -f "pooled_dedup.fastq.gz"
+    if [[ -f "pooled_dedup.fastq" ]]; then
+        rm -f "pooled_dedup.fastq"
         log_info "Cleaned up pooled dedup temp file."
     fi
     
@@ -1019,25 +1019,19 @@ if [[ "$DEMUX" == "yes" ]]; then
     
     total_reads=0
     # Calculate totals first
-    for sample in demux_fastq/*.fastq.gz; do
+    for sample in demux_fastq/*.fastq; do
         if [ -f "$sample" ]; then
-            # Fast counting using zcat/wc is slow for huge files.
-            # But fastp json output from demux might be better?
-            # Cutadapt demux doesn't give easy per-sample JSON unless parsed.
-            # We will use wc -l / 4. 
-            # Ideally this should be optimized but for now is robust.
-            # Actually, `fastq` is 4 lines per read.
-            lines=$(gzip -dc "$sample" | wc -l)
+            lines=$(wc -l < "$sample")
             count=$((lines / 4))
             total_reads=$((total_reads + count))
         fi
     done
 
     # Print table
-    for sample in demux_fastq/*.fastq.gz; do
+    for sample in demux_fastq/*.fastq; do
         if [ -f "$sample" ]; then
-            sample_name=$(basename "$sample" .fastq.gz)
-            lines=$(gzip -dc "$sample" | wc -l)
+            sample_name=$(basename "$sample" .fastq)
+            lines=$(wc -l < "$sample")
             count=$((lines / 4))
             
             if [ "$total_reads" -gt 0 ]; then
@@ -1055,7 +1049,7 @@ if [[ "$DEMUX" == "yes" ]]; then
     console_msg "  Total Processed: $total_reads reads"
     
     # Check for unknown samples and notify
-    if [[ -f "demux_fastq/unknown.fastq.gz" ]]; then
+    if [[ -f "demux_fastq/unknown.fastq" ]]; then
         console_msg "  ${YELLOW}Note: 'unknown' samples will not be included in batch analysis.${NC}"
     fi
 
@@ -1092,13 +1086,13 @@ if [[ "$DEMUX" == "yes" ]]; then
     EXTRA_FLAGS="$EXTRA_FLAGS --child"
 
     # Get sample count for progress (excluding unknown)
-    total_samples=$(ls demux_fastq/*.fastq.gz 2>/dev/null | grep -v "/unknown.fastq.gz" | wc -l | tr -d ' ')
+    total_samples=$(ls demux_fastq/*.fastq 2>/dev/null | grep -v "/unknown.fastq" | wc -l | tr -d ' ')
     current_sample=0
 
     # Loop through all generated files (skip unknown)
-    for sample in demux_fastq/*.fastq.gz; do
+    for sample in demux_fastq/*.fastq; do
         if [ -f "$sample" ]; then
-            sample_name=$(basename "$sample" .fastq.gz)
+            sample_name=$(basename "$sample" .fastq)
             
             # Skip unknown samples
             if [[ "$sample_name" == "unknown" ]]; then
@@ -1201,8 +1195,8 @@ if [[ "$DEMUX" == "yes" ]]; then
     DIR_IND_PEAK_LOGS="REPORTS/PEAK/INDIVIDUAL_SAMPLES"
     
     # Create Central Output Directories (CTK folders created conditionally during aggregation)
-    mkdir -p "$OUTPUT_ROOT/$DIR_DEMUX" \
-             "$OUTPUT_ROOT/$DIR_BAM" \
+    # Note: 0_DEMUX_FASTQ is only created when -k (--keep) is passed
+    mkdir -p "$OUTPUT_ROOT/$DIR_BAM" \
              "$OUTPUT_ROOT/$DIR_BED" \
              "$OUTPUT_ROOT/$DIR_BG" \
              "$OUTPUT_ROOT/$DIR_PEAKS/SAMPLE_PEAKS" \
@@ -1233,9 +1227,9 @@ if [[ "$DEMUX" == "yes" ]]; then
     
     # Collect files from analysis directories
     count=0
-    for sample in demux_fastq/*.fastq.gz; do
+    for sample in demux_fastq/*.fastq; do
         if [ -f "$sample" ]; then
-            sample_name=$(basename "$sample" .fastq.gz)
+            sample_name=$(basename "$sample" .fastq)
             
             # Skip unknown samples
             [[ "$sample_name" == "unknown" ]] && continue
@@ -1351,9 +1345,15 @@ if [[ "$DEMUX" == "yes" ]]; then
         fi
     done
     
-    # Move Demux Fastqs
-    mv demux_fastq/*.fastq.gz "$OUTPUT_ROOT/$DIR_DEMUX/" 2>/dev/null
-    rmdir demux_fastq 2>/dev/null
+    # Demux FASTQs: keep only if -k, otherwise discard (intermediate files)
+    if [[ "$KEEP_INTERMEDIATE" == "yes" ]]; then
+        mkdir -p "$OUTPUT_ROOT/$DIR_DEMUX"
+        mv demux_fastq/* "$OUTPUT_ROOT/$DIR_DEMUX/" 2>/dev/null
+        log_info "Demux FASTQs kept in $OUTPUT_ROOT/$DIR_DEMUX/"
+    else
+        rm -rf demux_fastq
+        log_info "Demux FASTQs discarded (use -k to retain)."
+    fi
     
     if [[ "$count" -eq 0 ]]; then
         log_error "No collapsed BED files collected. Skipping Peak Calling."
@@ -1516,7 +1516,9 @@ if [[ "$DEMUX" == "yes" ]]; then
     # Output Summary
     console_msg "\n[OUTPUT]"
     console_msg "  All results saved to: $OUTPUT_ROOT/"
-    console_msg "  ├── 0_DEMUX_FASTQ/"
+    if [[ "$KEEP_INTERMEDIATE" == "yes" ]]; then
+        console_msg "  ├── 0_DEMUX_FASTQ/"
+    fi
     console_msg "  ├── 1_BAM/"
     console_msg "  ├── 2_COLLAPSED_BED/"
     console_msg "  ├── 3_BEDGRAPH/"
@@ -1579,7 +1581,7 @@ fi
 if [[ "$CHILD_MODE" != "true" ]]; then console_msg "\n[DEDUPLICATING]"; fi
 if [[ "$DEDUP_MODE" == "true" ]]; then
     if [[ "$CHILD_MODE" != "true" ]]; then print_section_item "Deduplicating Reads"; fi
-    DEDUP_OUT="$(pwd)/${BASENAME}_dedup.fastq.gz"
+    DEDUP_OUT="$(pwd)/${BASENAME}_dedup.fastq"
     if run_dedup "$INPUT_FILE" "$DEDUP_OUT"; then
         INPUT_FILE="$DEDUP_OUT"
         if [[ "$CHILD_MODE" != "true" ]]; then print_section_item "Deduplication Complete"; fi
@@ -1611,12 +1613,12 @@ log_info "Working directory: $(pwd)"
 run_fastp "$INPUT_FILE" "$BASENAME" "$UMI_LEN" "$ADAPTER_3" "$THREADS" "$SAMPLE_SIZE" "$ECLIP_MODE" "$BC_LEN" "$SPACER_LEN"
 
 # 1b. ncRNA Pre-filtering (if enabled and index exists)
-CLEANED_FASTQ="${BASENAME}_cleaned.fastq.gz"
+CLEANED_FASTQ="${BASENAME}_cleaned.fastq"
 if [[ "$FILTER_NCRNA" == "true" ]]; then
     NCRNA_INDEX_DIR=$(check_ncrna_index "$GENOME_INDEX")
     if [[ -n "$NCRNA_INDEX_DIR" ]]; then
         NCRNA_OUTPUT_DIR="OTHERS/ncRNA_Mapping"
-        NCRNA_UNMAPPED="${BASENAME}_ncrna_filtered.fastq.gz"
+        NCRNA_UNMAPPED="${BASENAME}_ncrna_filtered.fastq"
         run_ncrna_filter "$CLEANED_FASTQ" "$NCRNA_UNMAPPED" "$NCRNA_OUTPUT_DIR" "$NCRNA_INDEX_DIR" "$THREADS" "$BASENAME"
         # Use filtered reads for genome mapping
         CLEANED_FASTQ="$NCRNA_UNMAPPED"
@@ -1854,7 +1856,7 @@ if [[ "$KEEP_INTERMEDIATE" != "yes" ]]; then
         cd ..
         rm -rf "${BASENAME}_analysis"
     else
-        rm -f "${BASENAME}_cleaned.fastq.gz" "${BASENAME}_raw.bed" "${BASENAME}_parsed.bed"
+        rm -f "${BASENAME}_cleaned.fastq" "${BASENAME}_raw.bed" "${BASENAME}_parsed.bed"
     fi
 else
     # Even if keeping intermediates, we must return to base dir in single-mode

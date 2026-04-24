@@ -6,7 +6,8 @@
 # Requires: lib/utils.sh (log_info, log_warning, log_error must be defined)
 #
 # Public API:
-#   run_dedup <input.fastq.gz> <output.fastq.gz>
+#   run_dedup <input.fastq[.gz]> <output.fastq> [compress_output=false]
+#     Emits plain .fastq by default; pass "true" as $3 to gzip the output.
 #
 # Internal helpers (also used by run_fastp in modules.sh):
 #   _fastq_collapse_core <input.fastq> <output.fastq>
@@ -51,38 +52,53 @@ _fastq_collapse_core() {
 # Public: run_dedup
 # ═══════════════════════════════════════════════════════════════════════════
 
-# run_dedup — deduplicate a (gzipped or plain) FASTQ, write gzipped output
-# Handles gzip decompression/recompression; delegates core logic to _fastq_collapse_core.
+# run_dedup — deduplicate a (gzipped or plain) FASTQ
+# Accepts .fastq or .fastq.gz input (auto-decompresses if needed).
+# Default output: plain .fastq (no gzip overhead on intermediate files).
+# Pass compress_output="true" as $3 only when a gzipped handoff product is needed.
 # Returns 0 on success, 1 on failure (caller handles fallback + messaging).
 #
-# Args: $1 = input file  (.fastq.gz or .fastq)
-#       $2 = output file (full path, must end in .fastq.gz)
+# Args: $1 = input file        (.fastq.gz or .fastq)
+#       $2 = output file       (.fastq by default; .fastq.gz when compress_output=true)
+#       $3 = compress_output   (optional; "true" to gzip the output; default: "false")
 run_dedup() {
     local input_file="$1"
     local output_file="$2"
+    local compress_output="${3:-false}"
 
     log_info "Deduplication: starting..."
-    local temp_out="${output_file%.gz}"   # uncompressed intermediate
+
+    # Determine plain output path (strip .gz suffix when caller wants compression)
+    local plain_out
+    if [[ "$compress_output" == "true" ]]; then
+        plain_out="${output_file%.gz}"
+    else
+        plain_out="$output_file"
+    fi
 
     local exit_code
     if [[ "$input_file" == *.gz ]]; then
-        local temp_in="${output_file%.fastq.gz}_input_temp.fastq"
+        local temp_in="${plain_out}_input_temp.fastq"
         gzip -dc "$input_file" > "$temp_in"
-        _fastq_collapse_core "$temp_in" "$temp_out"
+        _fastq_collapse_core "$temp_in" "$plain_out"
         exit_code=$?
         rm -f "$temp_in"
     else
-        _fastq_collapse_core "$input_file" "$temp_out"
+        _fastq_collapse_core "$input_file" "$plain_out"
         exit_code=$?
     fi
 
-    if [[ $exit_code -eq 0 && -s "$temp_out" ]]; then
-        gzip -c "$temp_out" > "$output_file"
-        rm -f "$temp_out"
-        log_info "Deduplication complete: $output_file"
+    if [[ $exit_code -eq 0 && -s "$plain_out" ]]; then
+        if [[ "$compress_output" == "true" ]]; then
+            gzip -c "$plain_out" > "$output_file"
+            rm -f "$plain_out"
+            log_info "Deduplication complete (gzipped): $output_file"
+        else
+            log_info "Deduplication complete: $plain_out"
+        fi
         return 0
     else
-        rm -f "$temp_out" "$output_file"
+        rm -f "$plain_out" "$output_file"
         log_warning "Deduplication failed or produced empty output."
         return 1
     fi

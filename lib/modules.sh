@@ -149,7 +149,7 @@ function run_demultiplexing {
         -m 1 \
         --action=none \
         -g file:$fasta_barcodes \
-        -o \"demux_fastq/{name}.fastq.gz\" \
+        -o \"demux_fastq/{name}.fastq\" \
         $work_input \
         -j ${THREADS:-1}"
     
@@ -157,7 +157,7 @@ function run_demultiplexing {
     execute_cmd "$cmd"
 
     # Check outputs
-    count=$(ls demux_fastq/*.fastq.gz 2>/dev/null | wc -l)
+    count=$(ls demux_fastq/*.fastq 2>/dev/null | wc -l)
     if [ "$count" -eq 0 ]; then
         log_error "Demultiplexing failed. No output files created."
         exit 1
@@ -171,7 +171,105 @@ function run_demultiplexing {
     fi
 }
 
-# Filter BAM to canonical chromosomes only (chr1-22, X, Y, M)
+# run_geo_demux — GEO mode: raw barcode-based splitting, no read modification
+# Splits pooled FASTQ by barcode (cutadapt --action=none) and writes gzipped
+# per-sample files. No dedup, no fastp. Reads written exactly as received.
+# Barcode is found by cutadapt's unanchored 5' search, which tolerates a UMI
+# prefix of UMI_LEN bases before the barcode (same behavior as standard demux).
+#
+# Args: $1 = input_fastq  (.fastq.gz or .fastq)
+#       $2 = barcode_file (name<TAB>sequence format)
+#       $3 = out_dir      (output directory for split files)
+#       $4 = umi_offset   (UMI length; informational only for logging; default: 0)
+#       $5 = allowed_mm   (mismatches; default: 1)
+run_geo_demux() {
+    local input_fastq="$1"
+    local barcode_file="$2"
+    local out_dir="$3"
+    local umi_offset="${4:-0}"
+    local allowed_mm="${5:-1}"
+
+    log_info "GEO demux: raw split (no read modification)"
+    log_info "UMI offset: ${umi_offset}bp | Mismatches: $allowed_mm"
+
+    # Barcode collision check
+    local checker_script="${SCRIPT_DIR}/check_barcodes.sh"
+    if [[ -x "$checker_script" ]]; then
+        "$checker_script" -f "$barcode_file" -m "$allowed_mm"
+        if [[ $? -ne 0 ]]; then
+            log_error "Barcode collisions detected. Aborting."
+            exit 1
+        fi
+        log_info "Barcode safety check PASSED."
+    fi
+
+    # Calculate cutadapt error rate
+    local first_seq
+    first_seq=$(awk '!/^#/{print $2; exit}' "$barcode_file")
+    local bc_len=${#first_seq}
+    local error_rate
+    error_rate=$(awk "BEGIN {print $allowed_mm / $bc_len}")
+    [[ "$allowed_mm" -eq 0 ]] && error_rate=0
+    log_info "Cutadapt error rate: $error_rate ($allowed_mm errors in ${bc_len}bp)"
+
+    mkdir -p "$out_dir"
+
+    # Convert barcodes to FASTA for cutadapt
+    local fasta_barcodes="${out_dir}/.barcodes_geo.fasta"
+    awk '!/^#/{print ">"$1"\n"$2}' "$barcode_file" > "$fasta_barcodes"
+
+    # Run cutadapt: --action=none preserves reads exactly as received
+    # Output is gzipped (.fastq.gz) since these are final GEO deposit files
+    local cmd="cutadapt \
+        -e $error_rate --no-indels \
+        -m 1 \
+        --action=none \
+        -g file:$fasta_barcodes \
+        -o \"${out_dir}/{name}.fastq.gz\" \
+        $input_fastq \
+        -j ${THREADS:-1}"
+
+    log_info "Running GEO demux..."
+    execute_cmd "$cmd"
+    local demux_exit=$?
+    rm -f "$fasta_barcodes"
+
+    local count
+    count=$(ls "${out_dir}"/*.fastq.gz 2>/dev/null | wc -l)
+    if [[ $demux_exit -ne 0 || "$count" -eq 0 ]]; then
+        log_error "GEO demux failed. No output files created."
+        exit 1
+    fi
+    log_info "GEO demux complete. Created $count files in ${out_dir}/"
+
+    # Print summary table
+    local total_reads=0
+    for f in "${out_dir}"/*.fastq.gz; do
+        [[ -f "$f" ]] || continue
+        local lines
+        lines=$(gzip -dc "$f" | wc -l)
+        total_reads=$((total_reads + lines / 4))
+    done
+
+    echo ""
+    printf "  %-25s %-12s %s\n" "Sample" "Reads" "% of Total"
+    echo "  -----------------------------------------------"
+    for f in "${out_dir}"/*.fastq.gz; do
+        [[ -f "$f" ]] || continue
+        local sname
+        sname=$(basename "$f" .fastq.gz)
+        local lines
+        lines=$(gzip -dc "$f" | wc -l)
+        local count=$((lines / 4))
+        local pct
+        pct=$(awk "BEGIN {printf \"%.1f\", ($total_reads > 0) ? ($count / $total_reads) * 100 : 0}")
+        printf "  %-25s %-12s %s%%\n" "$sname" "$count" "$pct"
+    done
+    echo "  -----------------------------------------------"
+    echo "  Total: $total_reads reads"
+}
+
+
 # Removes contigs like GL000220.1, KI270733.1, etc.
 # This reduces data size and improves downstream processing speed
 filter_canonical_chromosomes() {
@@ -307,7 +405,7 @@ run_fastp() {
     #==========================================================================
     log_info "Standard mode: fastp adapter trimming"
 
-    local fastp_cmd="fastp -i ${input_file} -o ${output_prefix}_cleaned.fastq.gz \
+    local fastp_cmd="fastp -i ${input_file} -o ${output_prefix}_cleaned.fastq \
         --thread ${threads} \
         --length_required 16 \
         --average_qual 30 \
@@ -353,11 +451,11 @@ run_ncrna_filter() {
     update_status "ncRNA Filter"
     
     # Run Bowtie2 mapping to ncRNA index
-    # --un-gz: write unmapped reads to file (these go to genome mapping)
+    # --un: write unmapped reads to plain .fastq (these go to genome mapping)
     # Mapped reads are saved to BAM for QC
     local bt2_cmd="bowtie2 -x \"${index_dir}/ncrna\" \
         -U \"$input_fastq\" \
-        --un-gz \"$output_unmapped\" \
+        --un \"$output_unmapped\" \
         -p $threads \
         2> \"$ncrna_stats\" \
         | samtools view -bS - > \"$ncrna_bam\""
