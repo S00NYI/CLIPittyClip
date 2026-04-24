@@ -10,6 +10,7 @@
 # Resolve script directory to source libraries
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/lib/utils.sh"
+source "${SCRIPT_DIR}/lib/dedup.sh"
 source "${SCRIPT_DIR}/lib/modules.sh"
 source "${SCRIPT_DIR}/lib/wizard.sh"
 
@@ -977,7 +978,7 @@ if [[ "$DEMUX" == "yes" ]]; then
     # 1a. Deduplication (if enabled)
     if [[ "$DEDUP_MODE" == "true" ]]; then
         console_msg "\n[DEDUPLICATING]"
-        print_section_item "Deduplicating Pooled Reads (fastq2collapse.pl)"
+        print_section_item "Deduplicating Pooled Reads"
         DEDUP_OUT="pooled_dedup.fastq.gz"
         if run_dedup "$INPUT_FILE" "$DEDUP_OUT"; then
             WORK_INPUT="$DEDUP_OUT"
@@ -1577,7 +1578,7 @@ fi
 # Runs based on DEDUP_MODE only. CHILD_MODE controls console output, not execution.
 if [[ "$CHILD_MODE" != "true" ]]; then console_msg "\n[DEDUPLICATING]"; fi
 if [[ "$DEDUP_MODE" == "true" ]]; then
-    if [[ "$CHILD_MODE" != "true" ]]; then print_section_item "Deduplicating Reads (fastq2collapse.pl)"; fi
+    if [[ "$CHILD_MODE" != "true" ]]; then print_section_item "Deduplicating Reads"; fi
     DEDUP_OUT="$(pwd)/${BASENAME}_dedup.fastq.gz"
     if run_dedup "$INPUT_FILE" "$DEDUP_OUT"; then
         INPUT_FILE="$DEDUP_OUT"

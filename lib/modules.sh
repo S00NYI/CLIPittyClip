@@ -203,153 +203,11 @@ filter_canonical_chromosomes() {
     fi
 }
 
-# Detect eCLIP UMI length from first read of FASTQ file
-# Returns the detected UMI length (e.g., 5 or 10)
-detect_eclip_umi_length() {
-    local input_fastq="$1"
-    local user_umi_len="${2:-0}"
-    
-    # Get first read header and extract UMI (before first colon)
-    local first_header
-    if [[ "$input_fastq" == *.gz ]]; then
-        first_header=$(gunzip -c "$input_fastq" | head -1)
-    else
-        first_header=$(head -1 "$input_fastq")
-    fi
-    
-    # Parse: @UMI:REST_OF_ID -> extract UMI
-    local id_part="${first_header%% *}"  # Remove comment after space
-    local id_no_at="${id_part#@}"        # Remove leading @
-    local umi="${id_no_at%%:*}"          # Get part before first colon
-    local detected_len=${#umi}
-    
-    if [[ "$user_umi_len" -gt 0 && "$detected_len" -ne "$user_umi_len" ]]; then
-        log_warning "Detected UMI length ($detected_len) differs from specified ($user_umi_len). Using detected."
-    fi
-    
-    log_info "eCLIP UMI length detected: $detected_len nt"
-    echo "$detected_len"
-}
-
-# Reformat eCLIP: Move UMI from header to sequence (CTK documentation workflow)
-# This is required for correct fastq2collapse.pl behavior
-# Input:  @UMI:READ_ID
-#         SEQUENCE
-# Output: @READ_ID
-#         UMI+SEQUENCE (UMI prepended)
-#         +
-#         UMI_QUAL+QUAL (high quality prepended)
-reformat_eclip_umi_to_sequence() {
-    local input_fastq="$1"
-    local output_fastq="$2"
-    local umi_len="$3"
-    
-    log_info "Moving eCLIP UMI from header to sequence (CTK documentation workflow)..."
-    log_info "UMI length: $umi_len nt"
-    
-    # Generate quality string for UMI (I = Phred 40, high quality)
-    local umi_qual=$(printf 'I%.0s' $(seq 1 $umi_len))
-    
-    # Write to temp file first, then gzip (avoids macOS pipe buffering issues)
-    local temp_output="${output_fastq%.gz}"
-    
-    gunzip -c "$input_fastq" | awk -v umi_len="$umi_len" -v umi_qual="$umi_qual" '
-    BEGIN { OFS="" }
-    {
-        if (NR % 4 == 1) {
-            # Header line: @UMI:READ_ID COMMENT
-            n = split($0, parts, " ")
-            id_part = parts[1]
-            comment = ""
-            if (n > 1) { for (i=2; i<=n; i++) comment = comment " " parts[i] }
-            
-            id_no_at = substr(id_part, 2)
-            colon_pos = index(id_no_at, ":")
-            if (colon_pos > 0) {
-                umi = substr(id_no_at, 1, colon_pos-1)
-                rest = substr(id_no_at, colon_pos+1)
-                # Store UMI for sequence line, output clean header
-                saved_umi = umi
-                print "@" rest comment
-            } else {
-                saved_umi = ""
-                print $0
-            }
-        } else if (NR % 4 == 2) {
-            # Sequence line: prepend UMI
-            print saved_umi $0
-        } else if (NR % 4 == 0) {
-            # Quality line: prepend UMI quality scores
-            print umi_qual $0
-        } else {
-            # + line
-            print $0
-        }
-    }' > "$temp_output"
-    
-    # Explicitly gzip the temp file (creates .gz, removes original)
-    if [[ -s "$temp_output" ]]; then
-        gzip -f "$temp_output"
-    fi
-    
-    if [[ -s "$output_fastq" ]]; then
-        log_info "UMI moved to sequence: $output_fastq"
-    else
-        log_error "UMI reformat failed - output is empty"
-        return 1
-    fi
-}
-
-# Strip UMI from sequence and attach to read ID after collapse
-# Uses CTK stripBarcode.pl to extract UMI from 5' end of sequence
-# Result: @READ_ID#count#UMI (CTK-compatible format)
-strip_eclip_barcode() {
-    local input_fastq="$1"
-    local output_fastq="$2"
-    local umi_len="$3"
-    
-    log_info "Stripping UMI from sequence with stripBarcode.pl (len=$umi_len)..."
-    
-    stripBarcode.pl -format fastq -len "$umi_len" "$input_fastq" - 2>> "${LOG_FILE}" | gzip > "$output_fastq"
-    
-    if [[ -s "$output_fastq" ]]; then
-        log_info "UMI stripped and attached to read ID: $output_fastq"
-    else
-        log_error "stripBarcode.pl failed - output is empty"
-        return 1
-    fi
-}
-
-# 1a. Deduplication (standalone step)
-# Runs fastq2collapse.pl on input, writes deduplicated reads to output_file.
-# Returns 0 on success, 1 on failure (caller handles fallback + messaging).
-run_dedup() {
-    local input_file="$1"
-    local output_file="$2"   # full path to output .fastq.gz
-
-    log_info "Deduplication: Running fastq2collapse.pl..."
-    local temp_out="${output_file%.gz}"  # uncompressed intermediate
-
-    if [[ "$input_file" == *.gz ]]; then
-        local temp_in="${output_file%.fastq.gz}_input_temp.fastq"
-        gzip -dc "$input_file" > "$temp_in"
-        fastq2collapse.pl "$temp_in" "$temp_out" 2>> "${LOG_FILE}"
-        rm -f "$temp_in"
-    else
-        fastq2collapse.pl "$input_file" "$temp_out" 2>> "${LOG_FILE}"
-    fi
-
-    if [[ $? -eq 0 && -s "$temp_out" ]]; then
-        gzip -c "$temp_out" > "$output_file"
-        rm -f "$temp_out"
-        log_info "Deduplication complete: $output_file"
-        return 0
-    else
-        rm -f "$temp_out" "$output_file"
-        log_warning "fastq2collapse.pl failed or produced empty output."
-        return 1
-    fi
-}
+# ── Deduplication functions moved to lib/dedup.sh ───────────────────────────
+# run_dedup(), _fastq_collapse_core(), detect_eclip_umi_length(),
+# reformat_eclip_umi_to_sequence(), strip_eclip_barcode()
+# are defined in lib/dedup.sh, sourced by CLIPittyClip.sh directly.
+# ─────────────────────────────────────────────────────────────────────────────
 
 # 1b. Adapter trimming and quality filtering with fastp
 run_fastp() {
@@ -399,9 +257,9 @@ run_fastp() {
         local collapsed_file="${output_prefix}_collapsed.fastq"
         local collapsed_file_gz="${output_prefix}_collapsed.fastq.gz"
         gzip -dc "$umi_seq_file" > "${output_prefix}_umi_temp.fastq"
-        fastq2collapse.pl "${output_prefix}_umi_temp.fastq" "$collapsed_file" 2>> "${LOG_FILE}"
+        _fastq_collapse_core "${output_prefix}_umi_temp.fastq" "$collapsed_file"
         if [[ ! -s "$collapsed_file" ]]; then
-            log_error "fastq2collapse.pl failed"
+            log_error "Deduplication (eCLIP collapse) failed"
             exit 1
         fi
         gzip -c "$collapsed_file" > "$collapsed_file_gz"
