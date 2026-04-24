@@ -1862,7 +1862,13 @@ if [[ "$KEEP_INTERMEDIATE" != "yes" ]]; then
             log_info "Removed dedup temp file: $(basename "$DEDUP_OUT")"
         fi
     else
+        # Child mode (directory batch): cleanup from inside analysis dir
         rm -f "${BASENAME}_cleaned.fastq" "${BASENAME}_raw.bed" "${BASENAME}_parsed.bed"
+        # DEDUP_OUT is an absolute path (created in parent dir before cd); remove it too
+        if [[ -n "$DEDUP_OUT" && -f "$DEDUP_OUT" ]]; then
+            rm -f "$DEDUP_OUT"
+            log_info "Removed dedup temp file: $(basename "$DEDUP_OUT")"
+        fi
     fi
 else
     # Even if keeping intermediates, we must return to base dir in single-mode
