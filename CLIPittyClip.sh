@@ -789,7 +789,7 @@ if [[ -n "$INPUT_DIR" ]]; then
                 peak_log="${peak_dir}_homer.log"
             else
                 # CTK: copy the flat BED output into a named subdirectory
-                local ctk_peak_bed="${sample_out}/${sample_name}_peaks_raw.bed"
+                ctk_peak_bed="${sample_out}/${sample_name}_peaks_raw.bed"
                 if [[ -f "$ctk_peak_bed" ]]; then
                     mkdir -p "$OUTPUT_ROOT/$DIR_PEAKS/SAMPLE_PEAKS/${sample_name}_peaks"
                     cp "$ctk_peak_bed" "$OUTPUT_ROOT/$DIR_PEAKS/SAMPLE_PEAKS/${sample_name}_peaks/"
@@ -1250,7 +1250,7 @@ if [[ "$DEMUX" == "yes" ]]; then
                     peak_log="${peak_dir}_homer.log"
                 else
                     # CTK: copy the flat BED output into a named subdirectory
-                    local ctk_peak_bed="${analysis_dir}/${sample_name}_peaks_raw.bed"
+                    ctk_peak_bed="${analysis_dir}/${sample_name}_peaks_raw.bed"
                     if [[ -f "$ctk_peak_bed" ]]; then
                         mkdir -p "$OUTPUT_ROOT/$DIR_PEAKS/SAMPLE_PEAKS/${sample_name}_peaks"
                         cp "$ctk_peak_bed" "$OUTPUT_ROOT/$DIR_PEAKS/SAMPLE_PEAKS/${sample_name}_peaks/"

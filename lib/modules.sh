@@ -334,7 +334,7 @@ validate_eclip_input() {
     # --- Step 1: Read first 1000 headers ---
     local headers
     if [[ "$fastq_file" == *.gz ]]; then
-        headers=$(zcat "$fastq_file" 2>/dev/null | awk 'NR%4==1' | head -1000)
+        headers=$(gzip -cd "$fastq_file" 2>/dev/null | awk 'NR%4==1' | head -1000)
     else
         headers=$(awk 'NR%4==1' "$fastq_file" | head -1000)
     fi
