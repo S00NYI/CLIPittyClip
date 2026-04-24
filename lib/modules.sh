@@ -690,9 +690,13 @@ run_mapping_star() {
     update_status "Mapping (STAR)"
     log_info "Starting mapping with STAR..."
 
-    local read_command="gzip -dc"
-    if [[ "$input_fastq" != *.gz ]]; then
-        read_command="cat"
+    # For .fastq.gz: use --readFilesCommand gzip -dc (STAR spawns a decompressor).
+    # For plain .fastq: omit --readFilesCommand entirely so STAR reads the file
+    # directly without spawning a subprocess. Using --readFilesCommand cat forces
+    # STAR into FIFO mode which fails on macOS even with absolute paths.
+    local reads_command_flag=""
+    if [[ "$input_fastq" == *.gz ]]; then
+        reads_command_flag="--readFilesCommand gzip -dc"
     fi
 
     # Create temp directory for STAR (prevents FIFO errors on exFAT/NTFS drives)
@@ -703,7 +707,7 @@ run_mapping_star() {
     local cmd="STAR --runThreadN ${threads} \
         --genomeDir ${genome_dir} \
         --readFilesIn ${input_fastq} \
-        --readFilesCommand ${read_command} \
+        ${reads_command_flag} \
         --outFileNamePrefix ${output_prefix}. \
         --outTmpDir ${star_tmp}/STARtmp \
         --outSAMtype BAM SortedByCoordinate \
