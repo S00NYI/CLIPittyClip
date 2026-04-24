@@ -265,7 +265,7 @@ if [[ -z "$SKIP_CONDA" ]]; then
         htslib \
         bowtie2 \
         bwa \
-        star \
+        "star=2.7.10b" \   # 2.7.11b breaks subprocess spawning on macOS Tahoe via Rosetta
         cutadapt \
         fastp \
         seqkit \
