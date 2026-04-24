@@ -611,16 +611,8 @@ if [[ -n "$INPUT_DIR" ]]; then
             sample_name="${sample_name%.fastq}"
             sample_name="${sample_name%.fq}"
 
-            # Auto-gzip plain .fastq/.fq files (preserve originals)
+            # Pass sample file directly — pipeline accepts plain .fastq natively (v3.2.0)
             sample_input="$sample"
-            gzip_tmp=""
-            if [[ "$sample" != *.gz ]]; then
-                console_msg "  > Compressing $(basename "$sample") for processing..."
-                gzip_tmp="${sample_name}_tmp_input.fastq.gz"
-                gzip -c "$sample" > "$gzip_tmp"
-                sample_input="$gzip_tmp"
-                log_info "Auto-gzipped $sample -> $gzip_tmp (original preserved)"
-            fi
 
             printf "  %2d/%-2d %-20s : " "$current_sample" "$total_samples" "$sample_name"
 
@@ -645,12 +637,6 @@ if [[ -n "$INPUT_DIR" ]]; then
             else
                 echo -e "${RED}FAILED${NC}"
                 log_error ">>> Sample $sample_name analysis FAILED."
-            fi
-
-            # Cleanup gzip temp if created
-            if [[ -n "$gzip_tmp" && -f "$gzip_tmp" ]]; then
-                rm -f "$gzip_tmp"
-                log_info "Removed temp gzip: $gzip_tmp"
             fi
         fi
     done
@@ -957,20 +943,10 @@ if [[ -n "$INPUT_DIR" ]]; then
     exit 0
 fi
 
-# ── Auto-gzip plain .fastq/.fq files for -i mode ────────────────────────────────
+# Auto-gzip removed (v3.2.0): pipeline now accepts plain .fastq throughout.
+# All internal steps (dedup, fastp, demux, STAR) handle both .fastq and .fastq.gz natively.
 GLOBAL_GZIP_TMP=""
-if [[ -n "$INPUT_FILE" ]] && [[ "$INPUT_FILE" != *.gz ]]; then
-    tmp_base=$(basename "$INPUT_FILE")
-    tmp_base="${tmp_base%.fastq}"
-    tmp_base="${tmp_base%.fq}"
-    
-    console_msg "\n[PRE-PROCESSING]"
-    console_msg "  > Compressing $(basename "$INPUT_FILE") for processing..."
-    GLOBAL_GZIP_TMP="$(pwd)/${tmp_base}_tmp_input.fastq.gz"
-    gzip -c "$INPUT_FILE" > "$GLOBAL_GZIP_TMP"
-    INPUT_FILE="$GLOBAL_GZIP_TMP"
-    log_info "Auto-gzipped original input -> $GLOBAL_GZIP_TMP (original preserved)"
-fi
+
 
 # 0b. Demultiplexing (Recursive Branch)
 if [[ "$DEMUX" == "yes" ]]; then
