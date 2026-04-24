@@ -66,7 +66,8 @@ function show_usage {
     echo "  --spacer-len <int>       Spacer length to trim after barcode (default: 0)"
     echo "  -a, --adapter <str>      3' adapter sequence (default: L32)"
     echo "  --no-dedup               Disable FASTQ deduplication (default: ON)"
-    echo "  --eclip                  ENCODE eCLIP mode: UMI in header, uses all eCLIP adapters"
+    echo "  --eclip <pe|se>          eCLIP mode: 'pe' for paired-end (post-eclipdemux R2, UMI in header),
+                                      'se' for single-end seCLIP (raw R1, UMI in sequence)"
     echo ""
     echo "DEMULTIPLEXING OPTIONS (for -i mode):"
     echo "  -b, --barcodes <path>    Barcode file for demultiplexing"
@@ -124,7 +125,7 @@ NOTIFY_MODE="false"
 WIZARD_MODE="false"
 FILTER_NCRNA="false"  # ncRNA filtering is OFF by default; enable with --filter-ncrna
 ALIGNER="star" # Default aligner
-ECLIP_MODE="false"  # ENCODE eCLIP mode (UMI in header, multiple adapters)
+ECLIP_MODE=""       # eCLIP mode: "pe" (paired-end) or "se" (single-end), empty = off
 FILTER_CHR="true"   # Filter to canonical chromosomes (chr1-22, X, Y, M) - default ON
 DEMUX_MISMATCHES="1"   # Default for barcode demultiplexing
 ALIGN_MISMATCHES="2"   # Default for STAR --outFilterMismatchNmax
@@ -195,7 +196,7 @@ while [[ $# -gt 0 ]]; do
         --align-mismatches) ALIGN_MISMATCHES="$2"; shift 2 ;;
         --no-dedup) DEDUP_MODE="false"; shift ;;
         --filter-ncrna) FILTER_NCRNA="true"; shift ;;
-        --eclip) ECLIP_MODE="true"; shift ;;
+        --eclip) ECLIP_MODE="$2"; shift 2 ;;
         --no-chr-filter) FILTER_CHR="false"; shift ;;
         --notification) NOTIFY_MODE="true"; shift ;;
         --child) CHILD_MODE="true"; shift ;;
@@ -285,6 +286,13 @@ else
     LOG_FILE="$(pwd)/detailed_output.log"
     # Overwrite if exists
     > "${LOG_FILE}"
+fi
+
+# Validate --eclip argument value
+if [[ -n "$ECLIP_MODE" ]] && [[ "$ECLIP_MODE" != "pe" ]] && [[ "$ECLIP_MODE" != "se" ]]; then
+    log_error "--eclip requires 'pe' or 'se' (got: '$ECLIP_MODE'). Usage: --eclip pe  OR  --eclip se"
+    show_usage
+    exit 1
 fi
 
 # Validation: Need either -i or -d (but not both) - skip if wizard already set them
@@ -483,21 +491,33 @@ if [[ "$CHILD_MODE" != "true" ]]; then
     console_msg "Index: $GENOME_INDEX"
     
     # eCLIP Mode Banner
-    if [[ "$ECLIP_MODE" == "true" ]]; then
+    if [[ "$ECLIP_MODE" == "pe" ]]; then
         console_msg "╔══════════════════════════════════════════════════════════════════╗"
-        console_msg "║                     eCLIP MODE ENABLED                           ║"
+        console_msg "║                  eCLIP PAIRED-END MODE ENABLED                   ║"
         console_msg "╠══════════════════════════════════════════════════════════════════╣"
-        console_msg "║  • UMI extraction: DISABLED (UMI already in read header)         ║"
-        console_msg "║  • Adapter trimming: Using 9 standard eCLIP adapters             ║"
-        console_msg "║  • Header reformat: Converting to CTK-compatible format          ║"
+        console_msg "║  • Input: Read 2, post-eclipdemux format (UMI in read header)    ║"
+        console_msg "║  • Adapter trimming: Using eCLIP inline-barcode + TruSeq R2      ║"
+        console_msg "║  • Deduplication: UMI-aware collapse (CTK-compatible)            ║"
         console_msg "╚══════════════════════════════════════════════════════════════════╝"
         if [[ "$UMI_LEN" -gt 0 ]]; then
-            console_msg "[WARNING] eCLIP mode: -u ${UMI_LEN} will be ignored (UMI in header)"
+            console_msg "[WARNING] --eclip pe: -u ${UMI_LEN} will be ignored (UMI length auto-detected from header)"
         fi
         if [[ "$ADAPTER_3" != "GTGTCAGTCACTTCCAGCGG" ]]; then
-            console_msg "[WARNING] eCLIP mode: -a will be ignored (using eCLIP adapters)"
+            console_msg "[WARNING] --eclip pe: -a will be ignored (using eclip_adapters.fa)"
         fi
-        console_msg "Threads: $THREADS | Mode: eCLIP (ENCODE pre-processed)"
+        console_msg "Threads: $THREADS | Mode: eCLIP PE (post-eclipdemux R2)"
+    elif [[ "$ECLIP_MODE" == "se" ]]; then
+        console_msg "╔══════════════════════════════════════════════════════════════════╗"
+        console_msg "║                  eCLIP SINGLE-END MODE ENABLED                   ║"
+        console_msg "╠══════════════════════════════════════════════════════════════════╣"
+        console_msg "║  • Input: Raw Read 1, seCLIP format (UMI in read sequence)       ║"
+        console_msg "║  • UMI length: 10nt (hardcoded, Blue et al. 2022)               ║"
+        console_msg "║  • Adapter: TruSeq R1 (AGATCGGAAGAGCACACGTCTGAACTCCAGTCAC)      ║"
+        console_msg "╚══════════════════════════════════════════════════════════════════╝"
+        if [[ "$ADAPTER_3" != "GTGTCAGTCACTTCCAGCGG" ]]; then
+            console_msg "[WARNING] --eclip se: -a will be ignored (TruSeq R1 adapter is hardcoded)"
+        fi
+        console_msg "Threads: $THREADS | Mode: eCLIP SE (raw seCLIP R1)"
     else
         # Display adapter: show "L32" if default, or full custom sequence
         adapter_display="L32"
@@ -590,7 +610,7 @@ if [[ -n "$INPUT_DIR" ]]; then
     if [[ "$KEEP_INTERMEDIATE" == "yes" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS -k"; fi
     if [[ "$SAMPLE_SIZE" -gt 0 ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --sample $SAMPLE_SIZE"; fi
     EXTRA_FLAGS="$EXTRA_FLAGS -m $ALIGNER"
-    if [[ "$ECLIP_MODE" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --eclip"; fi
+    if [[ -n "$ECLIP_MODE" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --eclip $ECLIP_MODE"; fi
     if [[ "$FILTER_NCRNA" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --filter-ncrna"; fi
     if [[ "$DEDUP_MODE" == "false" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --no-dedup"; fi
     EXTRA_FLAGS="$EXTRA_FLAGS --peak-caller $PEAK_CALLER"
@@ -1048,7 +1068,7 @@ if [[ "$DEMUX" == "yes" ]]; then
     
     # Pass Aligner choice
     EXTRA_FLAGS="$EXTRA_FLAGS -m $ALIGNER"
-    if [[ "$ECLIP_MODE" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --eclip"; fi
+    if [[ -n "$ECLIP_MODE" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --eclip $ECLIP_MODE"; fi
     if [[ "$FILTER_NCRNA" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --filter-ncrna"; fi
     # Pool was already deduped above; tell children to skip dedup
     EXTRA_FLAGS="$EXTRA_FLAGS --no-dedup"
@@ -1553,20 +1573,23 @@ if [[ -n "$EXP_ID" ]]; then
 fi
 
 # ── Deduplication ────────────────────────────────────────────────────────────────
-# Runs based on DEDUP_MODE only. CHILD_MODE controls console output, not execution.
-if [[ "$CHILD_MODE" != "true" ]]; then console_msg "\n[DEDUPLICATING]"; fi
-if [[ "$DEDUP_MODE" == "true" ]]; then
-    if [[ "$CHILD_MODE" != "true" ]]; then print_section_item "Deduplicating Reads"; fi
-    DEDUP_OUT="$(pwd)/${BASENAME}_dedup.fastq"
-    if run_dedup "$INPUT_FILE" "$DEDUP_OUT"; then
-        INPUT_FILE="$DEDUP_OUT"
-        if [[ "$CHILD_MODE" != "true" ]]; then print_section_item "Deduplication Complete"; fi
+# eCLIP modes skip outer run_dedup — deduplication is handled inside each
+# eCLIP preprocessing function as the first step of the processing chain.
+if [[ -z "$ECLIP_MODE" ]]; then
+    if [[ "$CHILD_MODE" != "true" ]]; then console_msg "\n[DEDUPLICATING]"; fi
+    if [[ "$DEDUP_MODE" == "true" ]]; then
+        if [[ "$CHILD_MODE" != "true" ]]; then print_section_item "Deduplicating Reads"; fi
+        DEDUP_OUT="$(pwd)/${BASENAME}_dedup.fastq"
+        if run_dedup "$INPUT_FILE" "$DEDUP_OUT"; then
+            INPUT_FILE="$DEDUP_OUT"
+            if [[ "$CHILD_MODE" != "true" ]]; then print_section_item "Deduplication Complete"; fi
+        else
+            log_warning "Deduplication failed. Using original input."
+            rm -f "$DEDUP_OUT"
+        fi
     else
-        log_warning "Deduplication failed. Using original input."
-        rm -f "$DEDUP_OUT"
+        if [[ "$CHILD_MODE" != "true" ]]; then print_section_item "Deduplication Disabled (--no-dedup)"; fi
     fi
-else
-    if [[ "$CHILD_MODE" != "true" ]]; then print_section_item "Deduplication Disabled (--no-dedup)"; fi
 fi
 
 # ── Section Headers (non-child mode only) ─────────────────────────────────────
@@ -1585,8 +1608,14 @@ cd "${BASENAME}_analysis" || exit 1
 LOG_FILE="${BASENAME}_analysis.log" # redirect log to inside analysis dir
 log_info "Working directory: $(pwd)"
 
-# 1. Preprocessing
-run_fastp "$INPUT_FILE" "$BASENAME" "$UMI_LEN" "$ADAPTER_3" "$THREADS" "$SAMPLE_SIZE" "$ECLIP_MODE" "$BC_LEN" "$SPACER_LEN"
+# 1. Preprocessing — dispatch based on mode
+if   [[ "$ECLIP_MODE" == "pe" ]]; then
+    run_eclip_pe_preprocessing "$INPUT_FILE" "$BASENAME" "$THREADS" "$SAMPLE_SIZE" "$UMI_LEN"
+elif [[ "$ECLIP_MODE" == "se" ]]; then
+    run_eclip_se_preprocessing "$INPUT_FILE" "$BASENAME" "$THREADS" "$SAMPLE_SIZE"
+else
+    run_fastp "$INPUT_FILE" "$BASENAME" "$UMI_LEN" "$ADAPTER_3" "$THREADS" "$SAMPLE_SIZE" "$BC_LEN" "$SPACER_LEN"
+fi
 
 # 1b. ncRNA Pre-filtering (if enabled and index exists)
 CLEANED_FASTQ="${BASENAME}_cleaned.fastq"

@@ -307,7 +307,270 @@ filter_canonical_chromosomes() {
 # are defined in lib/dedup.sh, sourced by CLIPittyClip.sh directly.
 # ─────────────────────────────────────────────────────────────────────────────
 
-# 1b. Adapter trimming and quality filtering with fastp
+# ── eCLIP Input Validation ────────────────────────────────────────────────────
+# validate_eclip_input — checks that the input FASTQ matches the expected eCLIP mode
+# Args: $1 = fastq_file (gzipped or plain)
+#       $2 = expected_mode ("pe" or "se")
+# Exits 1 with a clear error message on any mismatch.
+validate_eclip_input() {
+    local fastq_file="$1"
+    local expected_mode="$2"
+
+    log_info "Validating eCLIP input: $fastq_file (expected mode: $expected_mode)"
+
+    # --- Step 1: Read first 1000 headers ---
+    local headers
+    if [[ "$fastq_file" == *.gz ]]; then
+        headers=$(zcat "$fastq_file" 2>/dev/null | awk 'NR%4==1' | head -1000)
+    else
+        headers=$(awk 'NR%4==1' "$fastq_file" | head -1000)
+    fi
+
+    if [[ -z "$headers" ]]; then
+        log_error "eCLIP input validation failed: could not read headers from $fastq_file"
+        exit 1
+    fi
+
+    # --- Step 2: Detect R1 vs R2 from Illumina comment field ---
+    local r1_count r2_count total_count
+    r1_count=$(echo "$headers" | awk '{n=split($0,a," "); if(n>1 && a[2]~/^1:N:/) count++} END{print count+0}')
+    r2_count=$(echo "$headers" | awk '{n=split($0,a," "); if(n>1 && a[2]~/^2:N:/) count++} END{print count+0}')
+    total_count=$(echo "$headers" | wc -l | tr -d ' ')
+
+    local detected_read_end=""
+    if [[ "$total_count" -gt 0 ]]; then
+        local r1_pct r2_pct
+        r1_pct=$(awk "BEGIN {printf \"%.0f\", ($r1_count / $total_count) * 100}")
+        r2_pct=$(awk "BEGIN {printf \"%.0f\", ($r2_count / $total_count) * 100}")
+        if [[ "$r1_pct" -ge 95 ]]; then
+            detected_read_end="1"
+        elif [[ "$r2_pct" -ge 95 ]]; then
+            detected_read_end="2"
+        fi
+    fi
+
+    if [[ -z "$detected_read_end" ]]; then
+        log_error "eCLIP input validation failed: could not determine R1 or R2 from read headers (checked $total_count headers; ${r1_count} matched 1:N:, ${r2_count} matched 2:N:). Headers must contain a standard Illumina comment field (e.g. 1:N:0:... or 2:N:0:...). Check your FASTQ source."
+        exit 1
+    fi
+    log_info "Detected read end: R${detected_read_end} (from ${total_count} headers)"
+
+    # --- Step 3: Detect UMI location from first header ---
+    local first_header
+    first_header=$(echo "$headers" | head -1)
+    local read_name="${first_header%% *}"   # everything before first space
+    local read_name_no_at="${read_name#@}"  # strip leading @
+    local token0="${read_name_no_at%%:*}"   # token before first colon
+
+    local umi_location="sequence"
+    local detected_umi_len=0
+    if [[ "${#token0}" -ge 5 && "${#token0}" -le 10 ]] && [[ "$token0" =~ ^[ACGTN]+$ ]]; then
+        umi_location="header_colon"
+        detected_umi_len="${#token0}"
+    elif [[ "$read_name_no_at" =~ _[ACGTN]{5,10}$ ]]; then
+        umi_location="header_underscore"
+    fi
+    log_info "Detected UMI location: $umi_location"
+
+    # --- Step 4: Validate against expected mode ---
+    if [[ "$expected_mode" == "pe" ]]; then
+        if [[ "$detected_read_end" == "1" ]]; then
+            log_error "Input validation failed for --eclip pe: detected Read 1 input. PE eCLIP analysis requires Read 2, which contains the cross-link site at its 5' end. Please supply the corresponding R2 fastq file. See README section eCLIP-PE."
+            exit 1
+        fi
+        # detected_read_end == "2" from here
+        if [[ "$umi_location" == "sequence" ]]; then
+            log_error "Input validation failed for --eclip pe: detected R2 read with UMI in sequence (raw/pre-eclipdemux format). CLIPittyClip --eclip pe requires post-eclipdemux files where the UMI has been moved to the read header by eclipdemux. Please obtain the post-eclipdemux R2 fastq from ENCODE. See README section eCLIP-PE."
+            exit 1
+        elif [[ "$umi_location" == "header_underscore" ]]; then
+            log_error "Input validation failed for --eclip pe: detected umi_tools-style UMI in read header. CLIPittyClip --eclip pe expects post-eclipdemux format (UMI as colon-prefixed token, e.g. @NTACGTTGAT:...). Please use the post-eclipdemux file from ENCODE."
+            exit 1
+        fi
+        # PASS: R2, header_colon
+        log_info "Validation passed: PE eCLIP R2, post-eclipdemux format. UMI ${detected_umi_len}nt detected in read header."
+        return 0
+
+    elif [[ "$expected_mode" == "se" ]]; then
+        if [[ "$detected_read_end" == "2" ]]; then
+            log_error "Input validation failed for --eclip se: detected Read 2 input. --eclip se expects Read 1 from single-end eCLIP (seCLIP) sequencing. If you have paired-end eCLIP data, use --eclip pe with the R2 file instead."
+            exit 1
+        fi
+        # detected_read_end == "1" from here
+        if [[ "$umi_location" == "header_colon" ]]; then
+            log_error "Input validation failed for --eclip se: detected UMI in read header (eclipdemux-style). --eclip se expects raw seCLIP fastq where the UMI is still in the read sequence (first 10nt). Please supply the unprocessed fastq from ENCODE."
+            exit 1
+        elif [[ "$umi_location" == "header_underscore" ]]; then
+            log_error "Input validation failed for --eclip se: detected umi_tools-style UMI in read header. --eclip se expects raw seCLIP fastq where the UMI is still in the read sequence. Please supply the unprocessed fastq."
+            exit 1
+        fi
+        # PASS: R1, sequence
+        log_info "Validation passed: SE eCLIP R1, raw format. UMI assumed 10nt in sequence (seCLIP standard, Blue et al. 2022)."
+        return 0
+    fi
+}
+
+# ── eCLIP PE Preprocessing ───────────────────────────────────────────────────
+# run_eclip_pe_preprocessing — full PE eCLIP preprocessing chain
+# Expected input: post-eclipdemux R2 fastq (UMI in read header as colon-prefix token)
+# Flow: validate → UMI to seq → Deduplicate → Extract UMI → Adapter Trim
+# Args: $1 = input_file, $2 = output_prefix, $3 = threads, $4 = sample_size, $5 = umi_len (hint)
+run_eclip_pe_preprocessing() {
+    local input_file="$1"
+    local output_prefix="$2"
+    local threads="$3"
+    local sample_size="$4"
+    local umi_len="${5:-0}"
+
+    # Get path to eCLIP adapter FASTA (same dir as this script)
+    local script_dir="$(dirname "${BASH_SOURCE[0]}")"
+    local eclip_adapters_fasta="${script_dir}/eclip_adapters.fa"
+
+    log_info "eCLIP PE mode: Expecting Read 2, post-eclipdemux format (UMI in read header)."
+    validate_eclip_input "$input_file" "pe"
+
+    log_info "eCLIP PE mode: Preprocessing workflow (validate → UMI to seq → Deduplicate → Extract UMI → Adapter Trim)"
+
+    # Step 1: Detect UMI length from header
+    local detected_umi_len
+    detected_umi_len=$(detect_eclip_umi_length "$input_file" "$umi_len")
+    umi_len="$detected_umi_len"
+
+    # Step 2: Move UMI from header to sequence (required before collapse)
+    update_status_first "eCLIP PE Preprocessing"
+    echo -ne "(UMI to Sequence"
+    local umi_seq_file="${output_prefix}_umi_in_seq.fastq.gz"
+    reformat_eclip_umi_to_sequence "$input_file" "$umi_seq_file" "$umi_len"
+    if [[ ! -s "$umi_seq_file" ]]; then
+        log_error "Failed to reformat eCLIP UMI to sequence"
+        exit 1
+    fi
+
+    # Step 3: Deduplicate (collapse exact duplicates with UMI in sequence)
+    echo -ne " → Deduplicating"
+    local collapsed_file="${output_prefix}_collapsed.fastq"
+    local collapsed_file_gz="${output_prefix}_collapsed.fastq.gz"
+    gzip -dc "$umi_seq_file" > "${output_prefix}_umi_temp.fastq"
+    _fastq_collapse_core "${output_prefix}_umi_temp.fastq" "$collapsed_file"
+    if [[ ! -s "$collapsed_file" ]]; then
+        log_error "Deduplication (eCLIP PE collapse) failed"
+        exit 1
+    fi
+    gzip -c "$collapsed_file" > "$collapsed_file_gz"
+    rm -f "${output_prefix}_umi_temp.fastq" "$collapsed_file" "$umi_seq_file"
+
+    # Step 4: Strip UMI from sequence, attach to header after count (CTK format: READ#count#UMI)
+    echo -ne " → Extract UMI"
+    local stripped_file="${output_prefix}_stripped.fastq.gz"
+    strip_eclip_barcode "$collapsed_file_gz" "$stripped_file" "$umi_len"
+    rm -f "$collapsed_file_gz"
+    if [[ ! -s "$stripped_file" ]]; then
+        log_error "stripBarcode.pl failed"
+        exit 1
+    fi
+
+    # Step 5: Adapter trimming with fastp (using all eCLIP inline-barcode + TruSeq R2 adapters)
+    echo -ne " → Adapter Trim) > "
+    local final_file="${output_prefix}_cleaned.fastq.gz"
+    local fastp_cmd="fastp -i ${stripped_file} -o ${final_file} \
+        --thread ${threads} \
+        --adapter_fasta ${eclip_adapters_fasta} \
+        --length_required 20 \
+        --cut_tail --cut_tail_mean_quality 5 \
+        --overlap_len_require 1 \
+        --html ${output_prefix}_fastp.html \
+        --json ${output_prefix}_fastp.json"
+    if [ "$sample_size" -gt 0 ]; then fastp_cmd+=" --reads_to_process $sample_size"; fi
+    log_info "Running: $fastp_cmd"
+    execute_cmd "$fastp_cmd"
+    rm -f "$stripped_file"
+
+    if [[ ! -s "$final_file" ]]; then
+        log_error "fastp failed to create cleaned file"
+        exit 1
+    fi
+
+    log_info "eCLIP PE preprocessing complete: $final_file"
+    log_info "Read ID format: READ#count#UMI (CTK-compatible)"
+}
+
+# ── eCLIP SE Preprocessing ───────────────────────────────────────────────────
+# run_eclip_se_preprocessing — full SE eCLIP (seCLIP) preprocessing chain
+# Expected input: raw Read 1 fastq (UMI in first 10nt of sequence, Blue et al. 2022)
+# Flow: validate → Deduplicate → Extract UMI → Adapter Trim
+# Args: $1 = input_file, $2 = output_prefix, $3 = threads, $4 = sample_size
+run_eclip_se_preprocessing() {
+    local input_file="$1"
+    local output_prefix="$2"
+    local threads="$3"
+    local sample_size="$4"
+
+    # Hardcoded SE parameters (Blue et al. 2022 — not user-configurable)
+    local umi_len=10
+    local adapter_seq="AGATCGGAAGAGCACACGTCTGAACTCCAGTCAC"  # TruSeq Read 1 adapter
+
+    log_info "eCLIP SE mode: Expecting raw Read 1, seCLIP format (UMI in read sequence)."
+    log_info "SE eCLIP UMI length: ${umi_len}nt (seCLIP standard, Blue et al. 2022)"
+    log_info "SE eCLIP adapter: TruSeq R1 (${adapter_seq})"
+    validate_eclip_input "$input_file" "se"
+
+    log_info "eCLIP SE mode: Preprocessing workflow (validate → Deduplicate → Extract UMI → Adapter Trim)"
+
+    update_status_first "eCLIP SE Preprocessing"
+
+    # Step 1: Deduplicate (UMI is in sequence — collapse on full read including UMI prefix)
+    echo -ne "(Deduplicating"
+    local temp_fastq="${output_prefix}_se_temp.fastq"
+    local collapsed_plain="${output_prefix}_collapsed.fastq"
+    local collapsed_gz="${output_prefix}_collapsed.fastq.gz"
+    if [[ "$input_file" == *.gz ]]; then
+        gzip -dc "$input_file" > "$temp_fastq"
+    else
+        cp "$input_file" "$temp_fastq"
+    fi
+    _fastq_collapse_core "$temp_fastq" "$collapsed_plain"
+    if [[ ! -s "$collapsed_plain" ]]; then
+        log_error "Deduplication (eCLIP SE collapse) failed"
+        exit 1
+    fi
+    gzip -c "$collapsed_plain" > "$collapsed_gz"
+    rm -f "$temp_fastq" "$collapsed_plain"
+
+    # Step 2: Strip UMI from sequence, attach to header after count (CTK format: READ#count#UMI)
+    echo -ne " → Extract UMI"
+    local stripped_gz="${output_prefix}_stripped.fastq.gz"
+    strip_eclip_barcode "$collapsed_gz" "$stripped_gz" "$umi_len"
+    rm -f "$collapsed_gz"
+    if [[ ! -s "$stripped_gz" ]]; then
+        log_error "stripBarcode.pl failed"
+        exit 1
+    fi
+
+    # Step 3: Adapter trimming with fastp (TruSeq R1 adapter, passed as sequence string)
+    echo -ne " → Adapter Trim) > "
+    local final_file="${output_prefix}_cleaned.fastq.gz"
+    local fastp_cmd="fastp -i ${stripped_gz} -o ${final_file} \
+        --thread ${threads} \
+        --adapter_sequence ${adapter_seq} \
+        --length_required 20 \
+        --cut_tail --cut_tail_mean_quality 5 \
+        --overlap_len_require 1 \
+        --html ${output_prefix}_fastp.html \
+        --json ${output_prefix}_fastp.json"
+    if [ "$sample_size" -gt 0 ]; then fastp_cmd+=" --reads_to_process $sample_size"; fi
+    log_info "Running: $fastp_cmd"
+    execute_cmd "$fastp_cmd"
+    rm -f "$stripped_gz"
+
+    if [[ ! -s "$final_file" ]]; then
+        log_error "fastp failed to create cleaned file"
+        exit 1
+    fi
+
+    log_info "eCLIP SE preprocessing complete: $final_file"
+    log_info "Read ID format: READ#count#UMI (CTK-compatible)"
+}
+
+# 1b. Adapter trimming and quality filtering with fastp (standard mode only)
 run_fastp() {
     local input_file="$1"
     local output_prefix="$2"
@@ -315,94 +578,10 @@ run_fastp() {
     local adapter3="$4"
     local threads="$5"
     local sample_size="$6"
-    local eclip_mode="${7:-false}"  # eCLIP mode: UMI in header, use adapter FASTA
-    local bc_len="${8:-0}"
-    local spacer_len="${9:-0}"
+    local bc_len="${7:-0}"
+    local spacer_len="${8:-0}"
 
     update_status_first "Adapter Trimming"
-    log_info "Starting adapter trimming..."
-
-    # Get path to eCLIP adapter FASTA (same dir as this script)
-    local script_dir="$(dirname "${BASH_SOURCE[0]}")"
-    local eclip_adapters_fasta="${script_dir}/eclip_adapters.fa"
-
-    #==========================================================================
-    # eCLIP MODE: CTK documentation workflow
-    # 1. UMI header → sequence
-    # 2. fastp (adapter trim, no --umi)
-    # 3. fastq2collapse.pl (collapse with UMI in sequence)
-    # 4. stripBarcode.pl (extract UMI to header after count)
-    #==========================================================================
-    if [[ "$eclip_mode" == "true" ]]; then
-        log_info "eCLIP mode: Preprocessing workflow (collapse before trim)"
-
-        # Step 1: Detect and validate UMI length
-        local detected_umi_len=$(detect_eclip_umi_length "$input_file" "$umi_len")
-        umi_len="$detected_umi_len"
-
-        # Step 2: Move UMI from header to sequence
-        update_status_first "eCLIP Preprocessing"
-        echo -ne "(UMI to Sequence"
-        local umi_seq_file="${output_prefix}_umi_in_seq.fastq.gz"
-        reformat_eclip_umi_to_sequence "$input_file" "$umi_seq_file" "$umi_len"
-        if [[ ! -s "$umi_seq_file" ]]; then
-            log_error "Failed to reformat eCLIP UMI to sequence"
-            exit 1
-        fi
-
-        # Step 3: Collapse exact duplicates FIRST (with UMI in sequence)
-        echo -ne " → Collapsing"
-        local collapsed_file="${output_prefix}_collapsed.fastq"
-        local collapsed_file_gz="${output_prefix}_collapsed.fastq.gz"
-        gzip -dc "$umi_seq_file" > "${output_prefix}_umi_temp.fastq"
-        _fastq_collapse_core "${output_prefix}_umi_temp.fastq" "$collapsed_file"
-        if [[ ! -s "$collapsed_file" ]]; then
-            log_error "Deduplication (eCLIP collapse) failed"
-            exit 1
-        fi
-        gzip -c "$collapsed_file" > "$collapsed_file_gz"
-        rm -f "${output_prefix}_umi_temp.fastq" "$collapsed_file" "$umi_seq_file"
-
-        # Step 4: Strip UMI from sequence, attach to header after count
-        echo -ne " → Extract UMI"
-        local stripped_file="${output_prefix}_stripped.fastq.gz"
-        strip_eclip_barcode "$collapsed_file_gz" "$stripped_file" "$umi_len"
-        rm -f "$collapsed_file_gz"
-        if [[ ! -s "$stripped_file" ]]; then
-            log_error "stripBarcode.pl failed"
-            exit 1
-        fi
-
-        # Step 5: Adapter trimming with fastp (AFTER collapse for efficiency)
-        echo -ne " → Adapter Trim) > "
-        local final_file="${output_prefix}_cleaned.fastq.gz"
-        local fastp_cmd="fastp -i ${stripped_file} -o ${final_file} \
-            --thread ${threads} \
-            --adapter_fasta ${eclip_adapters_fasta} \
-            --length_required 20 \
-            --cut_tail --cut_tail_mean_quality 5 \
-            --overlap_len_require 1 \
-            --html ${output_prefix}_fastp.html \
-            --json ${output_prefix}_fastp.json"
-        if [ "$sample_size" -gt 0 ]; then fastp_cmd+=" --reads_to_process $sample_size"; fi
-        log_info "Running: $fastp_cmd"
-        execute_cmd "$fastp_cmd"
-        rm -f "$stripped_file"
-
-        if [[ ! -s "$final_file" ]]; then
-            log_error "fastp failed to create cleaned file"
-            exit 1
-        fi
-
-        log_info "eCLIP preprocessing complete: $final_file"
-        log_info "Read ID format: READ#count#UMI (CTK-compatible)"
-        return 0
-    fi
-
-    #==========================================================================
-    # NON-eCLIP MODE: Standard workflow
-    # fastp: adapter trim, quality filter, optional UMI extraction
-    #==========================================================================
     log_info "Standard mode: fastp adapter trimming"
 
     local fastp_cmd="fastp -i ${input_file} -o ${output_prefix}_cleaned.fastq \

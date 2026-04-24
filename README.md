@@ -152,39 +152,75 @@ CLIPittyClip.sh -i reads.fastq.gz -x /path/to/star_index -t 8 --run-ctk
 # OR equivalently:
 CLIPittyClip.sh -i reads.fastq.gz -x /path/to/star_index -t 8 --run-cims --run-cits
 
-# ENCODE eCLIP analysis (pre-processed files with UMI in header)
-CLIPittyClip.sh --eclip -d /path/to/samples/ -x /path/to/star_index -t 8 --run-cims --run-cits
+# eCLIP paired-end analysis (post-eclipdemux R2 files, UMI in header)
+CLIPittyClip.sh --eclip pe -d /path/to/samples/ -x /path/to/star_index -t 8 --run-cims --run-cits
+
+# eCLIP single-end analysis (raw seCLIP R1 files, UMI in sequence)
+CLIPittyClip.sh --eclip se -i reads.fastq.gz -x /path/to/star_index -t 8
 ```
 
-## ENCODE eCLIP Mode
+## eCLIP Analysis Modes
 
-For pre-processed ENCODE eCLIP data, use `--eclip` mode:
+CLIPittyClip supports two eCLIP protocols, selected via `--eclip <pe|se>`.
+
+---
+
+### eCLIP Paired-End Mode (`--eclip pe`)
+
+For ENCODE eCLIP paired-end data after inline-barcode demultiplexing by `eclipdemux`.
 
 ```bash
-# eCLIP preprocessing only
-CLIPittyClip.sh --eclip -d /path/to/eclip_fastqs/ -x /path/to/star_index -t 8
+# PE eCLIP — batch (typical for ENCODE downloads)
+CLIPittyClip.sh --eclip pe -d /path/to/eclip_fastqs/ -x /path/to/star_index -t 8
 
-# eCLIP with CIMS/CITS analysis (optional, add flags as needed)
-CLIPittyClip.sh --eclip -d /path/to/eclip_fastqs/ -x /path/to/star_index -t 8 --run-cims --run-cits
+# PE eCLIP with CIMS/CITS analysis
+CLIPittyClip.sh --eclip pe -d /path/to/eclip_fastqs/ -x /path/to/star_index -t 8 --run-cims --run-cits
 ```
 
-**What `--eclip` does (preprocessing only):**
-- **Skips UMI extraction** - UMI is already in read header (ENCODE format: `@NCCTGAATGA:...`)
-- **Uses 9 standard eCLIP adapters** - Automatically trims all adapter variants
-- **Reformats headers for CTK** - Converts to CTK-compatible format for tag2collapse
+**Expected input:** Read 2, post-eclipdemux format — UMI already moved to read header by `eclipdemux`.
+Read header format: `@NTACGTTGAT:NB501168:530:HJ3WMBGXF:...`
 
-> **Note:** `--eclip` only affects preprocessing. CIMS/CITS analysis requires separate `--run-cims` and/or `--run-cits` flags.
+**Preprocessing workflow:**
+1. **Validate input** — confirms R2 with UMI in header (colon-prefix format); exits with a clear error if wrong file is supplied
+2. **UMI to sequence** — prepends the UMI back onto the read sequence for deduplication
+3. **Deduplicating** — exact-duplicate collapse using hash-based engine (UMI-aware)
+4. **Extract UMI** — strips UMI from sequence into CTK-compatible header format (`@READ#count#UMI`)
+5. **Adapter Trim** — fastp with full eCLIP adapter set (`eclip_adapters.fa`: inline barcodes + TruSeq R2)
 
-> **Note:** Dynamic thread scaling for CIMS/CITS (based on available RAM) applies to all modes, not just eCLIP.
+**Ignored options:** `-u` (UMI length is auto-detected from header), `-a` (adapter is hardcoded to `eclip_adapters.fa`)
 
-**When to use:**
-- ENCODE eCLIP data downloaded from `encodeproject.org`
-- Files with UMI already moved to read ID (format: `@UMI:REST_OF_ID`)
-- Pre-demultiplexed eCLIP samples
+> **Note:** `--eclip pe` only affects preprocessing. CIMS/CITS analysis requires separate `--run-cims`/`--run-cits` flags.
 
-**Ignored options in eCLIP mode:**
-- `-u` (UMI length) - Detected from header
-- `-a` (adapter) - Uses all 9 eCLIP adapters
+---
+
+### eCLIP Single-End Mode (`--eclip se`)
+
+For single-end eCLIP (seCLIP) data following the Blue et al. 2022 protocol.
+
+```bash
+# SE eCLIP — single file
+CLIPittyClip.sh --eclip se -i sample_R1.fastq.gz -x /path/to/star_index -t 8
+
+# SE eCLIP — batch directory
+CLIPittyClip.sh --eclip se -d /path/to/seclip_fastqs/ -x /path/to/star_index -t 8
+```
+
+**Expected input:** Raw Read 1, unprocessed — UMI is the first 10nt of the read sequence.
+This is the fastq directly from ENCODE before any barcode/UMI processing.
+
+**Hardcoded parameters (Blue et al. 2022 — not user-configurable):**
+- UMI length: 10nt
+- Adapter: TruSeq Read 1 (`AGATCGGAAGAGCACACGTCTGAACTCCAGTCAC`)
+
+**Preprocessing workflow:**
+1. **Validate input** — confirms R1 with UMI in sequence; exits with a clear error if a pre-processed or R2 file is supplied
+2. **Deduplicating** — exact-duplicate collapse on full read (UMI + cDNA sequence together)
+3. **Extract UMI** — strips first 10nt into CTK-compatible header format (`@READ#count#UMI`)
+4. **Adapter Trim** — fastp with TruSeq R1 adapter
+
+**Ignored options:** `-u` (UMI length hardcoded to 10nt), `-a` (TruSeq R1 is hardcoded)
+
+> **Note:** `--eclip se` uses the same downstream alignment, PCR collapse, and peak-calling steps as all other modes. Only preprocessing differs.
 
 ## Input Modes
 
@@ -228,7 +264,7 @@ Run `CLIPittyClip.sh --help` for full usage.
 |-------|------|------|---------|-------------|
 | `-u` | `--umi-length` | int | — | UMI length (auto-detected for eCLIP) |
 | `-a` | `--adapter` | string | L32 | 3' adapter sequence |
-| — | `--eclip` | bool | false | ENCODE eCLIP mode |
+| — | `--eclip` | string | — | eCLIP mode: `pe` (paired-end) or `se` (single-end) |
 | — | `--no-dedup` | bool | — | Disable FASTQ deduplication (default: ON) |
 
 ## Deduplication
