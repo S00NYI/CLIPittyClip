@@ -470,7 +470,7 @@ run_eclip_pe_preprocessing() {
 
     # Step 5: Adapter trimming with fastp (using all eCLIP inline-barcode + TruSeq R2 adapters)
     echo -ne " → Adapter Trim) > "
-    local final_file="${output_prefix}_cleaned.fastq.gz"
+    local final_file="${output_prefix}_cleaned.fastq"
     local fastp_cmd="fastp -i ${stripped_file} -o ${final_file} \
         --thread ${threads} \
         --adapter_fasta ${eclip_adapters_fasta} \
@@ -547,7 +547,7 @@ run_eclip_se_preprocessing() {
 
     # Step 3: Adapter trimming with fastp (TruSeq R1 adapter, passed as sequence string)
     echo -ne " → Adapter Trim) > "
-    local final_file="${output_prefix}_cleaned.fastq.gz"
+    local final_file="${output_prefix}_cleaned.fastq"
     local fastp_cmd="fastp -i ${stripped_gz} -o ${final_file} \
         --thread ${threads} \
         --adapter_sequence ${adapter_seq} \
