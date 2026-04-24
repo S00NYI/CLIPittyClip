@@ -226,7 +226,7 @@ CLIPittyClip uses a custom hash-based deduplication engine (`lib/fastq_collapse_
 | `-b` | `--barcodes` | path | — | Barcode file (enables demultiplexing) |
 | — | `--demux-mismatches` | int | 1 | Max barcode mismatches |
 | — | `--align-mismatches` | int | 2 | Max alignment mismatches (STAR only) |
-| — | `--skip-ncrna` | bool | false | Disable ncRNA pre-filtering |
+| — | `--filter-ncrna` | bool | false | Enable ncRNA pre-filtering (opt-in) |
 
 ### Peak Calling Options
 
@@ -602,7 +602,7 @@ bowtie2-build Homo_sapiens.GRCh38.ncrna.fa /path/to/annotation/ncRNA/ncrna
 - **Filtering**: Before main alignment, reads are mapped against `<annotation_dir>/ncRNA/ncrna.1.bt2`.
 - **Output**: Unfiltered (non-ncRNA) reads continue to genome alignment. ncRNA stats are saved to `REPORTS/ncRNA_Mapping/`.
 
-**To disable ncRNA filtering:** Use `--filter-ncrna` only when you want filtering enabled (opt-in). Omit the flag to skip ncRNA pre-filtering.
+**To enable ncRNA filtering:** Pass `--filter-ncrna` to opt in. Omitting the flag leaves all reads unfiltered (the default).
 
 > **Note:** ncRNA filtering in `PREPittyPrep.sh` also requires `-x` (genome index path) alongside `--filter-ncrna`.
 

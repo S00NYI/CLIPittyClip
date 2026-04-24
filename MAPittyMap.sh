@@ -17,7 +17,7 @@ EXP_ID=""
 ALIGNER="star"
 MISMATCH_MAX=2
 WIZARD_MODE="false"
-SKIP_NCRNA="false"  # ncRNA filtering is ON by default
+FILTER_NCRNA="false"  # ncRNA filtering is OFF by default; enable with --filter-ncrna
 
 function show_usage {
     echo ""
@@ -36,7 +36,7 @@ function show_usage {
     echo "  -m <int>         Max mismatches (default: 2)"
     echo "  --wizard         Launch interactive configuration wizard
   --advanced       Alias for --wizard (backward compatibility)
-  --skip-ncrna     Disable ncRNA pre-filtering (on by default)
+  --filter-ncrna   Enable ncRNA pre-filtering (off by default)
   -h, --help       Show this help message"
     echo ""
     echo "OUTPUT:"
@@ -64,7 +64,7 @@ while [[ $# -gt 0 ]]; do
         -o) EXP_ID="$2"; shift 2 ;;
         --aligner) ALIGNER=$(echo "$2" | tr '[:upper:]' '[:lower:]'); shift 2 ;;
         --wizard|--advanced) WIZARD_MODE="true"; shift 1 ;;
-        --skip-ncrna) SKIP_NCRNA="true"; shift ;;
+        --filter-ncrna) FILTER_NCRNA="true"; shift ;;
         -t) THREADS="$2"; shift 2 ;;
         -m) MISMATCH_MAX="$2"; shift 2 ;;
         -h|--help) show_usage; exit 0 ;;
@@ -142,7 +142,7 @@ cd "${OUT_DIR}" || exit 1
 
 # Run ncRNA pre-filtering if enabled and index exists
 MAPPING_INPUT="$INPUT_FILE"
-if [[ "$SKIP_NCRNA" == "false" ]]; then
+if [[ "$FILTER_NCRNA" == "true" ]]; then
     NCRNA_INDEX_DIR=$(check_ncrna_index "$GENOME_INDEX")
     if [[ -n "$NCRNA_INDEX_DIR" ]]; then
         mkdir -p "OTHERS/ncRNA_Mapping"

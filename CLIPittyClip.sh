@@ -870,32 +870,34 @@ if [[ -n "$INPUT_DIR" ]]; then
     fi
     
     # ncRNA Filtering Summary
-    console_msg "\n[ncRNA FILTERING SUMMARY]"
-    printf "  %-25s %-15s %-15s %s\n" "Sample" "ncRNA Reads" "Total Reads" "% Filtered"
-    console_msg "  ----------------------------------------------------------------"
-    
-    for sample in "${SAMPLE_FILES[@]}"; do
-        if [ -f "$sample" ]; then
-            sample_name=$(basename "$sample")
-            sample_name="${sample_name%.fastq.gz}"
-            sample_name="${sample_name%.fq.gz}"
-            # Read from aggregated location (sample_out was deleted after collection)
-            ncrna_stats="${OUTPUT_ROOT}/${DIR_OTHERS}/ncRNA_Mapping/${sample_name}_ncrna_stats.txt"
-            
-            if [[ -f "$ncrna_stats" ]]; then
-                align_rate=$(grep "overall alignment rate" "$ncrna_stats" | grep -oE "[0-9]+\.[0-9]+%" || echo "N/A")
-                total=$(grep "reads; of these:" "$ncrna_stats" | grep -oE "^[0-9]+" || echo "N/A")
-                aligned=$(grep "aligned exactly 1 time" "$ncrna_stats" | grep -oE "^[[:space:]]*[0-9]+" | tr -d ' ' || echo "0")
-                multi=$(grep "aligned >1 times" "$ncrna_stats" | grep -oE "^[[:space:]]*[0-9]+" | tr -d ' ' || echo "0")
-                ncrna=$((aligned + multi))
-                printf "  %-25s %-15s %-15s %s\n" "$sample_name" "$ncrna" "$total" "$align_rate"
-            else
-                printf "  %-25s %-15s %-15s %s\n" "$sample_name" "-" "-" "SKIPPED"
+    if [[ "$FILTER_NCRNA" == "true" ]]; then
+        console_msg "\n[ncRNA FILTERING SUMMARY]"
+        printf "  %-25s %-15s %-15s %s\n" "Sample" "ncRNA Reads" "Total Reads" "% Filtered"
+        console_msg "  ----------------------------------------------------------------"
+
+        for sample in "${SAMPLE_FILES[@]}"; do
+            if [ -f "$sample" ]; then
+                sample_name=$(basename "$sample")
+                sample_name="${sample_name%.fastq.gz}"
+                sample_name="${sample_name%.fq.gz}"
+                # Read from aggregated location (sample_out was deleted after collection)
+                ncrna_stats="${OUTPUT_ROOT}/${DIR_OTHERS}/ncRNA_Mapping/${sample_name}_ncrna_stats.txt"
+
+                if [[ -f "$ncrna_stats" ]]; then
+                    align_rate=$(grep "overall alignment rate" "$ncrna_stats" | grep -oE "[0-9]+\.[0-9]+%" || echo "N/A")
+                    total=$(grep "reads; of these:" "$ncrna_stats" | grep -oE "^[0-9]+" || echo "N/A")
+                    aligned=$(grep "aligned exactly 1 time" "$ncrna_stats" | grep -oE "^[[:space:]]*[0-9]+" | tr -d ' ' || echo "0")
+                    multi=$(grep "aligned >1 times" "$ncrna_stats" | grep -oE "^[[:space:]]*[0-9]+" | tr -d ' ' || echo "0")
+                    ncrna=$((aligned + multi))
+                    printf "  %-25s %-15s %-15s %s\n" "$sample_name" "$ncrna" "$total" "$align_rate"
+                else
+                    printf "  %-25s %-15s %-15s %s\n" "$sample_name" "-" "-" "SKIPPED"
+                fi
             fi
-        fi
-    done
-    console_msg "  ----------------------------------------------------------------"
-    
+        done
+        console_msg "  ----------------------------------------------------------------"
+    fi
+
     # Combined Peak Calling
     console_msg "\n[COMBINED PEAK CALLING]"
     BED_DIR="$OUTPUT_ROOT/$DIR_BED"
@@ -1425,28 +1427,30 @@ if [[ "$DEMUX" == "yes" ]]; then
     fi
 
     # ncRNA Filtering Summary (before cleanup so stats files still exist)
-    console_msg "\n[ncRNA FILTERING SUMMARY]"
-    printf "  %-25s %-15s %-15s %s\n" "Sample" "ncRNA Reads" "Total Reads" "% Filtered"
-    console_msg "  ----------------------------------------------------------------"
-    
-    for f in "$DEMUX_DIR"/*.fastq; do
-        [[ -f "$f" ]] || continue
-        sample_name=$(basename "$f" .fastq)
-        [[ "$sample_name" == "unknown" ]] && continue
-        ncrna_stats="${WORK_DIR}/${sample_name}_analysis/OTHERS/ncRNA_Mapping/${sample_name}_ncrna_stats.txt"
-        if [[ -f "$ncrna_stats" ]]; then
-            align_rate=$(grep "overall alignment rate" "$ncrna_stats" | grep -oE "[0-9]+\.[0-9]+%" || echo "N/A")
-            total=$(grep "reads; of these:" "$ncrna_stats" | grep -oE "^[0-9]+" || echo "N/A")
-            aligned=$(grep "aligned exactly 1 time" "$ncrna_stats" | grep -oE "^[[:space:]]*[0-9]+" | tr -d ' ' || echo "0")
-            multi=$(grep "aligned >1 times" "$ncrna_stats" | grep -oE "^[[:space:]]*[0-9]+" | tr -d ' ' || echo "0")
-            ncrna=$((aligned + multi))
-            printf "  %-25s %-15s %-15s %s\n" "$sample_name" "$ncrna" "$total" "$align_rate"
-        else
-            printf "  %-25s %-15s %-15s %s\n" "$sample_name" "-" "-" "SKIPPED"
-        fi
-    done
-    console_msg "  ----------------------------------------------------------------"
-    
+    if [[ "$FILTER_NCRNA" == "true" ]]; then
+        console_msg "\n[ncRNA FILTERING SUMMARY]"
+        printf "  %-25s %-15s %-15s %s\n" "Sample" "ncRNA Reads" "Total Reads" "% Filtered"
+        console_msg "  ----------------------------------------------------------------"
+
+        for f in "$DEMUX_DIR"/*.fastq; do
+            [[ -f "$f" ]] || continue
+            sample_name=$(basename "$f" .fastq)
+            [[ "$sample_name" == "unknown" ]] && continue
+            ncrna_stats="${WORK_DIR}/${sample_name}_analysis/OTHERS/ncRNA_Mapping/${sample_name}_ncrna_stats.txt"
+            if [[ -f "$ncrna_stats" ]]; then
+                align_rate=$(grep "overall alignment rate" "$ncrna_stats" | grep -oE "[0-9]+\.[0-9]+%" || echo "N/A")
+                total=$(grep "reads; of these:" "$ncrna_stats" | grep -oE "^[0-9]+" || echo "N/A")
+                aligned=$(grep "aligned exactly 1 time" "$ncrna_stats" | grep -oE "^[[:space:]]*[0-9]+" | tr -d ' ' || echo "0")
+                multi=$(grep "aligned >1 times" "$ncrna_stats" | grep -oE "^[[:space:]]*[0-9]+" | tr -d ' ' || echo "0")
+                ncrna=$((aligned + multi))
+                printf "  %-25s %-15s %-15s %s\n" "$sample_name" "$ncrna" "$total" "$align_rate"
+            else
+                printf "  %-25s %-15s %-15s %s\n" "$sample_name" "-" "-" "SKIPPED"
+            fi
+        done
+        console_msg "  ----------------------------------------------------------------"
+    fi
+
     # Mapping Depth Summary (from scale_factors.tsv generated during bedgraph creation)
     SCALE_FILE="$OUTPUT_ROOT/$DIR_BG/scale_factors.tsv"
     if [[ -f "$SCALE_FILE" ]]; then

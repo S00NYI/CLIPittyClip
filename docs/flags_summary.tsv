@@ -14,7 +14,7 @@ Barcode file	-b	--barcodes	path	—	No	Enables demultiplexing	Demux
 Demux mismatches	—	--demux-mismatches	int	1	No	—	Demux
 Disable dedup	—	--no-dedup	bool	—	No	Default: dedup ON	Dedup/Align
 Align mismatches	—	--align-mismatches	int	2	No	—	Dedup/Align
-Skip ncRNA	—	--skip-ncrna	bool	false	No	Warns if index missing	Dedup/Align
+Filter ncRNA	—	--filter-ncrna	bool	false	No	Warns if index missing	Dedup/Align
 Filter chr	—	--no-chr-filter	bool	true	No	—	Dedup/Align
 Run CTK	—	--run-ctk	bool	—	No	—	CTK
 Run CIMS	—	--run-cims	bool	—	No	—	CTK
