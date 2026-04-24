@@ -242,6 +242,15 @@ run_geo_demux() {
     fi
     log_info "GEO demux complete. Created $count files in ${out_dir}/"
 
+    log_info "Calculating MD5 checksums for GEO submission..."
+    if command -v md5sum >/dev/null 2>&1; then
+        (cd "${out_dir}" && md5sum *.fastq.gz > md5sums.txt)
+    elif command -v md5 >/dev/null 2>&1; then
+        (cd "${out_dir}" && md5 -r *.fastq.gz > md5sums.txt)
+    else
+        log_warning "Neither md5sum nor md5 found. Skipping MD5 calculation."
+    fi
+
     # Print summary table
     local total_reads=0
     for f in "${out_dir}"/*.fastq.gz; do
