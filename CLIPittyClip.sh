@@ -976,9 +976,14 @@ if [[ "$DEMUX" == "yes" ]]; then
         console_msg "\n[DEDUPLICATING]"
         print_section_item "Deduplicating Pooled Reads"
         DEDUP_OUT="${WORK_DIR}/pooled_dedup.fastq"
+        DEDUP_START=$(date +%s)
         if run_dedup "$INPUT_FILE" "$DEDUP_OUT"; then
             WORK_INPUT="$DEDUP_OUT"
-            print_section_item "Deduplication Complete"
+            DEDUP_END=$(date +%s)
+            DEDUP_DURATION=$((DEDUP_END - DEDUP_START))
+            DEDUP_M=$((DEDUP_DURATION/60))
+            DEDUP_S=$((DEDUP_DURATION%60))
+            print_section_item "Deduplication Complete (Total duration: ${DEDUP_M}min ${DEDUP_S}secs)"
         else
             log_warning "Deduplication failed. Using original file."
             rm -f "$DEDUP_OUT"
@@ -1550,9 +1555,14 @@ if [[ -z "$ECLIP_MODE" ]]; then
         else
             DEDUP_OUT="$(pwd)/${BASENAME}_dedup.fastq"
         fi
+        DEDUP_START=$(date +%s)
         if run_dedup "$INPUT_FILE" "$DEDUP_OUT"; then
             INPUT_FILE="$DEDUP_OUT"
-            if [[ "$CHILD_MODE" != "true" ]]; then print_section_item "Deduplication Complete"; fi
+            DEDUP_END=$(date +%s)
+            DEDUP_DURATION=$((DEDUP_END - DEDUP_START))
+            DEDUP_M=$((DEDUP_DURATION/60))
+            DEDUP_S=$((DEDUP_DURATION%60))
+            if [[ "$CHILD_MODE" != "true" ]]; then print_section_item "Deduplication Complete (Total duration: ${DEDUP_M}min ${DEDUP_S}secs)"; fi
         else
             log_warning "Deduplication failed. Using original input."
             rm -f "$DEDUP_OUT"

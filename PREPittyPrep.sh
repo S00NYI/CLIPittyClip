@@ -323,8 +323,13 @@ elif [[ -n "$BARCODE_FILE" ]]; then
     POOL_DEDUP="${SCRATCH}/pooled_dedup.fastq"
     WORK_INPUT="$INPUT_FILE"
     if [[ "$DEDUP_MODE" == "true" ]]; then
+        DEDUP_START=$(date +%s)
         if run_dedup "$INPUT_FILE" "$POOL_DEDUP"; then
-            echo "  > Deduplication complete."
+            DEDUP_END=$(date +%s)
+            DEDUP_DURATION=$((DEDUP_END - DEDUP_START))
+            DEDUP_M=$((DEDUP_DURATION/60))
+            DEDUP_S=$((DEDUP_DURATION%60))
+            echo "  > Deduplication complete. (Total duration: ${DEDUP_M}min ${DEDUP_S}secs)"
             WORK_INPUT="$POOL_DEDUP"
         else
             log_warning "Deduplication failed. Using original file."
