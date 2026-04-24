@@ -3,9 +3,19 @@
 </p>
 
 # CLIPittyClip: Modern CLIP-seq Analysis Pipeline
-**Version 3.1.0**
+**Version 3.2.0**
 
 A comprehensive, single-command CLIP-seq data analysis pipeline from FASTQ to peaks and crosslink sites.
+
+## Update Log (v3.2.0)
+This release introduces a new preprocessing-only standalone script, a GEO deposit mode, significant runtime improvements via lazy decompression, and cleaner output directory management.
+
+**New Features (v3.2.0):**
+- **PREPittyPrep.sh**: New standalone preprocessing script. Runs the full CLIP-seq preprocessing stack (dedup → demux → fastp) and stops before alignment, producing ready-to-map `*_prepped.fastq.gz` files. Supports single-file, pooled+demux, and directory batch modes.
+- **GEO Mode** (`PREPittyPrep.sh --geo`): Raw barcode-based demultiplexing only — reads are split by barcode and written exactly as received (no dedup, no adapter trimming). Intended for GEO/SRA deposit of pooled library FASTQs.
+- **Lazy Gzip**: All internal pipeline steps now operate on plain (uncompressed) `.fastq` files. Gzip compression is only applied to final output products, eliminating redundant compress/decompress cycles between steps for significant runtime improvement on large libraries.
+- **Conditional `0_DEMUX_FASTQ`**: The demux FASTQ output folder is now only created and retained when the `-k` (`--keep`) flag is passed. Without `-k`, split FASTQs are discarded after child processes complete, keeping the output directory clean.
+- **Consistent Help Behavior**: `PEAKittyPeak.sh` now shows help and exits when called with no arguments, matching the behavior of `MAPittyMap.sh` and `CLIPittyClip.sh`.
 
 ## Update Log (v3.1.0 / v3.0.2)
 This release focuses on heavily expanding CTK feature support, providing cleaner outputs, and patching edge cases in directory and single-file processing.
@@ -289,9 +299,10 @@ Condition_B_Rep2    Condition_B
 
 ## Output Structure
 
+### CLIPittyClip.sh
 ```
 {INPUT}_output/
-├── 0_DEMUX_FASTQ/           # Demultiplexed reads
+├── 0_DEMUX_FASTQ/           # Demultiplexed reads  ← only kept with -k
 ├── 1_BAM/                   # Aligned BAM files
 ├── 2_COLLAPSED_BED/         # PCR-deduplicated BED
 ├── 3_BEDGRAPH/              # Coverage tracks (Normalized Coverage)
@@ -321,6 +332,27 @@ Condition_B_Rep2    Condition_B
     └── BEDGRAPH/            # BedGraph generation logs (optional)
 
 {INPUT_BASENAME}.log         # Complete console log of the run
+
+```
+
+### PREPittyPrep.sh
+```
+{INPUT}_prepped/
+├── PREPPED_FASTQ/           # Ready-to-map gzipped FASTQs (*_prepped.fastq.gz)
+├── 0_DEMUX_FASTQ/           # Split FASTQs  ← only kept with -k (demux mode)
+└── REPORTS/
+    ├── FASTP_REPORT/        # HTML/JSON QC reports per sample
+    └── detailed_output.log
+
+```
+
+### PREPittyPrep.sh --geo
+```
+{INPUT}_GEO/
+├── sample1.fastq.gz         # Reads split by barcode, unmodified
+├── sample2.fastq.gz
+├── ...
+└── unknown.fastq.gz         # Unmatched reads
 
 ```
 
@@ -386,6 +418,48 @@ MAPittyMap.sh -i reads.fastq.gz -x /path/to/bt2_index -t 8 -m bowtie2
 # Interactive wizard mode for custom aligner settings
 MAPittyMap.sh -i reads.fastq.gz -x /path/to/star_index -t 8 -w
 ```
+
+---
+
+### PREPittyPrep.sh
+Standalone preprocessing module. Runs dedup → demux (optional) → fastp and stops before alignment, producing clean, ready-to-map `*_prepped.fastq.gz` files. No genome index required.
+
+**Input modes:**
+
+| Mode | Flags | Behavior |
+|------|-------|----------|
+| Single file | `-i reads.fastq.gz` | dedup → fastp → `_prepped.fastq.gz` |
+| Pooled + demux | `-i pool.fastq.gz -b barcodes.txt` | dedup → cutadapt split → per-sample fastp |
+| Directory batch | `-d /path/to/samples/` | per-file: dedup → fastp |
+| GEO deposit | `--geo -i pool.fastq.gz -b barcodes.txt` | raw cutadapt split only, no modification |
+
+**Key options:**
+- `-u <int>`: UMI length for extraction (default: 0)
+- `-b <path>`: Barcode file — enables demux mode
+- `-a <str>`: 3' adapter sequence
+- `--bc-len <int>`: Barcode length (auto-detected from `-b`)
+- `--spacer-len <int>`: Spacer length after barcode (default: 0)
+- `--no-dedup`: Skip deduplication
+- `--demux-mismatches <N>`: Barcode mismatch tolerance (default: 1)
+- `--filter-ncrna`: Enable ncRNA pre-filtering (requires `-x`)
+- `-k`: Keep intermediate files including `0_DEMUX_FASTQ/`
+- `--geo`: GEO mode — raw demux only, reads not modified
+
+```bash
+# Preprocess a single FASTQ
+PREPittyPrep.sh -i reads.fastq.gz -u 7 -t 8
+
+# Demux + preprocess a pooled library
+PREPittyPrep.sh -i pool.fastq.gz -b barcodes.txt -u 7 -t 8
+
+# Batch preprocess all FASTQs in a directory
+PREPittyPrep.sh -d /path/to/samples/ -u 7 -t 8
+
+# GEO deposit: raw barcode split, no modification
+PREPittyPrep.sh -i pool.fastq.gz -b barcodes.txt -u 7 --geo -o my_GEO
+```
+
+> **Note:** `PREPittyPrep.sh` output is fully compatible with `MAPittyMap.sh` and `CLIPittyClip.sh -d` for downstream alignment.
 
 ---
 
@@ -475,7 +549,9 @@ bowtie2-build Homo_sapiens.GRCh38.ncrna.fa /path/to/annotation/ncRNA/ncrna
 - **Filtering**: Before main alignment, reads are mapped against `<annotation_dir>/ncRNA/ncrna.1.bt2`.
 - **Output**: Unfiltered (non-ncRNA) reads continue to genome alignment. ncRNA stats are saved to `REPORTS/ncRNA_Mapping/`.
 
-**To disable:** Use `--skip-ncrna` flag
+**To disable ncRNA filtering:** Use `--filter-ncrna` only when you want filtering enabled (opt-in). Omit the flag to skip ncRNA pre-filtering.
+
+> **Note:** ncRNA filtering in `PREPittyPrep.sh` also requires `-x` (genome index path) alongside `--filter-ncrna`.
 
 ### Annotation Directory Structure
 

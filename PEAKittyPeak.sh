@@ -63,6 +63,11 @@ function show_usage {
     echo ""
 }
 
+if [[ $# -eq 0 ]]; then
+    show_usage
+    exit 1
+fi
+
 if [[ "$1" == "-h" ]] || [[ "$1" == "--help" ]]; then
     show_usage
     exit 0
