@@ -266,50 +266,31 @@ if [[ "$WIZARD_MODE" == "true" ]]; then
 fi
 
 # ------------------------------------------------------------------
-# Log File Initialization (Post-Parsing / Post-Wizard)
+# Path Resolution (must happen before log files are opened)
 # ------------------------------------------------------------------
-# If CHILD_MODE, we suppress main log creation to avoid spamming root dir.
-if [[ "$CHILD_MODE" == "true" ]]; then
-    LOG_FILE="/dev/null"
-    TEMP_CONSOLE_LOG=""  # No console log for child processes
-else
-    # Enable console output capture for parent process only
-    # Derived from user requested fixed name
-    TEMP_CONSOLE_LOG="console_output.log"
-    
-    # Enable tee redirection AFTER wizard to prevent capturing UI ANSI color codes
-    > "$TEMP_CONSOLE_LOG"
-    exec > >(tee -a "$TEMP_CONSOLE_LOG") 2>&1
-
-    # Log file setup
-    # User Request: Fixed name "detailed_output.log"
-    LOG_FILE="$(pwd)/detailed_output.log"
-    # Overwrite if exists
-    > "${LOG_FILE}"
-fi
 
 # Validate --eclip argument value
 if [[ -n "$ECLIP_MODE" ]] && [[ "$ECLIP_MODE" != "pe" ]] && [[ "$ECLIP_MODE" != "se" ]]; then
-    log_error "--eclip requires 'pe' or 'se' (got: '$ECLIP_MODE'). Usage: --eclip pe  OR  --eclip se"
+    echo "[ERROR] --eclip requires 'pe' or 'se' (got: '$ECLIP_MODE'). Usage: --eclip pe  OR  --eclip se" >&2
     show_usage
     exit 1
 fi
 
-# Validation: Need either -i or -d (but not both) - skip if wizard already set them
+# Validation: Need either -i or -d (but not both)
 if [[ -n "$INPUT_DIR" ]] && [[ -n "$INPUT_FILE" ]]; then
-    log_error "Cannot use both -i and -d. Choose one input mode."
+    echo "[ERROR] Cannot use both -i and -d. Choose one input mode." >&2
     show_usage
     exit 1
 fi
 
 if [[ -z "$INPUT_FILE" ]] && [[ -z "$INPUT_DIR" ]] && [[ "$WIZARD_MODE" == "false" ]]; then
-    log_error "Missing required input (-i or -d). Provide a single file or input directory."
+    echo "[ERROR] Missing required input (-i or -d). Provide a single file or input directory." >&2
     show_usage
     exit 1
 fi
 
 if [[ -z "$GENOME_INDEX" ]]; then
-    log_error "Missing required argument (-x genome index)."
+    echo "[ERROR] Missing required argument (-x genome index)." >&2
     show_usage
     exit 1
 fi
@@ -318,11 +299,11 @@ fi
 if [[ -n "$BARCODE_FILE" ]]; then
     bc_file_len=$(awk '!/^#/{print length($2); exit}' "$BARCODE_FILE")
     if [[ -z "$bc_file_len" ]]; then
-        log_error "Failed to read barcode length from $BARCODE_FILE"
+        echo "[ERROR] Failed to read barcode length from $BARCODE_FILE" >&2
         exit 1
     fi
     if [[ -n "$BC_LEN" && "$BC_LEN" != "$bc_file_len" ]]; then
-        log_error "Conflict: --bc-len ($BC_LEN) does not match the barcode length in file ($bc_file_len)."
+        echo "[ERROR] Conflict: --bc-len ($BC_LEN) does not match the barcode length in file ($bc_file_len)." >&2
         exit 1
     fi
     BC_LEN="$bc_file_len"
@@ -337,14 +318,13 @@ fi
 
 if [[ -n "$INPUT_DIR" ]]; then
     if [[ ! -d "$INPUT_DIR" ]]; then
-        log_error "Input directory not found: $INPUT_DIR"
+        echo "[ERROR] Input directory not found: $INPUT_DIR" >&2
         exit 1
     fi
     INPUT_DIR="$(cd "$INPUT_DIR" && pwd)"
-    # Check for FASTQ files
     FASTQ_COUNT=$(ls "$INPUT_DIR"/*.fastq.gz "$INPUT_DIR"/*.fq.gz 2>/dev/null | wc -l)
     if [[ "$FASTQ_COUNT" -eq 0 ]]; then
-        log_error "No .fastq.gz or .fq.gz files found in: $INPUT_DIR"
+        echo "[ERROR] No .fastq.gz or .fq.gz files found in: $INPUT_DIR" >&2
         exit 1
     fi
 fi
@@ -354,15 +334,63 @@ GENOME_INDEX="$(cd "$GENOME_INDEX" && pwd)"
 # Normalize EXP_ID (strip trailing slash if present)
 EXP_ID="${EXP_ID%/}"
 
-# Determine input parent directory for default output location
+# Determine input parent directory
 if [[ -n "$INPUT_FILE" ]]; then
     INPUT_PARENT="$(dirname "$INPUT_FILE")"
 elif [[ -n "$INPUT_DIR" ]]; then
     INPUT_PARENT="$(dirname "$INPUT_DIR")"
 fi
 
+# ------------------------------------------------------------------
+# Output Root & Working Directory (parent process only)
+# ------------------------------------------------------------------
+# OUTPUT_ROOT: where organized results go.
+# WORK_DIR:    OUTPUT_ROOT/.work/ — scratch space for ALL intermediate files.
+#
+# Rules for OUTPUT_ROOT:
+#   -o /absolute/path  → use exactly as given
+#   -o name            → INPUT_PARENT/name/
+#   (no -o)            → INPUT_PARENT/INPUTBASENAME_output/
+#
+if [[ "$CHILD_MODE" != "true" ]]; then
+    if [[ -n "$EXP_ID" ]]; then
+        if [[ "$EXP_ID" == /* ]]; then
+            OUTPUT_ROOT="${EXP_ID}"
+        else
+            OUTPUT_ROOT="${INPUT_PARENT}/${EXP_ID}"
+        fi
+    else
+        if [[ -n "$INPUT_FILE" ]]; then
+            _ob=$(basename "$INPUT_FILE")
+            _ob="${_ob%.fastq.gz}"; _ob="${_ob%.fq.gz}"
+            _ob="${_ob%.fastq}";    _ob="${_ob%.fq}"
+            OUTPUT_ROOT="${INPUT_PARENT}/${_ob}_output"
+        else
+            OUTPUT_ROOT="${INPUT_PARENT}/$(basename "$INPUT_DIR")_output"
+        fi
+    fi
+    WORK_DIR="${OUTPUT_ROOT}/.work"
+    mkdir -p "${OUTPUT_ROOT}/REPORTS" "$WORK_DIR"
+fi
+
+# ------------------------------------------------------------------
+# Log File Initialization
+# ------------------------------------------------------------------
+# Logs go directly into OUTPUT_ROOT/REPORTS/ — never into CWD.
+# Child processes suppress logging (parent captures everything).
+if [[ "$CHILD_MODE" == "true" ]]; then
+    LOG_FILE="/dev/null"
+    TEMP_CONSOLE_LOG=""
+else
+    TEMP_CONSOLE_LOG="${OUTPUT_ROOT}/REPORTS/console_output.log"
+    > "$TEMP_CONSOLE_LOG"
+    exec > >(tee -a "$TEMP_CONSOLE_LOG") 2>&1
+
+    LOG_FILE="${OUTPUT_ROOT}/REPORTS/detailed_output.log"
+    > "${LOG_FILE}"
+fi
+
 # Thread validation: cap to available cores - 1 (leave 1 for system)
-# Cross-platform CPU detection: macOS uses sysctl, Linux uses nproc
 if [[ "$(uname)" == "Darwin" ]]; then
     MAX_AVAILABLE_THREADS=$(sysctl -n hw.ncpu 2>/dev/null || echo 4)
 else
@@ -554,29 +582,25 @@ if [[ "$SAMPLE_SIZE" -gt 0 ]] && [[ -n "$INPUT_FILE" ]]; then
     fi
     log_info "Test Drive Mode: Sampling first $SAMPLE_SIZE reads from input..."
     
-    # Define sampled filename
-    SAMPLED_INPUT="${INPUT_FILE%.fastq.gz}_sampled_${SAMPLE_SIZE}.fastq.gz"
-    if [[ "$INPUT_FILE" == *.fq.gz ]]; then
-        SAMPLED_INPUT="${INPUT_FILE%.fq.gz}_sampled_${SAMPLE_SIZE}.fastq.gz"
-    fi
-    SAMPLED_INPUT="$(basename "$SAMPLED_INPUT")" # Keep in CWD
-    
+    # Sampled file goes into WORK_DIR to avoid polluting CWD or input dir
+    _sb=$(basename "$INPUT_FILE")
+    _sb="${_sb%.fastq.gz}"; _sb="${_sb%.fq.gz}"
+    SAMPLED_INPUT="${WORK_DIR}/${_sb}_sampled_${SAMPLE_SIZE}.fastq.gz"
+
     # Calculate lines: 4 lines per read
     LINES=$((SAMPLE_SIZE * 4))
-    
+
     # Stream process: gunzip -> head -> gzip
-    # This is efficient and avoids unzipping the whole file
     gzip -cd "$INPUT_FILE" | head -n "$LINES" | gzip > "$SAMPLED_INPUT"
-    
+
     if [[ $? -eq 0 && -s "$SAMPLED_INPUT" ]]; then
         if [[ "$CHILD_MODE" != "true" ]]; then
-            console_msg "  > Done. Created: $SAMPLED_INPUT"
+            console_msg "  > Done. Created: $(basename "$SAMPLED_INPUT")"
         fi
         log_info "Sampling complete. Created: $SAMPLED_INPUT"
-        # SWITCH INPUT to the small file for the rest of the pipeline
-        INPUT_FILE="$(pwd)/$SAMPLED_INPUT"
-        # Reset SAMPLE_SIZE to 0 so we don't try to resample inside child processes (redundant)
-        SAMPLE_SIZE=0 
+        # Switch input to the small file for the rest of the pipeline
+        INPUT_FILE="$SAMPLED_INPUT"
+        SAMPLE_SIZE=0
     else
         log_error "Sampling failed."
         exit 1
@@ -649,7 +673,8 @@ if [[ -n "$INPUT_DIR" ]]; then
                 -o ${sample_name} \
                 $EXTRA_FLAGS"
 
-            $cmd
+            # Run child in WORK_DIR so *_analysis/ lands there
+            (cd "$WORK_DIR" && $cmd)
 
             if [ $? -eq 0 ]; then
                 update_status_done
@@ -661,19 +686,7 @@ if [[ -n "$INPUT_DIR" ]]; then
         fi
     done
     
-    # Aggregation - same as demux path
-    INPUT_BASENAME=$(basename "$INPUT_DIR")
-    # Use -o value for output folder if provided, otherwise use input directory name
-    # If -o contains a path separator, use as full path; otherwise create next to input
-    if [[ -n "$EXP_ID" ]]; then
-        if [[ "$EXP_ID" == */* ]]; then
-            OUTPUT_ROOT="$EXP_ID"
-        else
-            OUTPUT_ROOT="${INPUT_PARENT}/${EXP_ID}"
-        fi
-    else
-        OUTPUT_ROOT="${INPUT_PARENT}/${INPUT_BASENAME}_output"
-    fi
+    # Aggregation - OUTPUT_ROOT was computed centrally at startup.
     
     DIR_BAM="1_BAM"
     DIR_BED="2_COLLAPSED_BED"
@@ -729,7 +742,7 @@ if [[ -n "$INPUT_DIR" ]]; then
         sample_name=$(basename "$sample")
         sample_name="${sample_name%.fastq.gz}"
         sample_name="${sample_name%.fq.gz}"
-        sample_out="${sample_name}_analysis"
+        sample_out="${WORK_DIR}/${sample_name}_analysis"
         
         if [[ -d "$sample_out" ]]; then
             console_msg "  > Collecting: $sample_name"
@@ -824,17 +837,21 @@ if [[ -n "$INPUT_DIR" ]]; then
             # Pipeline log
             cp "$sample_out"/*.log "$OUTPUT_ROOT/$DIR_REPORTS/SAMPLES/${sample_name}_detailed.log" 2>/dev/null
             
-            # Cleanup sample dir or move to OTHERS if -k
-            # Cleanup sample dir or move to OTHERS if -k
-            if [[ "$KEEP_INTERMEDIATE" != "yes" ]]; then
-                rm -rf "$sample_out"
-            else
-                # Move intermediate files into OUTPUT/OTHERS/ for cleaner organization
-                mkdir -p "$OUTPUT_ROOT/$DIR_OTHERS/sample_analysis"
-                mv "$sample_out" "$OUTPUT_ROOT/$DIR_OTHERS/sample_analysis/" 2>/dev/null
-            fi
+            # Cleanup sample dir or move to WORK_DIR-wide cleanup below
+            # (individual sample dirs stay in WORK_DIR until end-of-batch cleanup)
+            true  # placeholder
         fi
     done
+
+    # Batch WORK_DIR cleanup
+    if [[ "$KEEP_INTERMEDIATE" != "yes" ]]; then
+        rm -rf "$WORK_DIR"
+    else
+        mkdir -p "$OUTPUT_ROOT/$DIR_OTHERS"
+        mv "$WORK_DIR" "$OUTPUT_ROOT/$DIR_OTHERS/INTERMEDIATE_FILES" 2>/dev/null
+    fi
+    # Remove sampled input if it was created
+    if [[ -n "$SAMPLED_INPUT" && -f "$SAMPLED_INPUT" ]]; then rm -f "$SAMPLED_INPUT"; fi
     
     # Combined BedGraph Generation (Directory Mode)
     # Only runs when --groups/-g is explicitly provided
@@ -916,15 +933,15 @@ if [[ -n "$INPUT_DIR" ]]; then
     
 
     
-    # Remove sampled fastq files (created when --sample is used)
-    rm -f *_sampled_*.fastq.gz 2>/dev/null
-    
-    # Remove CITS.pl temporary directories and .tmp files (from failed/empty CTK runs)
-    rm -rf CITS.pl_* tag2profile.pl_* 2>/dev/null
-    rm -f *.tmp 2>/dev/null
-    
-    # Add enhanced columns to peak matrix (TC, NC, BC, Cov)
-    # This fixes the missing columns issue for eCLIP/Batch runs
+    # Remove sampled input if it was created
+    if [[ -n "$SAMPLED_INPUT" && -f "$SAMPLED_INPUT" ]]; then rm -f "$SAMPLED_INPUT"; fi
+
+    # Remove CTK temp dirs/files that may have landed in OUTPUT_ROOT
+    rm -rf "${OUTPUT_ROOT}"/CITS.pl_* "${OUTPUT_ROOT}"/tag2profile.pl_* 2>/dev/null
+    rm -f "${OUTPUT_ROOT}"/*.tmp 2>/dev/null
+
+    # Logs are already at OUTPUT_ROOT/REPORTS/ — created there at startup.
+    # console_output.log is live-captured by tee into that location.
     PEAK_MATRIX="$OUTPUT_ROOT/$DIR_PEAKS/COMBINED_PEAKS/COMBINED_peakMatrix.txt"
     PEAKS_BED="$OUTPUT_ROOT/$DIR_PEAKS/COMBINED_PEAKS/peaks_Sorted.bed"
     
@@ -943,23 +960,6 @@ if [[ -n "$INPUT_DIR" ]]; then
     fi
 
     send_notification "CLIPittyClip Batch" "Analysis complete for $total_samples samples in $(basename "$INPUT_DIR")"
-    
-    # Cleanup: Move logs and remove intermediate files (AFTER final messages)
-    # Move detailed log (if defined and exists)
-    if [[ -f "$LOG_FILE" ]]; then
-        # Ensure it goes to REPORTS/detailed_output.log
-        mv "$LOG_FILE" "$OUTPUT_ROOT/$DIR_REPORTS/detailed_output.log" 2>/dev/null
-        # Update variable so any final messages go to the right place
-        LOG_FILE="$OUTPUT_ROOT/$DIR_REPORTS/detailed_output.log"
-    else
-        mv CLIPittyClip_*.log "$OUTPUT_ROOT/$DIR_REPORTS/" 2>/dev/null
-    fi
-    
-    # Move console log into output
-    if [[ -n "$TEMP_CONSOLE_LOG" && -f "$TEMP_CONSOLE_LOG" ]]; then
-        mv "$TEMP_CONSOLE_LOG" "$OUTPUT_ROOT/$DIR_REPORTS/console_output.log" 2>/dev/null
-    fi
-    
     exit 0
 fi
 
@@ -975,7 +975,7 @@ if [[ "$DEMUX" == "yes" ]]; then
     if [[ "$DEDUP_MODE" == "true" ]]; then
         console_msg "\n[DEDUPLICATING]"
         print_section_item "Deduplicating Pooled Reads"
-        DEDUP_OUT="pooled_dedup.fastq"
+        DEDUP_OUT="${WORK_DIR}/pooled_dedup.fastq"
         if run_dedup "$INPUT_FILE" "$DEDUP_OUT"; then
             WORK_INPUT="$DEDUP_OUT"
             print_section_item "Deduplication Complete"
@@ -993,14 +993,15 @@ if [[ "$DEMUX" == "yes" ]]; then
     print_section_item "Barcodes: $(basename "$BARCODE_FILE")"
     print_section_item "Mismatches Allowed: $DEMUX_MISMATCHES"
     
-    # Run demultiplexing (with dedup disabled since we already did it)
-    run_demultiplexing "$WORK_INPUT" "$BARCODE_FILE" "$SAMPLE_SIZE" "false"
+    # Demux output goes into WORK_DIR so nothing lands in CWD
+    DEMUX_DIR="${WORK_DIR}/demux_fastq"
+    run_demultiplexing "$WORK_INPUT" "$BARCODE_FILE" "$SAMPLE_SIZE" "$DEMUX_DIR"
     
     print_section_item "Demultiplexing Complete"
     
     # Cleanup dedup temp file
-    if [[ -f "pooled_dedup.fastq" ]]; then
-        rm -f "pooled_dedup.fastq"
+    if [[ -f "$DEDUP_OUT" ]]; then
+        rm -f "$DEDUP_OUT"
         log_info "Cleaned up pooled dedup temp file."
     fi
     
@@ -1015,7 +1016,7 @@ if [[ "$DEMUX" == "yes" ]]; then
     
     total_reads=0
     # Calculate totals first
-    for sample in demux_fastq/*.fastq; do
+    for sample in "$DEMUX_DIR"/*.fastq; do
         if [ -f "$sample" ]; then
             lines=$(wc -l < "$sample")
             count=$((lines / 4))
@@ -1024,7 +1025,7 @@ if [[ "$DEMUX" == "yes" ]]; then
     done
 
     # Print table
-    for sample in demux_fastq/*.fastq; do
+    for sample in "$DEMUX_DIR"/*.fastq; do
         if [ -f "$sample" ]; then
             sample_name=$(basename "$sample" .fastq)
             lines=$(wc -l < "$sample")
@@ -1037,7 +1038,6 @@ if [[ "$DEMUX" == "yes" ]]; then
             fi
             
             printf "  %-20s %-12s %s%%\n" "$sample_name" "$count" "$pct"
-            # Log the stats too
             echo "[STATS] $sample_name: $count reads ($pct%)" >> "$LOG_FILE"
         fi
     done
@@ -1045,7 +1045,7 @@ if [[ "$DEMUX" == "yes" ]]; then
     console_msg "  Total Processed: $total_reads reads"
     
     # Check for unknown samples and notify
-    if [[ -f "demux_fastq/unknown.fastq" ]]; then
+    if [[ -f "${DEMUX_DIR}/unknown.fastq" ]]; then
         console_msg "  ${YELLOW}Note: 'unknown' samples will not be included in batch analysis.${NC}"
     fi
 
@@ -1082,11 +1082,16 @@ if [[ "$DEMUX" == "yes" ]]; then
     EXTRA_FLAGS="$EXTRA_FLAGS --child"
 
     # Get sample count for progress (excluding unknown)
-    total_samples=$(ls demux_fastq/*.fastq 2>/dev/null | grep -v "/unknown.fastq" | wc -l | tr -d ' ')
+    total_samples=$(ls "$DEMUX_DIR"/*.fastq 2>/dev/null | grep -v "/unknown.fastq" | wc -l | tr -d ' ')
     current_sample=0
 
+    # Resolve self script path once
+    self_script="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+
     # Loop through all generated files (skip unknown)
-    for sample in demux_fastq/*.fastq; do
+    # Children are launched in a subshell that cd's into WORK_DIR so their
+    # *_analysis/ dirs land there — not in wherever the user ran the script from.
+    for sample in "$DEMUX_DIR"/*.fastq; do
         if [ -f "$sample" ]; then
             sample_name=$(basename "$sample" .fastq)
             
@@ -1096,20 +1101,9 @@ if [[ "$DEMUX" == "yes" ]]; then
             fi
             
             ((current_sample++))
-            
-            # Print the leader for this sample. 
-            # We use printf without newline, or just let update_status handle the rest?
-            # The Child process will overwrite the same line.
-            # So we print the static prefix here:
             printf "  %2d/%-2d %-20s : " "$current_sample" "$total_samples" "$sample_name"
-            
-            # Log launch
             echo "[BATCH] Launching analysis for sample: $sample_name" >> "$LOG_FILE"
             
-            # Construct command for recursive call
-            self_script="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
-            
-            # We must NOT pass -b again
             cmd="bash $self_script \
                 -i $sample \
                 -x $GENOME_INDEX \
@@ -1119,52 +1113,26 @@ if [[ "$DEMUX" == "yes" ]]; then
                 -o ${sample_name} \
                 $EXTRA_FLAGS"
             
-            # Run the command with log capture
-            # In CHILD_MODE, the script will produce `update_status` outputs (echo -ne ... \r).
-            # We capture this into a sample-specific log while still showing it on console.
-            $cmd 2>&1 | tee "${sample_name}.log"
+            # Run child in WORK_DIR so *_analysis/ lands there
+            (cd "$WORK_DIR" && $cmd) 2>&1 | tee "${WORK_DIR}/${sample_name}.log"
             
-            # Check exit status of the PIPELINE (not tee) using PIPESTATUS
             pipestatus="${PIPESTATUS[0]}"
             
-            # When child finishes, we need to print "Done." and a newline to finalize the line.
             if [ $pipestatus -eq 0 ]; then
                 update_status_done
                 echo "[BATCH] Sample $sample_name analysis complete." >> "$LOG_FILE"
-                
-                # Move the captured log into the analysis directory if it exists
-                if [[ -d "${sample_name}_analysis" ]]; then
-                    mv "${sample_name}.log" "${sample_name}_analysis/${sample_name}.log"
+                if [[ -d "${WORK_DIR}/${sample_name}_analysis" ]]; then
+                    mv "${WORK_DIR}/${sample_name}.log" "${WORK_DIR}/${sample_name}_analysis/${sample_name}.log"
                 fi
             else
                 echo -e "${RED}FAILED${NC}"
                 log_error ">>> Sample $sample_name analysis FAILED."
-                # Keep the log file in root for debugging
             fi
         fi
     done
     
     # 3. Aggregation and Filing
-    # Define Final Output Structure
-    INPUT_BASENAME=$(basename "$INPUT_FILE" .fastq.gz) 
-    if [[ "$INPUT_BASENAME" == *"_sampled_"* ]]; then
-        # If sampled was used, try to get original name or keep it
-        # Actually safer to use the original argument input name if possible, 
-        # but here we rely on what we have.
-        # Let's just use a clean name.
-        INPUT_BASENAME="${INPUT_BASENAME%_sampled_*}"
-    fi
-    # Use -o value for output folder if provided, otherwise use input file name
-    # If -o contains a path separator, use as full path; otherwise create next to input
-    if [[ -n "$EXP_ID" ]]; then
-        if [[ "$EXP_ID" == */* ]]; then
-            OUTPUT_ROOT="$EXP_ID"
-        else
-            OUTPUT_ROOT="${INPUT_PARENT}/${EXP_ID}"
-        fi
-    else
-        OUTPUT_ROOT="${INPUT_PARENT}/${INPUT_BASENAME}_output"
-    fi
+    # OUTPUT_ROOT is computed centrally at startup — no need to recompute here.
     
     DIR_DEMUX="0_DEMUX_FASTQ"
     DIR_BAM="1_BAM"
@@ -1223,14 +1191,14 @@ if [[ "$DEMUX" == "yes" ]]; then
     
     # Collect files from analysis directories
     count=0
-    for sample in demux_fastq/*.fastq; do
+    for sample in "$DEMUX_DIR"/*.fastq; do
         if [ -f "$sample" ]; then
             sample_name=$(basename "$sample" .fastq)
             
             # Skip unknown samples
             [[ "$sample_name" == "unknown" ]] && continue
             
-            analysis_dir="${sample_name}_analysis"
+            analysis_dir="${WORK_DIR}/${sample_name}_analysis"
             
             if [[ -d "$analysis_dir" ]]; then
                 # log_info "Organizing output for $sample_name..."
@@ -1447,23 +1415,20 @@ if [[ "$DEMUX" == "yes" ]]; then
     printf "  %-25s %-15s %-15s %s\n" "Sample" "ncRNA Reads" "Total Reads" "% Filtered"
     console_msg "  ----------------------------------------------------------------"
     
-    for analysis_dir in *_analysis; do
-        if [[ -d "$analysis_dir" ]]; then
-            sample_name="${analysis_dir%_analysis}"
-            [[ "$sample_name" == "unknown" ]] && continue
-            
-            ncrna_stats="${analysis_dir}/OTHERS/ncRNA_Mapping/${sample_name}_ncrna_stats.txt"
-            
-            if [[ -f "$ncrna_stats" ]]; then
-                align_rate=$(grep "overall alignment rate" "$ncrna_stats" | grep -oE "[0-9]+\.[0-9]+%" || echo "N/A")
-                total=$(grep "reads; of these:" "$ncrna_stats" | grep -oE "^[0-9]+" || echo "N/A")
-                aligned=$(grep "aligned exactly 1 time" "$ncrna_stats" | grep -oE "^[[:space:]]*[0-9]+" | tr -d ' ' || echo "0")
-                multi=$(grep "aligned >1 times" "$ncrna_stats" | grep -oE "^[[:space:]]*[0-9]+" | tr -d ' ' || echo "0")
-                ncrna=$((aligned + multi))
-                printf "  %-25s %-15s %-15s %s\n" "$sample_name" "$ncrna" "$total" "$align_rate"
-            else
-                printf "  %-25s %-15s %-15s %s\n" "$sample_name" "-" "-" "SKIPPED"
-            fi
+    for f in "$DEMUX_DIR"/*.fastq; do
+        [[ -f "$f" ]] || continue
+        sample_name=$(basename "$f" .fastq)
+        [[ "$sample_name" == "unknown" ]] && continue
+        ncrna_stats="${WORK_DIR}/${sample_name}_analysis/OTHERS/ncRNA_Mapping/${sample_name}_ncrna_stats.txt"
+        if [[ -f "$ncrna_stats" ]]; then
+            align_rate=$(grep "overall alignment rate" "$ncrna_stats" | grep -oE "[0-9]+\.[0-9]+%" || echo "N/A")
+            total=$(grep "reads; of these:" "$ncrna_stats" | grep -oE "^[0-9]+" || echo "N/A")
+            aligned=$(grep "aligned exactly 1 time" "$ncrna_stats" | grep -oE "^[[:space:]]*[0-9]+" | tr -d ' ' || echo "0")
+            multi=$(grep "aligned >1 times" "$ncrna_stats" | grep -oE "^[[:space:]]*[0-9]+" | tr -d ' ' || echo "0")
+            ncrna=$((aligned + multi))
+            printf "  %-25s %-15s %-15s %s\n" "$sample_name" "$ncrna" "$total" "$align_rate"
+        else
+            printf "  %-25s %-15s %-15s %s\n" "$sample_name" "-" "-" "SKIPPED"
         fi
     done
     console_msg "  ----------------------------------------------------------------"
@@ -1480,34 +1445,33 @@ if [[ "$DEMUX" == "yes" ]]; then
         console_msg "  ----------------------------------------------------------------"
     fi
     
-    # Cleanup Analysis Folders and Temp Files or move to OTHERS if -k
+    # Cleanup analysis dirs and WORK_DIR
     if [[ "$KEEP_INTERMEDIATE" == "yes" ]]; then
-        console_msg "  > Moving sample analysis directories to $OUTPUT_ROOT/$DIR_OTHERS/sample_analysis/..."
-        mkdir -p "$OUTPUT_ROOT/$DIR_OTHERS/sample_analysis"
-        for analysis_dir in *_analysis; do
-            [[ -d "$analysis_dir" ]] && mv "$analysis_dir" "$OUTPUT_ROOT/$DIR_OTHERS/sample_analysis/" 2>/dev/null
-        done
+        console_msg "  > Moving intermediate files to $OUTPUT_ROOT/$DIR_OTHERS/INTERMEDIATE_FILES/..."
+        mv "$WORK_DIR" "$OUTPUT_ROOT/$DIR_OTHERS/INTERMEDIATE_FILES" 2>/dev/null
     else
-        console_msg "  > Cleaning up temporary analysis directories and files..."
-        rm -rf *_analysis
+        console_msg "  > Cleaning up temporary files..."
+        rm -rf "$WORK_DIR"
     fi
-    rm -f barcodes.fasta
     
-    # Remove sampled input if it exists (pattern match)
-    rm -f *_sampled_*.fastq.gz
-    
-    # Remove CTK temp directories (CITS.pl_*, CIMS.pl_*, tag2profile.pl_*)
-    rm -rf CITS.pl_* CIMS.pl_* tag2profile.pl_* 2>/dev/null
-    
-    # Remove CTK temp files (*.tmp from perl scripts)
-    rm -f *.tmp 2>/dev/null
-
-    # Also remove the main log if it was created in this dir
-    # We want to MOVE it to REPORTS/detailed_output.log
-    if [[ -f "$LOG_FILE" ]]; then
-         mv "$LOG_FILE" "$OUTPUT_ROOT/$DIR_REPORTS/detailed_output.log"
-         LOG_FILE="$OUTPUT_ROOT/$DIR_REPORTS/detailed_output.log"
+    # Demux FASTQs: already inside WORK_DIR (kept or deleted above).
+    # If -k, they are now in INTERMEDIATE_FILES/demux_fastq/
+    # If not -k, they are deleted with WORK_DIR above.
+    # For explicit 0_DEMUX_FASTQ folder under -k, copy them out:
+    if [[ "$KEEP_INTERMEDIATE" == "yes" ]]; then
+        if [[ -d "$OUTPUT_ROOT/$DIR_OTHERS/INTERMEDIATE_FILES/demux_fastq" ]]; then
+            mkdir -p "$OUTPUT_ROOT/$DIR_DEMUX"
+            cp "$OUTPUT_ROOT/$DIR_OTHERS/INTERMEDIATE_FILES/demux_fastq/"*.fastq \
+               "$OUTPUT_ROOT/$DIR_DEMUX/" 2>/dev/null
+        fi
     fi
+    
+    # Remove sampled input if it was created
+    if [[ -n "$SAMPLED_INPUT" && -f "$SAMPLED_INPUT" ]]; then rm -f "$SAMPLED_INPUT"; fi
+    
+    # Remove CTK temp dirs and files that may have landed in OUTPUT_ROOT
+    rm -rf "$OUTPUT_ROOT"/CITS.pl_* "$OUTPUT_ROOT"/tag2profile.pl_* 2>/dev/null
+    rm -f "$OUTPUT_ROOT"/*.tmp 2>/dev/null
     
     # Output Summary
     console_msg "\n[OUTPUT]"
@@ -1579,7 +1543,7 @@ if [[ -z "$ECLIP_MODE" ]]; then
     if [[ "$CHILD_MODE" != "true" ]]; then console_msg "\n[DEDUPLICATING]"; fi
     if [[ "$DEDUP_MODE" == "true" ]]; then
         if [[ "$CHILD_MODE" != "true" ]]; then print_section_item "Deduplicating Reads"; fi
-        DEDUP_OUT="$(pwd)/${BASENAME}_dedup.fastq"
+        DEDUP_OUT="${WORK_DIR}/${BASENAME}_dedup.fastq"
         if run_dedup "$INPUT_FILE" "$DEDUP_OUT"; then
             INPUT_FILE="$DEDUP_OUT"
             if [[ "$CHILD_MODE" != "true" ]]; then print_section_item "Deduplication Complete"; fi
@@ -1602,9 +1566,9 @@ if [[ "$CHILD_MODE" != "true" ]]; then
     printf "   1/1  %-20s : " "$BASENAME"
 fi
 
-# Directory Setup
-mkdir -p "${BASENAME}_analysis"
-cd "${BASENAME}_analysis" || exit 1
+# Directory Setup — work inside WORK_DIR so no files are created in CWD
+mkdir -p "${WORK_DIR}/${BASENAME}_analysis"
+cd "${WORK_DIR}/${BASENAME}_analysis" || exit 1
 LOG_FILE="${BASENAME}_analysis.log" # redirect log to inside analysis dir
 log_info "Working directory: $(pwd)"
 
@@ -1730,9 +1694,9 @@ fi
 
 # ── Organize output (non-child single-file mode only) ──────────────────────────
 if [[ "$CHILD_MODE" != "true" ]]; then
-    # We are in ${BASENAME}_analysis/ right now.
-    # Create organized output root one level up alongside (not inside) _analysis/
-    SINGLE_OUTPUT_ROOT="$(dirname "$(pwd)")/${BASENAME}_output"
+    # OUTPUT_ROOT was computed centrally before any analysis ran.
+    # Alias it so the rest of this block stays readable.
+    SINGLE_OUTPUT_ROOT="$OUTPUT_ROOT"
     mkdir -p "$SINGLE_OUTPUT_ROOT"
 
     SF_DIR_BAM="1_BAM"
@@ -1845,9 +1809,9 @@ if [[ "$CHILD_MODE" != "true" ]]; then
         mv "${BASENAME}"*.Log.out "$SINGLE_OUTPUT_ROOT/$SF_DIR_REPORTS/ALIGNER_LOGS/" 2>/dev/null
     fi
 
-    # Move analysis log into REPORTS
+    # Move analysis scratch log into REPORTS
     if [[ -f "$LOG_FILE" ]]; then
-        mv "$LOG_FILE" "$SINGLE_OUTPUT_ROOT/$SF_DIR_REPORTS/detailed_output.log"
+        mv "$LOG_FILE" "$SINGLE_OUTPUT_ROOT/$SF_DIR_REPORTS/detailed_output.log" 2>/dev/null
     fi
 
     log_info "Output organized: $SINGLE_OUTPUT_ROOT"
@@ -1857,28 +1821,24 @@ fi
 if [[ "$KEEP_INTERMEDIATE" != "yes" ]]; then
     log_info "Cleaning up intermediate files..."
     if [[ -n "$SINGLE_OUTPUT_ROOT" ]]; then
-        # Single mode cleans entire scratch directory natively
-        cd ..
-        rm -rf "${BASENAME}_analysis"
-        # Also remove the dedup temp file — it was created in the parent dir
-        # before cd-ing into the analysis subdir, so rm -rf above misses it
-        if [[ -n "$DEDUP_OUT" && -f "$DEDUP_OUT" ]]; then
-            rm -f "$DEDUP_OUT"
-            log_info "Removed dedup temp file: $(basename "$DEDUP_OUT")"
-        fi
+        # Single mode: delete entire WORK_DIR scratch tree
+        cd "$WORK_DIR/.."
+        rm -rf "$WORK_DIR"
+        # Sampled input lives in WORK_DIR (already deleted above)
     else
         # Child mode (directory batch): cleanup from inside analysis dir
         rm -f "${BASENAME}_cleaned.fastq" "${BASENAME}_raw.bed" "${BASENAME}_parsed.bed"
-        # DEDUP_OUT is an absolute path (created in parent dir before cd); remove it too
         if [[ -n "$DEDUP_OUT" && -f "$DEDUP_OUT" ]]; then
             rm -f "$DEDUP_OUT"
             log_info "Removed dedup temp file: $(basename "$DEDUP_OUT")"
         fi
     fi
 else
-    # Even if keeping intermediates, we must return to base dir in single-mode
+    # Keeping intermediates: rename WORK_DIR to INTERMEDIATE_FILES in OTHERS
     if [[ -n "$SINGLE_OUTPUT_ROOT" ]]; then
-        cd ..
+        mkdir -p "$SINGLE_OUTPUT_ROOT/$SF_DIR_OTHERS"
+        mv "$WORK_DIR" "$SINGLE_OUTPUT_ROOT/$SF_DIR_OTHERS/INTERMEDIATE_FILES" 2>/dev/null
+        cd "$SINGLE_OUTPUT_ROOT"
     fi
 fi
 
@@ -1888,7 +1848,7 @@ if [[ -n "$GLOBAL_GZIP_TMP" ]] && [[ -f "$GLOBAL_GZIP_TMP" ]]; then
 fi
 
 log_info "Analysis Finished Successfully!"
-log_info "Results in: ${SINGLE_OUTPUT_ROOT#../}"
+log_info "Results in: $SINGLE_OUTPUT_ROOT"
 
 # Calculate Duration
 PIPELINE_END=$(date +%s)
@@ -1948,14 +1908,7 @@ if [[ "$CHILD_MODE" != "true" ]]; then
     console_msg "\n[SUCCESS] Pipeline finished."
     console_msg "End Time: $(date '+%Y-%m-%d %H:%M:%S')"
     console_msg "Total Duration: ${H}h ${M}m ${S}s"
-    
-    # Final step: capture the floating console_output.log 
-    if [[ -f "$TEMP_CONSOLE_LOG" ]]; then
-        if [[ -n "$SINGLE_OUTPUT_ROOT" ]]; then
-            # Strip ../ from the relative path since we are back in root
-            mv "$TEMP_CONSOLE_LOG" "${SINGLE_OUTPUT_ROOT#../}/REPORTS/console_output.log" 2>/dev/null
-        fi
-    fi
+    # console_output.log is already at OUTPUT_ROOT/REPORTS/ — created there at startup.
 fi
 
 send_notification "CLIPittyClip: $BASENAME" "Analysis finished successfully. Duration: ${H}h ${M}m ${S}s"

@@ -94,6 +94,7 @@ function run_demultiplexing {
     local input_fastq="$1"
     local barcode_file="$2"
     local run_sample_size="$3"
+    local demux_out="${4:-demux_fastq}"
     # Note: dedup_mode parameter ignored - dedup is now handled by caller
     local mismatches="${DEMUX_MISMATCHES:-1}" # Default to 1 if unset/passed global
 
@@ -138,10 +139,10 @@ function run_demultiplexing {
     log_info "Calculated cutadapt error rate: $error_rate ($mismatches errors in ${bc_len}bp)"
 
     # Create demux output directory
-    mkdir -p demux_fastq
+    mkdir -p "$demux_out"
     
     # Convert barcodes for cutadapt
-    local fasta_barcodes="barcodes.fasta"
+    local fasta_barcodes="${demux_out}/barcodes.fasta"
     awk '{print ">"$1"\n"$2}' "$barcode_file" > "$fasta_barcodes"
 
     local cmd="cutadapt \
@@ -149,7 +150,7 @@ function run_demultiplexing {
         -m 1 \
         --action=none \
         -g file:$fasta_barcodes \
-        -o \"demux_fastq/{name}.fastq\" \
+        -o \"$demux_out/{name}.fastq\" \
         $work_input \
         -j ${THREADS:-1}"
     
@@ -157,12 +158,15 @@ function run_demultiplexing {
     execute_cmd "$cmd"
 
     # Check outputs
-    count=$(ls demux_fastq/*.fastq 2>/dev/null | wc -l)
+    count=$(ls "$demux_out"/*.fastq 2>/dev/null | wc -l)
     if [ "$count" -eq 0 ]; then
         log_error "Demultiplexing failed. No output files created."
         exit 1
     fi
-    log_info "Demultiplexing complete. Created $count sample files in 'demux_fastq/'."
+    log_info "Demultiplexing complete. Created $count sample files in '$demux_out/'."
+
+    # Cleanup barcodes FASTA (no longer needed after demux)
+    rm -f "$fasta_barcodes"
     
     # Cleanup Deduplicated Temp File if it exists
     if [[ "$work_input" != "$input_fastq" ]] && [[ -f "$work_input" ]]; then
