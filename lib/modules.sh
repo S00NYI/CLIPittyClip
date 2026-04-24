@@ -2353,6 +2353,7 @@ run_group_ctk_analysis() {
     local run_motif="$9"
     local run_cims="${10}"
     local run_cits="${11}"
+    local work_dir="${12:-$(pwd)}"   # directory containing *_analysis subdirs
     
     console_msg "\n[GROUP CTK ANALYSIS]"
     
@@ -2363,11 +2364,11 @@ run_group_ctk_analysis() {
     # 2. Create temp file for group→samples mapping
     local group_samples_file=$(mktemp)
     
-    # 3. Find all sample analysis directories and assign to groups
-    for sample_dir in *_analysis; do
+    # 3. Find all sample analysis directories (in work_dir) and assign to groups
+    for sample_dir in "${work_dir}"/*_analysis; do
         [[ ! -d "$sample_dir" ]] && continue
         
-        local sample_name="${sample_dir%_analysis}"
+        local sample_name="$(basename "${sample_dir%_analysis}")"
         
         # Look up group for this sample using grep (bash 3.x compatible)
         local group=$(grep -w "^${sample_name}" "$groups_map" 2>/dev/null | cut -f2)
@@ -2415,8 +2416,7 @@ run_group_ctk_analysis() {
         local group_collapsed="$group_ctk_dir/${group}_collapsed.bed"
         > "$group_collapsed"  # Clear file
         for sample in $samples; do
-            # Use find to locate collapsed.bed in sample's analysis directory
-            local sample_dir="${sample}_analysis"
+            local sample_dir="${work_dir}/${sample}_analysis"
             if [[ -d "$sample_dir" ]]; then
                 local sample_collapsed=$(find "$sample_dir" -name "*_collapsed.bed" 2>/dev/null | head -n 1)
                 if [[ -s "$sample_collapsed" ]]; then
@@ -2434,7 +2434,7 @@ run_group_ctk_analysis() {
         local group_mutations="$group_ctk_dir/${group}_mutations.txt"
         > "$group_mutations"  # Clear file
         for sample in $samples; do
-            local sample_dir="${sample}_analysis"
+            local sample_dir="${work_dir}/${sample}_analysis"
             if [[ -d "$sample_dir" ]]; then
                 local sample_mutations=$(find "$sample_dir" -name "*_mutations.txt" 2>/dev/null | head -n 1)
                 if [[ -s "$sample_mutations" ]]; then

@@ -741,7 +741,7 @@ if [[ -n "$INPUT_DIR" ]]; then
     if [[ -n "$CTK_GROUPS_FILE" ]]; then
         run_group_ctk_analysis "$CTK_GROUPS_FILE" "$OUTPUT_ROOT" "$GENOME_INDEX" \
             "$CIMS_ITERATIONS" "$CIMS_FDR" "$CITS_PVALUE" "$CITS_GAP" \
-            "$MOTIF_FLANK" "$RUN_MOTIF" "$RUN_CIMS" "$RUN_CITS"
+            "$MOTIF_FLANK" "$RUN_MOTIF" "$RUN_CIMS" "$RUN_CITS" "$WORK_DIR"
     fi
     
     console_msg "\n[AGGREGATION]"
