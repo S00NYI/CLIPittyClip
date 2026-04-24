@@ -683,6 +683,10 @@ run_mapping_star() {
     local threads="$4"
     local mismatch_max="$5"
 
+    # Resolve to absolute path — STAR's --readFilesCommand spawns cat/gzip in its
+    # own temp dir, so relative paths in --readFilesIn will not be found.
+    input_fastq="$(cd "$(dirname "$input_fastq")" && pwd)/$(basename "$input_fastq")"
+
     update_status "Mapping (STAR)"
     log_info "Starting mapping with STAR..."
 
