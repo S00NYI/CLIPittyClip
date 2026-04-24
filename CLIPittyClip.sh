@@ -582,16 +582,25 @@ if [[ "$SAMPLE_SIZE" -gt 0 ]] && [[ -n "$INPUT_FILE" ]]; then
     fi
     log_info "Test Drive Mode: Sampling first $SAMPLE_SIZE reads from input..."
     
-    # Sampled file goes into WORK_DIR to avoid polluting CWD or input dir
+    # Sampled file goes into WORK_DIR to avoid polluting CWD or input dir.
+    # Children's CWD is already WORK_DIR (set by parent subshell); use $(pwd).
     _sb=$(basename "$INPUT_FILE")
-    _sb="${_sb%.fastq.gz}"; _sb="${_sb%.fq.gz}"
-    SAMPLED_INPUT="${WORK_DIR}/${_sb}_sampled_${SAMPLE_SIZE}.fastq.gz"
+    _sb="${_sb%.fastq.gz}"; _sb="${_sb%.fq.gz}"; _sb="${_sb%.fastq}"; _sb="${_sb%.fq}"
+    if [[ "$CHILD_MODE" != "true" ]]; then
+        SAMPLED_INPUT="${WORK_DIR}/${_sb}_sampled_${SAMPLE_SIZE}.fastq.gz"
+    else
+        SAMPLED_INPUT="$(pwd)/${_sb}_sampled_${SAMPLE_SIZE}.fastq.gz"
+    fi
 
     # Calculate lines: 4 lines per read
     LINES=$((SAMPLE_SIZE * 4))
 
-    # Stream process: gunzip -> head -> gzip
-    gzip -cd "$INPUT_FILE" | head -n "$LINES" | gzip > "$SAMPLED_INPUT"
+    # Stream: decompress if needed → head → gzip
+    if [[ "$INPUT_FILE" == *.gz ]]; then
+        gzip -cd "$INPUT_FILE" | head -n "$LINES" | gzip > "$SAMPLED_INPUT"
+    else
+        head -n "$LINES" "$INPUT_FILE" | gzip > "$SAMPLED_INPUT"
+    fi
 
     if [[ $? -eq 0 && -s "$SAMPLED_INPUT" ]]; then
         if [[ "$CHILD_MODE" != "true" ]]; then
