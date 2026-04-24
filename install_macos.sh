@@ -120,6 +120,12 @@ TOOLS_DIR="${TOOLS_DIR/#\~/$HOME}"
 #-------------------------------------------------------------------------------
 # Main Installation
 #-------------------------------------------------------------------------------
+# Check if running on Linux
+if [[ "$(uname)" != "Darwin" ]]; then
+    print_error "This script is for macOS. Please run ./install_linux.sh instead."
+    exit 1
+fi
+
 print_header
 
 echo -e "${BOLD}Configuration:${NC}"
@@ -189,6 +195,22 @@ if command -v brew &> /dev/null; then
         brew install openssl || print_warning "Failed to install openssl"
     else
         print_success "openssl already installed"
+    fi
+
+    # Check and install expat (needed for XML::Parser)
+    if ! brew list expat &> /dev/null; then
+        print_info "Installing expat via Homebrew..."
+        brew install expat || print_warning "Failed to install expat"
+    else
+        print_success "expat already installed"
+    fi
+
+    # Check and install berkeley-db (needed for DB_File)
+    if ! brew list berkeley-db &> /dev/null; then
+        print_info "Installing berkeley-db via Homebrew..."
+        brew install berkeley-db || print_warning "Failed to install berkeley-db"
+    else
+        print_success "berkeley-db already installed"
     fi
 else
     print_warning "Homebrew not found. Some Perl modules may fail to compile."
@@ -336,14 +358,14 @@ fi
 # Set compiler flags for Homebrew libraries
 if [[ -d "/opt/homebrew/opt/openssl" ]]; then
     # Apple Silicon
-    export LDFLAGS="-L/opt/homebrew/opt/openssl/lib -L/opt/homebrew/opt/libxml2/lib"
-    export CPPFLAGS="-I/opt/homebrew/opt/openssl/include -I/opt/homebrew/opt/libxml2/include"
-    export PKG_CONFIG_PATH="/opt/homebrew/opt/openssl/lib/pkgconfig:/opt/homebrew/opt/libxml2/lib/pkgconfig"
+    export LDFLAGS="-L/opt/homebrew/opt/openssl/lib -L/opt/homebrew/opt/libxml2/lib -L/opt/homebrew/opt/expat/lib -L/opt/homebrew/opt/berkeley-db/lib"
+    export CPPFLAGS="-I/opt/homebrew/opt/openssl/include -I/opt/homebrew/opt/libxml2/include -I/opt/homebrew/opt/expat/include -I/opt/homebrew/opt/berkeley-db/include"
+    export PKG_CONFIG_PATH="/opt/homebrew/opt/openssl/lib/pkgconfig:/opt/homebrew/opt/libxml2/lib/pkgconfig:/opt/homebrew/opt/expat/lib/pkgconfig"
 elif [[ -d "/usr/local/opt/openssl" ]]; then
     # Intel Mac
-    export LDFLAGS="-L/usr/local/opt/openssl/lib -L/usr/local/opt/libxml2/lib"
-    export CPPFLAGS="-I/usr/local/opt/openssl/include -I/usr/local/opt/libxml2/include"
-    export PKG_CONFIG_PATH="/usr/local/opt/openssl/lib/pkgconfig:/usr/local/opt/libxml2/lib/pkgconfig"
+    export LDFLAGS="-L/usr/local/opt/openssl/lib -L/usr/local/opt/libxml2/lib -L/usr/local/opt/expat/lib -L/usr/local/opt/berkeley-db/lib"
+    export CPPFLAGS="-I/usr/local/opt/openssl/include -I/usr/local/opt/libxml2/include -I/usr/local/opt/expat/include -I/usr/local/opt/berkeley-db/include"
+    export PKG_CONFIG_PATH="/usr/local/opt/openssl/lib/pkgconfig:/usr/local/opt/libxml2/lib/pkgconfig:/usr/local/opt/expat/lib/pkgconfig"
 fi
 
 # Check if cpanm is available, if not install it
@@ -351,6 +373,13 @@ if ! command -v cpanm &> /dev/null; then
     print_info "Installing cpanminus..."
     curl -L https://cpanmin.us | perl - App::cpanminus 2>/dev/null || true
 fi
+
+# Install modules needed for BioPerl compatibility
+print_info "Installing XML::Parser (required for Bio::SeqIO)..."
+cpanm --notest XML::Parser 2>/dev/null || true
+
+print_info "Installing DB_File (required for Bio::SeqIO)..."
+cpanm --notest DB_File 2>/dev/null || true
 
 # Install only the modules CTK actually needs (not full BioPerl)
 print_info "Installing Math::CDF (required for CIMS/CITS)..."

@@ -129,6 +129,12 @@ done
 #-------------------------------------------------------------------------------
 # Main Installation
 #-------------------------------------------------------------------------------
+# Check if running on macOS
+if [[ "$(uname)" == "Darwin" ]]; then
+    print_error "This script is for Linux. Please run ./install_macos.sh instead."
+    exit 1
+fi
+
 print_header
 
 echo -e "${BOLD}Configuration:${NC}"
