@@ -730,6 +730,7 @@ if [[ -n "$INPUT_DIR" ]]; then
              "$OUTPUT_ROOT/$DIR_BG" \
              "$OUTPUT_ROOT/$DIR_PEAKS/SAMPLE_PEAKS" \
              "$OUTPUT_ROOT/$DIR_PEAKS/COMBINED_PEAKS" \
+             "$OUTPUT_ROOT/$DIR_OTHERS" \
              "$OUTPUT_ROOT/$DIR_REPORTS/FASTP_REPORT" \
              "$OUTPUT_ROOT/$DIR_REPORTS/ALIGNER_LOGS/DETAILED_LOGS_CAN_BE_DELETED" \
              "$OUTPUT_ROOT/$DIR_REPORTS/SAMPLES" \
@@ -964,7 +965,7 @@ if [[ -n "$INPUT_DIR" ]]; then
 
     # Logs are already at OUTPUT_ROOT/REPORTS/ — created there at startup.
     # console_output.log is live-captured by tee into that location.
-    PEAK_MATRIX="$OUTPUT_ROOT/$DIR_PEAKS/COMBINED_PEAKS/COMBINED_peakMatrix.txt"
+    PEAK_MATRIX="$OUTPUT_ROOT/$DIR_PEAKS/COMBINED_PEAKS/COMBINED_PEAK_MATRIX.txt"
     PEAKS_BED="$OUTPUT_ROOT/$DIR_PEAKS/COMBINED_PEAKS/peaks_Sorted.bed"
     
     if [[ -f "$PEAK_MATRIX" && -f "$PEAKS_BED" ]]; then
@@ -1193,6 +1194,7 @@ if [[ "$DEMUX" == "yes" ]]; then
              "$OUTPUT_ROOT/$DIR_BG" \
              "$OUTPUT_ROOT/$DIR_PEAKS/SAMPLE_PEAKS" \
              "$OUTPUT_ROOT/$DIR_PEAKS/COMBINED_PEAKS" \
+             "$OUTPUT_ROOT/$DIR_OTHERS" \
              "$OUTPUT_ROOT/$DIR_REPORTS/FASTP_REPORT" \
              "$OUTPUT_ROOT/$DIR_REPORTS/ALIGNER_LOGS/DETAILED_LOGS_CAN_BE_DELETED" \
              "$OUTPUT_ROOT/$DIR_REPORTS/SAMPLES" \
@@ -1426,7 +1428,7 @@ if [[ "$DEMUX" == "yes" ]]; then
     fi
     
     # Add enhanced columns to peak matrix (after combined bedgraphs are ready)
-    PEAK_MATRIX="$OUTPUT_ROOT/$DIR_PEAKS/COMBINED_PEAKS/COMBINED_peakMatrix.txt"
+    PEAK_MATRIX="$OUTPUT_ROOT/$DIR_PEAKS/COMBINED_PEAKS/COMBINED_PEAK_MATRIX.txt"
     PEAKS_BED="$OUTPUT_ROOT/$DIR_PEAKS/COMBINED_PEAKS/peaks_Sorted.bed"
     
     if [[ -f "$PEAK_MATRIX" && -f "$PEAKS_BED" ]]; then
@@ -1632,6 +1634,13 @@ else
     run_fastp "$INPUT_FILE" "$BASENAME" "$UMI_LEN" "$ADAPTER_3" "$THREADS" "$SAMPLE_SIZE" "$BC_LEN" "$SPACER_LEN"
 fi
 
+# Propagate eCLIP-detected UMI length for downstream tag2collapse.pl
+# (eCLIP preprocessors auto-detect UMI length and export via ECLIP_UMI_LEN)
+if [[ -n "$ECLIP_UMI_LEN" ]] && [[ "$ECLIP_UMI_LEN" -gt 0 ]]; then
+    UMI_LEN="$ECLIP_UMI_LEN"
+    log_info "UMI length updated from eCLIP preprocessing: ${UMI_LEN}nt"
+fi
+
 # 1b. ncRNA Pre-filtering (if enabled and index exists)
 CLEANED_FASTQ="${BASENAME}_cleaned.fastq"
 if [[ "$FILTER_NCRNA" == "true" ]]; then
@@ -1784,26 +1793,30 @@ if [[ "$CHILD_MODE" != "true" ]]; then
     PEAK_DIR_NAME="${BASENAME}_peaks"
     if [[ -d "$PEAK_DIR_NAME" ]]; then
         mv "$PEAK_DIR_NAME" "$SINGLE_OUTPUT_ROOT/$SF_DIR_PEAKS/" 2>/dev/null
-        mv "${PEAK_DIR_NAME}_homer.log" "$SINGLE_OUTPUT_ROOT/$SF_DIR_PEAKS/" 2>/dev/null
-        # Duplicate the unified BED format up to root for immediate visibility
-        cp "$SINGLE_OUTPUT_ROOT/$SF_DIR_PEAKS/$PEAK_DIR_NAME/peaks_Sorted.bed" "$SINGLE_OUTPUT_ROOT/$SF_DIR_PEAKS/FINAL_PEAKS.bed" 2>/dev/null
+        mkdir -p "$SINGLE_OUTPUT_ROOT/$SF_DIR_REPORTS/PEAK"
+        mv "${PEAK_DIR_NAME}_homer.log" "$SINGLE_OUTPUT_ROOT/$SF_DIR_REPORTS/PEAK/" 2>/dev/null
+        # Rename the unified BED format inside the dir
+        mv "$SINGLE_OUTPUT_ROOT/$SF_DIR_PEAKS/$PEAK_DIR_NAME/peaks_Sorted.bed" "$SINGLE_OUTPUT_ROOT/$SF_DIR_PEAKS/$PEAK_DIR_NAME/FINAL_PEAKS.bed" 2>/dev/null
+        final_peaks="$SINGLE_OUTPUT_ROOT/$SF_DIR_PEAKS/$PEAK_DIR_NAME/FINAL_PEAKS.bed"
     else
-        mv "${BASENAME}_peaks_raw.bed" "$SINGLE_OUTPUT_ROOT/$SF_DIR_PEAKS/FINAL_PEAKS.bed" 2>/dev/null
-        mv "${BASENAME}_peaks_ctk.log" "$SINGLE_OUTPUT_ROOT/$SF_DIR_PEAKS/" 2>/dev/null
+        mkdir -p "$SINGLE_OUTPUT_ROOT/$SF_DIR_PEAKS/$PEAK_DIR_NAME"
+        mv "${BASENAME}_peaks_raw.bed" "$SINGLE_OUTPUT_ROOT/$SF_DIR_PEAKS/$PEAK_DIR_NAME/FINAL_PEAKS.bed" 2>/dev/null
+        mkdir -p "$SINGLE_OUTPUT_ROOT/$SF_DIR_REPORTS/PEAK"
+        mv "${BASENAME}_peaks_ctk.log" "$SINGLE_OUTPUT_ROOT/$SF_DIR_REPORTS/PEAK/" 2>/dev/null
+        final_peaks="$SINGLE_OUTPUT_ROOT/$SF_DIR_PEAKS/$PEAK_DIR_NAME/FINAL_PEAKS.bed"
     fi
     
     # -------------------------------------------------------------------------
     # Single-File Peak Matrix Generation (Unification with Batch mode)
     # -------------------------------------------------------------------------
     sample_bed="$SINGLE_OUTPUT_ROOT/$SF_DIR_BED/${COLLAPSED_BED:-${BASENAME}_collapsed.bed}"
-    final_peaks="$SINGLE_OUTPUT_ROOT/$SF_DIR_PEAKS/FINAL_PEAKS.bed"
     scale_tsv="$SINGLE_OUTPUT_ROOT/$SF_DIR_BG/scale_factors.tsv"
     
     if [[ -f "$final_peaks" && -f "$sample_bed" ]]; then
         console_msg "  > Generating coverage matrix for Single Sequence..."
         
         # 1. Raw tag coverage
-        coverage_file="$SINGLE_OUTPUT_ROOT/$SF_DIR_PEAKS/FINAL_PEAK_MATRIX.txt"
+        coverage_file="$SINGLE_OUTPUT_ROOT/$SF_DIR_PEAKS/${BASENAME}_PEAK_MATRIX.txt"
         cp "$final_peaks" "$coverage_file"
         
         bedtools coverage -s -a "$final_peaks" -b "$sample_bed" > "temp_cov.txt"
@@ -1862,7 +1875,9 @@ if [[ "$CHILD_MODE" != "true" ]]; then
 
     # Move analysis scratch log into REPORTS
     if [[ -f "$LOG_FILE" ]]; then
-        mv "$LOG_FILE" "$SINGLE_OUTPUT_ROOT/$SF_DIR_REPORTS/detailed_output.log" 2>/dev/null
+        cat "$LOG_FILE" >> "$SINGLE_OUTPUT_ROOT/$SF_DIR_REPORTS/detailed_output.log" 2>/dev/null
+        rm -f "$LOG_FILE"
+        LOG_FILE="$SINGLE_OUTPUT_ROOT/$SF_DIR_REPORTS/detailed_output.log"
     fi
 
     log_info "Output organized: $SINGLE_OUTPUT_ROOT"

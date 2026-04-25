@@ -504,6 +504,9 @@ run_eclip_pe_preprocessing() {
 
     log_info "eCLIP PE preprocessing complete: $final_file"
     log_info "Read ID format: READ#count#UMI (CTK-compatible)"
+
+    # Export detected UMI length for downstream tag2collapse.pl
+    ECLIP_UMI_LEN="$umi_len"
 }
 
 # ── eCLIP SE Preprocessing ───────────────────────────────────────────────────
@@ -581,6 +584,9 @@ run_eclip_se_preprocessing() {
 
     log_info "eCLIP SE preprocessing complete: $final_file"
     log_info "Read ID format: READ#count#UMI (CTK-compatible)"
+
+    # Export detected UMI length for downstream tag2collapse.pl
+    ECLIP_UMI_LEN="$umi_len"
 }
 
 # 1b. Adapter trimming and quality filtering with fastp (standard mode only)
