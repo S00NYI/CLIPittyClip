@@ -1854,7 +1854,7 @@ run_cits() {
         log_info "Using parallel processing ($chr_count chromosomes, $threads threads)"
     fi
     
-    local cits_raw="${output_file%.txt}_raw.bed"
+    local cits_raw="${output_file%.txt}_tmp.bed"
     
     if [[ "$use_parallel" == "true" ]]; then
         # Parallel mode: split BOTH collapsed.bed AND deletion file by chromosome
