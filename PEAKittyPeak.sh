@@ -208,7 +208,7 @@ call_peaks() {
     # ----------------------------------------------------------------
     # Shared: Coverage Analysis (same for both callers)
     # ----------------------------------------------------------------
-    local coverage_file="${out_dir}/${output_name}_peakMatrix.txt"
+    local coverage_file="${out_dir}/${output_name}_PEAK_MATRIX.txt"
     cp "${out_dir}/peaks_Sorted.bed" "$coverage_file"
 
     HEADER_STR="chr\tstart\tend\tname\tscore\tstrand"

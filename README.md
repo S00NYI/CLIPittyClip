@@ -328,7 +328,7 @@ Condition_B_Rep2    Condition_B
 
 ## Peak Matrix Metrics
 
-The `COMBINED_peakMatrix.txt` file contains up to 54+ advanced metrics summarizing peak intensity, reproducibility, and coverage shape.
+The `COMBINED_PEAK_MATRIX.txt` file contains up to 54+ advanced metrics summarizing peak intensity, reproducibility, and coverage shape.
 
 | Metric Type | Column Prefix | Scoping | Calculation Method | Interpretation |
 | :--- | :--- | :--- | :--- | :--- |
