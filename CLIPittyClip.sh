@@ -207,6 +207,9 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# Sync MISMATCH_MAX with the CLI-parsed --align-mismatches value
+MISMATCH_MAX="$ALIGN_MISMATCHES"
+
 # ------------------------------------------------------------------
 # Pre-Wizard Config Checking
 # ------------------------------------------------------------------
@@ -740,9 +743,12 @@ if [[ -n "$INPUT_DIR" ]]; then
 
     # Run Group-based CTK Analysis (if groups file provided)
     if [[ -n "$CTK_GROUPS_FILE" ]]; then
-        run_group_ctk_analysis "$CTK_GROUPS_FILE" "$OUTPUT_ROOT" "$GENOME_INDEX" \
+        # Run in WORK_DIR subshell to prevent CITS.pl/tag2profile.pl CWD pollution
+        (cd "$WORK_DIR" && run_group_ctk_analysis "$CTK_GROUPS_FILE" "$OUTPUT_ROOT" "$GENOME_INDEX" \
             "$CIMS_ITERATIONS" "$CIMS_FDR" "$CITS_PVALUE" "$CITS_GAP" \
-            "$MOTIF_FLANK" "$RUN_MOTIF" "$RUN_CIMS" "$RUN_CITS" "$WORK_DIR"
+            "$MOTIF_FLANK" "$RUN_MOTIF" "$RUN_CIMS" "$RUN_CITS" "$WORK_DIR")
+        # Cleanup any CTK temp dirs that may have landed in CWD despite subshell
+        rm -rf CITS.pl_* tag2profile.pl_* 2>/dev/null
     fi
     
     console_msg "\n[AGGREGATION]"
@@ -1200,9 +1206,12 @@ if [[ "$DEMUX" == "yes" ]]; then
 
     # Run Group-based CTK Analysis (OPT-IN ONLY with --ctk-group flag)
     if [[ "$CTK_GROUP_MODE" == "true" ]] && [[ -n "$GROUPS_FILE" ]]; then
-        run_group_ctk_analysis "$GROUPS_FILE" "$OUTPUT_ROOT" "$GENOME_INDEX" \
+        # Run in WORK_DIR subshell to prevent CITS.pl/tag2profile.pl CWD pollution
+        (cd "$WORK_DIR" && run_group_ctk_analysis "$GROUPS_FILE" "$OUTPUT_ROOT" "$GENOME_INDEX" \
             "$CIMS_ITERATIONS" "$CIMS_FDR" "$CITS_PVALUE" "$CITS_GAP" \
-            "$MOTIF_FLANK" "$RUN_MOTIF" "$RUN_CIMS" "$RUN_CITS"
+            "$MOTIF_FLANK" "$RUN_MOTIF" "$RUN_CIMS" "$RUN_CITS" "$WORK_DIR")
+        # Cleanup any CTK temp dirs that may have landed in CWD despite subshell
+        rm -rf CITS.pl_* tag2profile.pl_* 2>/dev/null
     fi
              
     console_msg "\n[AGGREGATION]"

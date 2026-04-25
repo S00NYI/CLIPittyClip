@@ -1787,6 +1787,11 @@ CIMS_SCRIPT
         
         # Filter for significance only if FDR < 1
         if (( $(echo "$cims_fdr < 1" | bc -l) )); then
+            # Preserve raw output when -k is passed (for threshold exploration)
+            if [[ "${KEEP_INTERMEDIATE:-no}" == "yes" ]]; then
+                cp "$output_file" "${output_file%.txt}_raw.txt"
+                log_info "CIMS raw output preserved: ${output_file%.txt}_raw.txt"
+            fi
             log_info "Filtering CIMS results by FDR < $cims_fdr..."
             local temp_file="${output_file}.tmp"
             awk -F'\t' -v fdr="$cims_fdr" 'NR==1 || $9 < fdr' "$output_file" | \
@@ -1925,6 +1930,12 @@ CITS_SCRIPT
     if [[ -s "$cits_raw" ]]; then
         local raw_count=$(wc -l < "$cits_raw")
         log_info "CITS raw output: $raw_count sites"
+        
+        # Preserve raw output when -k is passed (for threshold exploration)
+        if [[ "${KEEP_INTERMEDIATE:-no}" == "yes" ]]; then
+            cp "$cits_raw" "${output_file%.txt}_raw.bed"
+            log_info "CITS raw output preserved: ${output_file%.txt}_raw.bed"
+        fi
         
         # Filter to single-nucleotide sites (singleton) - this is the main output
         # Add header for consistency with CIMS output
@@ -2291,7 +2302,15 @@ run_combined_bedgraph() {
                 fi
             done
             
-            if [[ $count -gt 0 ]]; then
+            if [[ $count -eq 1 ]]; then
+                # Single sample in group — copy directly (no union needed)
+                local output_file="$bedgraph_dir/COMBINED_BEDGRAPH/${group}_combined_${strand}.bedgraph"
+                local strand_desc
+                if [[ "$strand" == "pos" ]]; then strand_desc="Combined Positive Strand"; else strand_desc="Combined Negative Strand"; fi
+                echo "track type=bedGraph name=\"${group}\" description=\"${strand_desc}\"" > "$output_file"
+                grep -v "^track" $bg_files >> "$output_file"
+                log_info "  Generated: $(basename "$output_file") (1 sample, copied directly)"
+            elif [[ $count -gt 1 ]]; then
                 # Union and Average
                 # Unionbedg produces: chrom start end val1 val2 ... valN
                 # Column 1,2,3 are coords. Columns 4 to 3+N are values.
@@ -2324,7 +2343,6 @@ run_combined_bedgraph() {
                 cat "$combined_tmp" >> "$output_file"
                 rm -f "$combined_tmp"
                 rm -rf "$tmp_dir"
-
 
                 log_info "  Generated: $(basename "$output_file") ($count replicates)"
             else
