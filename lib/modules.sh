@@ -721,7 +721,13 @@ run_mapping_star() {
         --outFilterMismatchNmax ${mismatch_max} \
         --outSAMattributes NH HI AS nM NM MD \
         --alignEndsType EndToEnd \
+        --scoreDelOpen -1 --scoreDelBase -1 \
         $ADV_ALIGNER_ARGS"
+    # --scoreDelOpen -1 --scoreDelBase -1: lower deletion penalty to match mismatch penalty.
+    # STAR's default gap penalty (-2 open, -2 base) makes 1-nt deletions score worse than
+    # substitutions on short reads (~20-30bp post-trim). Real crosslink-induced deletions
+    # then get reported as mismatches, suppressing CIMS deletion signal and inflating
+    # substitution counts. Reducing both to -1 makes deletion calls competitive.
 
     log_info "Running: $cmd"
     execute_cmd "$cmd"
