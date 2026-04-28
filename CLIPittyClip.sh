@@ -244,7 +244,7 @@ if [[ "$WIZARD_MODE" == "true" ]]; then
     ALIGNER="$WIZ_ALIGNER"
     THREADS="$WIZ_THREADS"
     UMI_LEN="$WIZ_UMI_LEN"
-    ADAPTER="$WIZ_ADAPTER"
+    ADAPTER_3="$WIZ_ADAPTER"
     [[ "$WIZ_CIMS" == "y" ]] && RUN_CIMS="true"
     [[ "$WIZ_CITS" == "y" ]] && RUN_CITS="true"
     PEAK_DIST="$WIZ_PEAK_DIST"
@@ -265,6 +265,14 @@ if [[ "$WIZARD_MODE" == "true" ]]; then
     # We map WIZ_FASTP_ARGS so the standard CLI loop can process it
     if [[ -n "$WIZ_FASTP_ARGS" ]]; then
         ADV_FASTP_ARGS="$WIZ_FASTP_ARGS"
+    fi
+    
+    if [[ -n "$WIZ_ALIGNER_ARGS" ]]; then
+        ADV_ALIGNER_ARGS="$WIZ_ALIGNER_ARGS"
+    fi
+    
+    if [[ -n "$WIZ_CTK_ARGS" ]]; then
+        ADV_CTK_ARGS="$WIZ_CTK_ARGS"
     fi
 fi
 
@@ -916,7 +924,7 @@ if [[ -n "$INPUT_DIR" ]]; then
     
     PEAK_LOG="$OUTPUT_ROOT/$DIR_PEAK_LOGS/Combined_PeakCalling.log"
     
-    PEAK_CMD="$SCRIPT_DIR/PEAKittyPeak.sh -i \"$BED_DIR\" --aggregate -n \"Combined\" -p \"$PEAK_DIST\" -z \"$PEAK_SIZE\" -f \"$FRAG_LEN\" --peak-caller \"$PEAK_CALLER\""
+    PEAK_CMD="$SCRIPT_DIR/PEAKittyPeak.sh -i \"$BED_DIR\" --aggregate -n \"COMBINED\" -p \"$PEAK_DIST\" -z \"$PEAK_SIZE\" -f \"$FRAG_LEN\" --peak-caller \"$PEAK_CALLER\""
     if [[ -n "$ADV_PEAK_CALLER_ARGS" ]]; then PEAK_CMD="$PEAK_CMD --peak-caller-args \"$ADV_PEAK_CALLER_ARGS\""; fi
     if [[ -n "$DIR_CTK" ]]; then
         PEAK_CMD="$PEAK_CMD --ctk-dir \"$OUTPUT_ROOT/$DIR_CTK\""
@@ -935,9 +943,9 @@ if [[ -n "$INPUT_DIR" ]]; then
     eval "$PEAK_CMD" > "$OUTPUT_ROOT/$DIR_PEAK_LOGS/Combined_PeakCalling.log" 2>&1
     
     # Move combined results (PEAKittyPeak creates ${BASE_NAME}_peaks/, not PEAKS/)
-    if [[ -d "Combined_peaks" ]]; then
-        mv Combined_peaks/* "$OUTPUT_ROOT/$DIR_PEAKS/COMBINED_PEAKS/" 2>/dev/null
-        rm -rf Combined_peaks
+    if [[ -d "COMBINED_peaks" ]]; then
+        mv COMBINED_peaks/* "$OUTPUT_ROOT/$DIR_PEAKS/COMBINED_PEAKS/" 2>/dev/null
+        rm -rf COMBINED_peaks
     fi
     
     console_msg "  > Combined peaks: $OUTPUT_ROOT/$DIR_PEAKS/COMBINED_PEAKS/"
@@ -1375,7 +1383,8 @@ if [[ "$DEMUX" == "yes" ]]; then
         # Call script (using absolute path or relative to old pwd)
         # Call script with -n COMBINED to create COMBINED_peaks folder
         # Use -i 2_COLLAPSED_BED (relative to OUTPUT_ROOT) and --aggregate parameter
-        PEAK_CMD="bash $PEAK_SCRIPT -i 2_COLLAPSED_BED --aggregate -n COMBINED -p $PEAK_DIST -z $PEAK_SIZE -f $FRAG_LEN"
+        PEAK_CMD="bash $PEAK_SCRIPT -i 2_COLLAPSED_BED --aggregate -n COMBINED -p $PEAK_DIST -z $PEAK_SIZE -f $FRAG_LEN --peak-caller \"$PEAK_CALLER\""
+        if [[ -n "$ADV_PEAK_CALLER_ARGS" ]]; then PEAK_CMD="$PEAK_CMD --peak-caller-args \"$ADV_PEAK_CALLER_ARGS\""; fi
         
         # Add --ctk-dir if CTK analysis was enabled
         if [[ "$RUN_CIMS" == "true" ]] || [[ "$RUN_CITS" == "true" ]]; then
@@ -1577,6 +1586,7 @@ fi
 if [[ -z "$ECLIP_MODE" ]]; then
     if [[ "$CHILD_MODE" != "true" ]]; then console_msg "\n[DEDUPLICATING]"; fi
     if [[ "$DEDUP_MODE" == "true" ]]; then
+        if [[ "$CHILD_MODE" == "true" ]]; then update_status "Deduplicating"; fi
         if [[ "$CHILD_MODE" != "true" ]]; then print_section_item "Deduplicating Reads"; fi
         # Children's CWD is already WORK_DIR (set by parent subshell);
         # use $(pwd) for an absolute path without needing $WORK_DIR to be set.

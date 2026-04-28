@@ -167,7 +167,6 @@ else
     WORK_PARENT="$(cd "$(dirname "$INPUT_DIR")" && pwd)"
     BASE=$(basename "$INPUT_DIR")
 fi
-[[ -n "$EXP_ID" ]] && BASE="$EXP_ID"
 
 # ─── Banner ──────────────────────────────────────────────────────────────────
 echo "════════════════════════════════════════════════════════════════════════════════"
@@ -206,7 +205,16 @@ fi
 # ─────────────────────────────────────────────────────────────────────────────
 # NORMAL MODE — output directory setup
 # ─────────────────────────────────────────────────────────────────────────────
-OUTPUT_ROOT="${WORK_PARENT}/${BASE}_prepped"
+if [[ -n "$EXP_ID" ]]; then
+    if [[ "$EXP_ID" == /* ]]; then
+        OUTPUT_ROOT="${EXP_ID}"
+    else
+        OUTPUT_ROOT="${WORK_PARENT}/${EXP_ID}"
+    fi
+else
+    OUTPUT_ROOT="${WORK_PARENT}/${BASE}_prepped"
+fi
+
 mkdir -p "$OUTPUT_ROOT/PREPPED_FASTQ" \
          "$OUTPUT_ROOT/REPORTS/FASTP_REPORT"
 
