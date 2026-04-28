@@ -86,6 +86,7 @@ if [[ "$WIZARD_MODE" == "true" ]]; then
     THREADS="$WIZ_THREADS"
     MISMATCH_MAX="${WIZ_ALIGN_MISMATCHES:-2}"
     [[ -n "$WIZ_OUTPUT_NAME" ]] && EXP_ID="$WIZ_OUTPUT_NAME"
+    [[ -n "$WIZ_ALIGNER_ARGS" ]] && ADV_ALIGNER_ARGS="$WIZ_ALIGNER_ARGS"
 fi
 
 if [[ -z "$INPUT_FILE" ]] || [[ -z "$GENOME_INDEX" ]]; then
@@ -128,7 +129,12 @@ if [[ "$BASENAME" == "$INPUT_FILE" ]]; then BASENAME=$(basename "$INPUT_FILE" .f
 if [[ -n "$EXP_ID" ]]; then BASENAME="$EXP_ID"; fi
 
 # Structure: Create 1_BAM inside a named folder
-OUT_DIR="${BASENAME}_mapping"
+if [[ "$BASENAME" == /* ]]; then
+    OUT_DIR="${BASENAME}_mapping"
+    BASENAME=$(basename "$BASENAME")
+else
+    OUT_DIR="${BASENAME}_mapping"
+fi
 mkdir -p "${OUT_DIR}/1_BAM"
 mkdir -p "${OUT_DIR}/REPORTS"
 
