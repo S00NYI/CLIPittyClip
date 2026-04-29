@@ -728,16 +728,25 @@ run_mapping_star() {
         --outTmpDir ${star_tmp}/STARtmp \
         --outSAMtype BAM SortedByCoordinate \
         --outFilterMultimapNmax 10 \
-        --outFilterMismatchNmax ${mismatch_max} \
+        --outFilterMismatchNoverReadLmax 0.1 \
+        --outFilterMismatchNmax 5 \
         --outSAMattributes NH HI AS nM NM MD \
         --alignEndsType EndToEnd \
         --scoreDelOpen -1 --scoreDelBase -1 \
+        --scoreInsOpen -1 --scoreInsBase -1 \
         $ADV_ALIGNER_ARGS"
-    # --scoreDelOpen -1 --scoreDelBase -1: lower deletion penalty to match mismatch penalty.
-    # STAR's default gap penalty (-2 open, -2 base) makes 1-nt deletions score worse than
-    # substitutions on short reads (~20-30bp post-trim). Real crosslink-induced deletions
-    # then get reported as mismatches, suppressing CIMS deletion signal and inflating
-    # substitution counts. Reducing both to -1 makes deletion calls competitive.
+    # Mismatch filtering:
+    #   --outFilterMismatchNoverReadLmax 0.1: fractional filter (allows ~3 mismatches in 30bp,
+    #   ~2 in 20bp). Scales with post-trim read length like BWA's -n 0.06 philosophy.
+    #   This is the primary filter; replaces the old absolute --outFilterMismatchNmax 2 which
+    #   would discard reads carrying a genuine crosslink deletion + 2 sequencing errors (NM=3).
+    #   --outFilterMismatchNmax 5: hard backstop only — blocks extreme cases.
+    # Gap penalties:
+    #   --scoreDelOpen/Base -1: lower deletion penalty to match mismatch cost.
+    #   --scoreInsOpen/Base -1: lower insertion penalty symmetrically.
+    #   STAR's default gap penalties (-2 open, -2 base) make 1-nt indels score worse than
+    #   substitutions on short reads (~20-30bp post-trim iCLIP), causing CIMS-relevant
+    #   deletion-containing reads to be suppressed or realigned as mismatches.
 
     log_info "Running: $cmd"
     execute_cmd "$cmd"
@@ -785,18 +794,31 @@ run_parse_alignment() {
     fi
     
     local work_sam="$sam_file"
-    
+
     # Step 2: (Optional) Run samtools calmd for MD tag standardization
-    local ref_fasta=$(find "$genome_index" -name "*.fa" -o -name "*.fasta" 2>/dev/null | head -n 1)
-    
+    # calmd recalculates MD tags from the reference FASTA authoritatively.
+    # parseAlignment.pl uses both CIGAR and MD to classify mutations; inconsistent MD
+    # (especially at deletion boundaries in homopolymer runs) = missed/misclassified deletions.
+    # Priority: --genome-fasta flag > find in index dir (STAR index dirs never contain FASTA).
+    local ref_fasta=""
+    if [[ -n "${GENOME_FASTA:-}" ]] && [[ -f "$GENOME_FASTA" ]]; then
+        ref_fasta="$GENOME_FASTA"
+        log_info "Using provided genome FASTA for calmd: $ref_fasta"
+    else
+        # Fallback: search genome index directory (works for Bowtie2, not STAR)
+        ref_fasta=$(find "$genome_index" -maxdepth 2 -name "*.fa" -o -name "*.fasta" 2>/dev/null | grep -v '^\._' | head -n 1)
+        if [[ -n "$ref_fasta" ]]; then
+            log_info "Reference FASTA found in index dir: $ref_fasta"
+        fi
+    fi
+
     if [[ -n "$ref_fasta" ]]; then
-        log_info "Reference FASTA found: $ref_fasta"
         log_info "Running 'samtools calmd' to standardize MD tags..."
-        
+
         local calmd_sam="${sam_file%.sam}_calmd.sam"
-        # calmd can take BAM input and output SAM
-        samtools calmd "$bam_file" "$ref_fasta" > "$calmd_sam" 2>/dev/null
-        
+        # calmd can take BAM input and output SAM (-S flag forces SAM output)
+        samtools calmd -S "$bam_file" "$ref_fasta" > "$calmd_sam" 2>/dev/null
+
         if [[ -s "$calmd_sam" ]]; then
             work_sam="$calmd_sam"
             log_info "Using calmd-processed SAM: $calmd_sam"
@@ -805,7 +827,14 @@ run_parse_alignment() {
             rm -f "$calmd_sam" 2>/dev/null
         fi
     else
-        log_info "Reference FASTA not found. Relying on aligner's native MD tags."
+        if [[ "${RUN_CIMS:-false}" == "true" ]]; then
+            log_warning "CIMS WARNING: No reference FASTA available for samtools calmd."
+            log_warning "  MD tags from STAR may be inconsistent at deletion boundaries,"
+            log_warning "  which can cause parseAlignment.pl to miss or misclassify crosslink"
+            log_warning "  deletions. Provide --genome-fasta for optimal CIMS detection."
+        else
+            log_info "No reference FASTA found. Relying on aligner's native MD tags."
+        fi
     fi
 
     # Step 3: Run parseAlignment.pl
@@ -896,10 +925,35 @@ run_mapping_bowtie2() {
 
     local sam_file="${output_prefix}.sam"
     local bam_file="${output_prefix}.Aligned.sortedByCoord.out.bam" # Match STAR naming for compatibility
-    
-    local cmd="bowtie2 -p $threads --sam-opt-config 'md' -x '$idx_base' -U '$input_file' -S '$sam_file' $ADV_ALIGNER_ARGS"
-        
-    log_info "Running Bowtie2..."
+
+    # CIMS-optimized Bowtie2 parameters (BWA aln -n 0.06 equivalent):
+    #
+    #   --end-to-end          No soft clipping; BWA aln is also end-to-end
+    #   --mp 2,2              Uniform mismatch penalty (removes quality weighting);
+    #                         BWA counts edits, not quality-weighted costs
+    #   --rdg 1,1             Read gap open=1, extend=1 → 1-base deletion costs 2 pts
+    #   --rfg 1,1             Ref gap (insertion) same → equal to 1 mismatch at --mp 2,2
+    #                         This gives deletion/mismatch parity, matching BWA's edit budget
+    #   --score-min L,0,-0.12 Linear floor: 0.06 edits/bp × 2 pts/edit = 0.12 pts/bp
+    #                         Mirrors BWA -n 0.06 fractional edit distance, scaled by read length
+    #                         e.g. 36bp → -4.3 (≈2 edits), 50bp → -6.0 (≈3 edits)
+    #   -N 1                  Allow 1 mismatch in seed (BWA backtracking is natively more sensitive)
+    #   -L 16                 Short seed for CLIP read lengths (25-50bp); more anchor positions
+    #   -k 10                 Report up to 10 alignments (consistent with STAR multimapper cap)
+    #   --no-unal             Suppress unaligned reads from SAM output
+    local cmd="bowtie2 -p $threads \
+  --end-to-end \
+  --mp 2,2 \
+  --rdg 1,1 \
+  --rfg 1,1 \
+  --score-min L,0,-0.12 \
+  -N 1 \
+  -L 16 \
+  -k 10 \
+  --no-unal \
+  -x '$idx_base' -U '$input_file' -S '$sam_file' $ADV_ALIGNER_ARGS"
+
+    log_info "Running Bowtie2 (CIMS-tuned, BWA aln -n 0.06 equivalent)..."
     execute_cmd "$cmd"
     
     if [ $? -ne 0 ]; then
@@ -1771,21 +1825,25 @@ CIMS_SCRIPT
             parallel --memfree 4G -j "$parallel_jobs" \
             "$process_script" {} "$cims_iterations" "$chunk_dir"
         
-        # Merge results (skip empty files, keep header from first)
-        local first_file="true"
+        # Merge results: CIMS.pl writes its header last (starting with #), so we can't
+        # use tail -n +2 (that would strip data lines). Instead collect all data lines
+        # first, then prepend the header from whichever chunk had it.
+        local merged_header=""
         > "$output_file"
         for result in "$chunk_dir"/*.cims.txt; do
             if [[ -s "$result" ]]; then
-                if [[ "$first_file" == "true" ]]; then
-                    cat "$result" >> "$output_file"
-                    first_file="false"
-                else
-                    # Skip header line for subsequent files
-                    tail -n +2 "$result" >> "$output_file"
-                fi
+                [[ -z "$merged_header" ]] && merged_header=$(grep "^#" "$result")
+                grep -v "^#" "$result" >> "$output_file"
             fi
         done
-        
+        # Prepend header so it sits at the top of the merged file
+        if [[ -n "$merged_header" ]]; then
+            local tmp_header=$(mktemp)
+            echo "$merged_header" > "$tmp_header"
+            cat "$output_file" >> "$tmp_header"
+            mv "$tmp_header" "$output_file"
+        fi
+
         # Cleanup
         rm -rf "$chunk_dir"
     else
@@ -1797,16 +1855,25 @@ CIMS_SCRIPT
         fi
         # Use -big -c for memory efficiency in sequential mode
         local cache_dir=$(mktemp -u "${TMPDIR:-/tmp}/cims_cache.XXXXXX")
-        local cmd="CIMS.pl -big -c '$cache_dir' -v -n $cims_iterations '$input_collapsed_bed' '$mutation_bed' '$output_file'"
-        execute_cmd "$cmd"
+        # No -v: per-chromosome verbose output suppressed on console; captured in LOG_FILE
+        local cmd="CIMS.pl -big -c '$cache_dir' -n $cims_iterations '$input_collapsed_bed' '$mutation_bed' '$output_file'"
+        execute_cmd "$cmd" 2>>"${LOG_FILE:-/dev/null}"
         rm -rf "$cache_dir" 2>/dev/null
+
+        # Normalize: CIMS.pl writes header last; move it to top so downstream tools see it first
+        if [[ -s "$output_file" ]] && grep -q "^#" "$output_file"; then
+            local tmp_norm=$(mktemp)
+            grep "^#" "$output_file" > "$tmp_norm"
+            grep -v "^#" "$output_file" >> "$tmp_norm"
+            mv "$tmp_norm" "$output_file"
+        fi
     fi
-    
+
     # Process results
     if [[ -s "$output_file" ]]; then
         local raw_count=$(grep -v "^#" "$output_file" | wc -l)
         log_info "CIMS complete: $raw_count total sites in $output_file"
-        
+
         # Filter for significance only if FDR < 1
         if (( $(echo "$cims_fdr < 1" | bc -l) )); then
             # Preserve raw output when -k is passed (for threshold exploration)
@@ -1816,10 +1883,16 @@ CIMS_SCRIPT
             fi
             log_info "Filtering CIMS results by FDR < $cims_fdr..."
             local temp_file="${output_file}.tmp"
-            awk -F'\t' -v fdr="$cims_fdr" 'NR==1 || $9 < fdr' "$output_file" | \
-                sort -k9,9n -k8,8nr -k7,7n > "$temp_file"
+            # Header is now at top (^#); sort only data lines, then reattach header
+            local cims_header=$(grep "^#" "$output_file")
+            {
+                [[ -n "$cims_header" ]] && echo "$cims_header"
+                grep -v "^#" "$output_file" | \
+                    awk -F'\t' -v fdr="$cims_fdr" '$9+0 < fdr' | \
+                    sort -k9,9n -k8,8nr -k7,7n
+            } > "$temp_file"
             mv "$temp_file" "$output_file"
-            
+
             local filtered_count=$(grep -v "^#" "$output_file" | wc -l)
             log_info "CIMS filtered: $filtered_count sites (FDR < $cims_fdr)"
         fi
@@ -1943,7 +2016,8 @@ CITS_SCRIPT
         fi
         # Use -big -c for memory efficiency in sequential mode
         local cache_dir=$(mktemp -u "${TMPDIR:-/tmp}/cits_cache.XXXXXX")
-        local cmd="CITS.pl -big -c '$cache_dir' -p $cits_pvalue --gap $cits_gap -v '$input_collapsed_bed' '$deletion_bed' '$cits_raw'"
+        # No -v: per-chromosome verbose output suppressed on console; captured in LOG_FILE
+        local cmd="CITS.pl -big -c '$cache_dir' -p $cits_pvalue --gap $cits_gap '$input_collapsed_bed' '$deletion_bed' '$cits_raw'"
         execute_cmd "$cmd"
         rm -rf "$cache_dir" 2>/dev/null
     fi
@@ -2083,16 +2157,14 @@ run_ctk_full_analysis() {
     fi
     
     # Phase 3: CITS Analysis (only if enabled)
+    # run_cits handles missing/empty deletion file internally (runs without read-through filter).
+    # For standard iCLIP, deletions at crosslink sites are rare — CITS must still run.
+    # Do NOT gate CITS on [[ -s "$del_bed" ]]: that silently skips all iCLIP samples.
     if [[ "$run_cits" == "true" ]]; then
         log_info "Phase 3: CITS Analysis..."
-        
-        if [[ -s "$del_bed" ]]; then
-            run_cits "$collapsed_bed" "$del_bed" \
-                "${output_dir}/CITS/${sample_name}_CITS.bed" \
-                "$cits_pvalue" "$cits_gap"
-        else
-            log_warning "No deletion file for CITS. Skipping."
-        fi
+        run_cits "$collapsed_bed" "$del_bed" \
+            "${output_dir}/CITS/${sample_name}_CITS.bed" \
+            "$cits_pvalue" "$cits_gap"
     else
         log_info "Phase 3: CITS Analysis... SKIPPED (not enabled)"
     fi
@@ -2172,16 +2244,26 @@ run_ctk_analysis() {
         local cims_del_file="${output_dir}/CIMS/${sample_name}_CIMS_del.txt"
         local cims_sub_file="${output_dir}/CIMS/${sample_name}_CIMS_sub.txt"
         
+        # CIMS on deletions: the primary signal for standard/iCLIP crosslink-induced mutations.
+        # CTK is designed around deletion-based CIMS (BWA alignment produces deletions readily).
+        # STAR EndToEnd tends to realign deletion reads as substitutions due to gap penalties,
+        # so deletion counts may be very low with STAR. If del_bed is empty, CIMS is skipped.
         if [[ -s "$del_bed" ]]; then
             run_cims "$collapsed_bed" "$del_bed" "$cims_del_file" \
                 "$cims_iterations" "$cims_fdr"
+        else
+            log_warning "CIMS: No deletions found — CIMS deletion analysis skipped."
+            log_warning "  This is expected with STAR EndToEnd alignment on short reads."
+            log_warning "  Consider BWA (--mapper bowtie2 or external BWA) for richer deletion signal."
         fi
-        
+
+        # CIMS on substitutions: secondary signal; useful for C→T transitions (iCLIP crosslink signature).
+        # CIMS.pl is patched (tagNum==0 guard + count>0 q-value guard) so this is safe to run.
         if [[ -s "$sub_bed" ]]; then
             run_cims "$collapsed_bed" "$sub_bed" "$cims_sub_file" \
                 "$cims_iterations" "$cims_fdr"
         fi
-        
+
         # Generate flanked BED for CIMS results (for user's motif analysis)
         if [[ "$run_motif" == "yes" ]]; then
             [[ -s "$cims_del_file" ]] && generate_flanked_bed "$cims_del_file" "$motif_flank"
@@ -2192,19 +2274,17 @@ run_ctk_analysis() {
     # Step 3: CITS Analysis (only if enabled)
     if [[ "$run_cits" == "true" ]]; then
         update_status "CITS"
-        
+
         local cits_file="${output_dir}/CITS/${sample_name}_CITS.txt"
-        
-        if [[ -s "$del_bed" ]]; then
-            run_cits "$collapsed_bed" "$del_bed" "$cits_file" \
-                "$cits_pvalue" "$cits_gap"
-                
-            # Generate flanked BED for CITS results (for user's motif analysis)
-            if [[ "$run_motif" == "yes" ]]; then
-                [[ -s "$cits_file" ]] && generate_flanked_bed "$cits_file" "$motif_flank"
-            fi
-        else
-            log_warning "No deletion file for CITS. Skipping."
+
+        # run_cits handles missing/empty deletion file internally (runs without read-through filter).
+        # Do NOT gate CITS on [[ -s "$del_bed" ]]: that silently skips all standard iCLIP samples.
+        run_cits "$collapsed_bed" "$del_bed" "$cits_file" \
+            "$cits_pvalue" "$cits_gap"
+
+        # Generate flanked BED for CITS results (for user's motif analysis)
+        if [[ "$run_motif" == "yes" ]]; then
+            [[ -s "$cits_file" ]] && generate_flanked_bed "$cits_file" "$motif_flank"
         fi
     fi
     

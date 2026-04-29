@@ -141,16 +141,16 @@ CLIPittyClip.sh -d /path/to/samples_folder/ -x /path/to/star_index -t 8
 # Using Bowtie2 instead
 CLIPittyClip.sh -i reads.fastq.gz -x /path/to/bt2_index -t 8 -m bowtie2
 
-# With CIMS analysis only
-CLIPittyClip.sh -i reads.fastq.gz -x /path/to/star_index -t 8 --run-cims
+# With CIMS analysis only (--genome-fasta strongly recommended for optimal deletion detection)
+CLIPittyClip.sh -i reads.fastq.gz -x /path/to/star_index --genome-fasta /path/to/genome.fa -t 8 --run-cims
 
 # With CITS analysis only
-CLIPittyClip.sh -i reads.fastq.gz -x /path/to/star_index -t 8 --run-cits
+CLIPittyClip.sh -i reads.fastq.gz -x /path/to/star_index --genome-fasta /path/to/genome.fa -t 8 --run-cits
 
 # With both CIMS and CITS analysis
-CLIPittyClip.sh -i reads.fastq.gz -x /path/to/star_index -t 8 --run-ctk
+CLIPittyClip.sh -i reads.fastq.gz -x /path/to/star_index --genome-fasta /path/to/genome.fa -t 8 --run-cims --run-cits
 # OR equivalently:
-CLIPittyClip.sh -i reads.fastq.gz -x /path/to/star_index -t 8 --run-cims --run-cits
+CLIPittyClip.sh -i reads.fastq.gz -x /path/to/star_index --genome-fasta /path/to/genome.fa -t 8 --run-cims-cits
 
 # eCLIP paired-end analysis (post-eclipdemux R2 files, UMI in header)
 CLIPittyClip.sh --eclip pe -d /path/to/samples/ -x /path/to/star_index -t 8 --run-cims --run-cits
@@ -192,7 +192,8 @@ Run `CLIPittyClip.sh --help` for full usage.
 |-------|------|------|---------|-------------|
 | `-t` | `--threads` | int | 1 | Number of threads |
 | `-m` | `--mapper` | string | star | Mapper: `star` or `bowtie2` |
-| — | `--align-mismatches` | int | 2 | Max alignment mismatches (STAR only) |
+| — | `--align-mismatches` | int | 2 | Absolute mismatch backstop (STAR only; primary filter is fractional 10% of read length) |
+| — | `--genome-fasta` | path | — | Reference FASTA; enables `samtools calmd` for accurate MD tags (strongly recommended for CIMS/CITS) |
 | `-v` | `--verbose` | bool | false | Enable verbose logging |
 | `-h` | `--help` | — | — | Show help message |
 
@@ -263,6 +264,27 @@ CLIPittyClip uses a custom hash-based deduplication engine (`lib/fastq_collapse_
 | — | `--notification` | bool | false | Enable system notifications |
 | `-w` | `--wizard` | bool | — | Launch interactive wizard |
 | `-s` | `--sample` | int | — | Test mode: process only first N reads |
+
+## CIMS/CITS Mapping Parameters
+
+CLIPittyClip tunes STAR alignment specifically for CIMS (crosslink-induced mutation sites) and CITS (crosslink-induced truncation sites) analysis, where reads carrying genuine crosslink deletions must survive alignment.
+
+### Why `--genome-fasta` matters
+
+STAR index directories contain only precomputed binary files — the source FASTA is consumed at index-build time and not stored there. Without the reference FASTA, `samtools calmd` cannot run, and STAR's native MD tags at deletion boundaries (especially in homopolymer runs) may be inconsistent. `parseAlignment.pl` uses both the CIGAR string and the MD tag to classify mutations; inconsistent MD tags → missed or misclassified crosslink deletions.
+
+Provide `--genome-fasta /path/to/genome.fa` to enable `samtools calmd` and recalculate MD tags authoritatively before parsing.
+
+### STAR gap and mismatch parameters
+
+| Parameter | Value | Rationale |
+|-----------|-------|-----------|
+| `--outFilterMismatchNoverReadLmax` | `0.1` | Fractional filter: allows ~3 mismatches in a 30 bp read, ~2 in a 20 bp read. Scales with post-trim read length — equivalent to BWA's `-n 0.06` philosophy. Replaces the old absolute `--outFilterMismatchNmax 2`, which discarded reads carrying a genuine crosslink deletion + 2 sequencing errors (NM = 3). |
+| `--outFilterMismatchNmax` | `5` | Hard backstop only; blocks extreme cases but is not the primary filter. |
+| `--scoreDelOpen` / `--scoreDelBase` | `-1` | Reduces deletion open/extension penalty to match the substitution cost. STAR's default (`-2/-2`) makes a 1-nt deletion score worse than a substitution on short (20–30 bp) iCLIP reads, causing crosslink-induced deletions to be realigned as mismatches. |
+| `--scoreInsOpen` / `--scoreInsBase` | `-1` | Symmetrically reduces insertion penalty (CTK CIMS processes all indels). |
+
+> **Bowtie2 note:** Bowtie2 is not splice-aware and its gap penalties are not tuned for CIMS/CITS. It is supported for speed but STAR is strongly recommended when running CIMS or CITS analysis. A warning is emitted automatically.
 
 ## Group-Based CIMS/CITS Analysis
 
