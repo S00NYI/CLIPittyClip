@@ -751,7 +751,11 @@ if [[ -n "$INPUT_DIR" ]]; then
              "$OUTPUT_ROOT/$DIR_REPORTS/SAMPLES" \
              "$OUTPUT_ROOT/$DIR_PEAK_LOGS" \
              "$OUTPUT_ROOT/$DIR_IND_PEAK_LOGS"
-    
+
+    # Truncate scale_factors.tsv before aggregation — prevents stale entries from
+    # a prior run contaminating the mapping depth summary when -o reuses a directory
+    > "$OUTPUT_ROOT/$DIR_BG/scale_factors.tsv"
+
     # Create aligner-specific folders
     if [[ "$ALIGNER" != "bowtie2" ]]; then
         mkdir -p "$OUTPUT_ROOT/$DIR_OTHERS/STAR_OUTPUT"
@@ -1235,7 +1239,11 @@ if [[ "$DEMUX" == "yes" ]]; then
              "$OUTPUT_ROOT/$DIR_REPORTS/SAMPLES" \
              "$OUTPUT_ROOT/$DIR_PEAK_LOGS" \
              "$OUTPUT_ROOT/$DIR_IND_PEAK_LOGS"
-    
+
+    # Truncate scale_factors.tsv before aggregation — prevents stale entries from
+    # a prior run contaminating the mapping depth summary when -o reuses a directory
+    > "$OUTPUT_ROOT/$DIR_BG/scale_factors.tsv"
+
     # Create aligner-specific folders
     if [[ "$ALIGNER" != "bowtie2" ]]; then
         mkdir -p "$OUTPUT_ROOT/$DIR_OTHERS/STAR_OUTPUT"
