@@ -68,11 +68,21 @@ parse_groups_file() {
     > "$output_map"  # Clear output file
     
     while IFS=$'\t' read -r sample group || [[ -n "$sample" ]]; do
+        # Normalize CRLF (Windows line endings)
+        sample="${sample%$'\r'}"
+        group="${group%$'\r'}"
+
         # Skip comments and empty lines
         [[ "$sample" =~ ^#.*$ ]] && continue
         [[ -z "$sample" ]] && continue
-        
-        # Strip common extensions
+
+        # Validate tab delimiter — if group is empty the line has no tab
+        if [[ -z "$group" ]]; then
+            log_error "Groups file parse error: line '${sample}' has no tab separator. Groups file must be tab-delimited (sample<TAB>group). Spaces in names are allowed but the delimiter must be a tab."
+            return 1
+        fi
+
+        # Strip common extensions from sample name only
         sample="${sample%.fastq.gz}"
         sample="${sample%.fq.gz}"
         sample="${sample%.fastq}"
@@ -125,7 +135,7 @@ function run_demultiplexing {
     # cutadapt -e is a rate (0.1 = 10%). 
     # rate = mismatches / length
     # We grep the first barcode to estimate length (assuming uniform)
-    local first_seq=$(awk '{print $2; exit}' "$barcode_file")
+    local first_seq=$(awk -F'\t' '!/^#/{print $2; exit}' "$barcode_file")
     local bc_len=${#first_seq}
     
     # Calculate rate using awk for floating point
@@ -143,7 +153,7 @@ function run_demultiplexing {
     
     # Convert barcodes for cutadapt
     local fasta_barcodes="${demux_out}/barcodes.fasta"
-    awk '{print ">"$1"\n"$2}' "$barcode_file" > "$fasta_barcodes"
+    awk -F'\t' '!/^#/{print ">"$1"\n"$2}' "$barcode_file" > "$fasta_barcodes"
 
     local cmd="cutadapt \
         -e $error_rate --no-indels \
@@ -209,7 +219,7 @@ run_geo_demux() {
 
     # Calculate cutadapt error rate
     local first_seq
-    first_seq=$(awk '!/^#/{print $2; exit}' "$barcode_file")
+    first_seq=$(awk -F'\t' '!/^#/{print $2; exit}' "$barcode_file")
     local bc_len=${#first_seq}
     local error_rate
     error_rate=$(awk "BEGIN {print $allowed_mm / $bc_len}")
@@ -220,7 +230,7 @@ run_geo_demux() {
 
     # Convert barcodes to FASTA for cutadapt
     local fasta_barcodes="${out_dir}/.barcodes_geo.fasta"
-    awk '!/^#/{print ">"$1"\n"$2}' "$barcode_file" > "$fasta_barcodes"
+    awk -F'\t' '!/^#/{print ">"$1"\n"$2}' "$barcode_file" > "$fasta_barcodes"
 
     # Run cutadapt: --action=none preserves reads exactly as received
     # Output is gzipped (.fastq.gz) since these are final GEO deposit files
