@@ -308,7 +308,14 @@ fi
 
 # Barcode length validation
 if [[ -n "$BARCODE_FILE" ]]; then
-    bc_file_len=$(awk '!/^#/{print length($2); exit}' "$BARCODE_FILE")
+    # Validate tab delimiter — scan first non-comment, non-empty line
+    first_bc_line=$(grep -v '^#' "$BARCODE_FILE" | grep -v '^[[:space:]]*$' | head -1)
+    first_bc_line="${first_bc_line%$'\r'}"  # strip CRLF if present
+    if [[ -n "$first_bc_line" ]] && ! printf '%s' "$first_bc_line" | grep -q $'\t'; then
+        echo "[ERROR] Barcodes file '$BARCODE_FILE' is not tab-delimited. Each line must be: name<TAB>sequence. Spaces in names are allowed but the delimiter must be a tab." >&2
+        exit 1
+    fi
+    bc_file_len=$(awk -F'\t' '!/^#/{print length($2); exit}' "$BARCODE_FILE")
     if [[ -z "$bc_file_len" ]]; then
         echo "[ERROR] Failed to read barcode length from $BARCODE_FILE" >&2
         exit 1
@@ -949,21 +956,32 @@ if [[ -n "$INPUT_DIR" ]]; then
     fi
     
     console_msg "  > Combined peaks: $OUTPUT_ROOT/$DIR_PEAKS/COMBINED_PEAKS/"
-    
-    # Final Summary (print BEFORE moving logs so messages get captured)
+
+    # Enhance peak matrix (runs under [COMBINED PEAK CALLING] section)
+    PEAK_MATRIX="$OUTPUT_ROOT/$DIR_PEAKS/COMBINED_PEAKS/COMBINED_PEAK_MATRIX.txt"
+    PEAKS_BED="$OUTPUT_ROOT/$DIR_PEAKS/COMBINED_PEAKS/peaks_Sorted.bed"
+
+    if [[ -f "$PEAK_MATRIX" && -f "$PEAKS_BED" ]]; then
+        console_msg "  > Adding enhanced matrix columns..."
+        add_matrix_columns "$PEAK_MATRIX" "$PEAKS_BED" \
+            "$OUTPUT_ROOT/$DIR_BG" "$OUTPUT_ROOT/$DIR_BG/scale_factors.tsv" \
+            "$GROUPS_FILE"
+
+        # Promote sorted peak bed to clearly named FINAL target
+        mv "$PEAKS_BED" "$OUTPUT_ROOT/$DIR_PEAKS/COMBINED_PEAKS/FINAL_COMBINED_PEAKS.bed" 2>/dev/null
+
+        # Cleanup intermediate peak files to save disk space
+        rm -f "$OUTPUT_ROOT/$DIR_PEAKS/COMBINED_PEAKS/COMBINED.bed" \
+              "$OUTPUT_ROOT/$DIR_PEAKS/COMBINED_PEAKS/peaks.bed"
+    fi
+
+    # Compute total duration here (used by [SUCCESS] block below)
     PIPELINE_END=$(date +%s)
     DURATION=$((PIPELINE_END - PIPELINE_START))
     H=$((DURATION/3600))
     M=$(( (DURATION%3600)/60 ))
     S=$((DURATION%60))
-    
-    console_msg "\n[COMPLETE]"
-    console_msg "  > Duration: ${H}h ${M}m ${S}s"
-    console_msg "  > Output: $OUTPUT_ROOT/"
-    console_msg "  > Console log: $TEMP_CONSOLE_LOG"
-    
 
-    
     # Remove sampled input if it was created
     if [[ -n "$SAMPLED_INPUT" && -f "$SAMPLED_INPUT" ]]; then rm -f "$SAMPLED_INPUT"; fi
 
@@ -971,24 +989,33 @@ if [[ -n "$INPUT_DIR" ]]; then
     rm -rf "${OUTPUT_ROOT}"/CITS.pl_* "${OUTPUT_ROOT}"/tag2profile.pl_* 2>/dev/null
     rm -f "${OUTPUT_ROOT}"/*.tmp 2>/dev/null
 
-    # Logs are already at OUTPUT_ROOT/REPORTS/ — created there at startup.
-    # console_output.log is live-captured by tee into that location.
-    PEAK_MATRIX="$OUTPUT_ROOT/$DIR_PEAKS/COMBINED_PEAKS/COMBINED_PEAK_MATRIX.txt"
-    PEAKS_BED="$OUTPUT_ROOT/$DIR_PEAKS/COMBINED_PEAKS/peaks_Sorted.bed"
-    
-    if [[ -f "$PEAK_MATRIX" && -f "$PEAKS_BED" ]]; then
-        console_msg "  > Adding enhanced matrix columns..."
-        add_matrix_columns "$PEAK_MATRIX" "$PEAKS_BED" \
-            "$OUTPUT_ROOT/$DIR_BG" "$OUTPUT_ROOT/$DIR_BG/scale_factors.tsv" \
-            "$GROUPS_FILE"
-        
-        # Promote sorted peak bed to clearly named FINAL target
-        mv "$PEAKS_BED" "$OUTPUT_ROOT/$DIR_PEAKS/COMBINED_PEAKS/FINAL_COMBINED_PEAKS.bed" 2>/dev/null
-        
-        # Cleanup intermediate peak files to save disk space
-        rm -f "$OUTPUT_ROOT/$DIR_PEAKS/COMBINED_PEAKS/COMBINED.bed" \
-              "$OUTPUT_ROOT/$DIR_PEAKS/COMBINED_PEAKS/peaks.bed"
+    # Mapping Depth Summary (directory batch mode)
+    SCALE_FILE="$OUTPUT_ROOT/$DIR_BG/scale_factors.tsv"
+    if [[ -f "$SCALE_FILE" ]]; then
+        console_msg "\n[MAPPING DEPTH SUMMARY]"
+        printf "  %-25s %-15s %s\n" "Sample" "Mapped Reads" "Scale Factor"
+        console_msg "  ----------------------------------------------------------------"
+        while IFS=$'\t' read -r sample reads scale; do
+            printf "  %-25s %-15s %s\n" "$sample" "$reads" "$scale"
+        done < "$SCALE_FILE"
+        console_msg "  ----------------------------------------------------------------"
     fi
+
+    console_msg "\n[OUTPUT]"
+    console_msg "  All results saved to: $OUTPUT_ROOT/"
+    console_msg "  ├── 1_BAM/"
+    console_msg "  ├── 2_COLLAPSED_BED/"
+    console_msg "  ├── 3_BEDGRAPH/"
+    console_msg "  ├── 4_PEAKS/"
+    if [[ -n "${DIR_CTK:-}" ]]; then
+        console_msg "  ├── ${DIR_CTK}/"
+    fi
+    console_msg "  ├── ${DIR_OTHERS}/"
+    console_msg "  └── REPORTS/"
+
+    console_msg "\n[SUCCESS] Pipeline finished."
+    console_msg "End Time: $(date '+%Y-%m-%d %H:%M:%S')"
+    console_msg "Total Duration: ${H}h ${M}m ${S}s"
 
     send_notification "CLIPittyClip Batch" "Analysis complete for $total_samples samples in $(basename "$INPUT_DIR")"
     exit 0
