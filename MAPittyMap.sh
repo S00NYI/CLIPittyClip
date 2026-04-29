@@ -16,6 +16,7 @@ INPUT_FILE=""
 EXP_ID=""
 ALIGNER="star"
 MISMATCH_MAX=2
+GENOME_FASTA=""       # Path to reference FASTA (optional; strongly recommended for CIMS)
 WIZARD_MODE="false"
 FILTER_NCRNA="false"  # ncRNA filtering is OFF by default; enable with --filter-ncrna
 
@@ -30,14 +31,15 @@ function show_usage {
     echo "  -x <path>      Path to genome index directory"
     echo ""
     echo "OPTIONS:"
-    echo "  --aligner <str>  Aligner: 'star' (default) or 'bowtie2'"
-    echo "  -o <str>         Output ID (default: derived from filename)"
-    echo "  -t <int>         Number of threads (default: 1)"
-    echo "  -m <int>         Max mismatches (default: 2)"
-    echo "  --wizard         Launch interactive configuration wizard
-  --advanced       Alias for --wizard (backward compatibility)
-  --filter-ncrna   Enable ncRNA pre-filtering (off by default)
-  -h, --help       Show this help message"
+    echo "  --aligner <str>       Aligner: 'star' (default) or 'bowtie2'"
+    echo "  --genome-fasta <path> Reference FASTA (enables samtools calmd; recommended for CIMS)"
+    echo "  -o <str>              Output ID (default: derived from filename)"
+    echo "  -t <int>              Number of threads (default: 1)"
+    echo "  -m <int>              Max absolute mismatches backstop (default: 2; STAR uses fractional 0.1)"
+    echo "  --wizard              Launch interactive configuration wizard
+  --advanced            Alias for --wizard (backward compatibility)
+  --filter-ncrna        Enable ncRNA pre-filtering (off by default)
+  -h, --help            Show this help message"
     echo ""
     echo "OUTPUT:"
     echo "  Creates 1_BAM/ directory with sorted, indexed BAM file"
@@ -63,6 +65,7 @@ while [[ $# -gt 0 ]]; do
         -x) GENOME_INDEX="$2"; shift 2 ;;
         -o) EXP_ID="$2"; shift 2 ;;
         --aligner) ALIGNER=$(echo "$2" | tr '[:upper:]' '[:lower:]'); shift 2 ;;
+        --genome-fasta) GENOME_FASTA="$2"; shift 2 ;;
         --wizard|--advanced) WIZARD_MODE="true"; shift 1 ;;
         --filter-ncrna) FILTER_NCRNA="true"; shift ;;
         -t) THREADS="$2"; shift 2 ;;
@@ -100,6 +103,17 @@ check_file "$INPUT_FILE" || exit 1
 # Resolve absolute paths
 INPUT_FILE="$(cd "$(dirname "$INPUT_FILE")" && pwd)/$(basename "$INPUT_FILE")"
 GENOME_INDEX="$(cd "$GENOME_INDEX" && pwd)"
+
+# Resolve and export GENOME_FASTA if provided (used by run_parse_alignment in modules.sh)
+if [[ -n "$GENOME_FASTA" ]]; then
+    if [[ ! -f "$GENOME_FASTA" ]]; then
+        log_error "Genome FASTA not found: $GENOME_FASTA"
+        exit 1
+    fi
+    GENOME_FASTA="$(cd "$(dirname "$GENOME_FASTA")" && pwd)/$(basename "$GENOME_FASTA")"
+    export GENOME_FASTA
+    log_info "Genome FASTA: $GENOME_FASTA"
+fi
 
 # Check Dependencies based on Aligner
 if [[ "$ALIGNER" == "bowtie2" ]]; then

@@ -51,7 +51,9 @@ function show_usage {
     echo "  -d, --input-dir <dir>    Input directory containing .fastq.gz files (Batch Mode)"
     echo ""
     echo "REQUIRED REFERENCE:"
-    echo "  -x, --index <path>       Path to genome index directory (STAR or Bowtie2)"
+    echo "  -x, --index <path>       Path to genome index directory (STAR or Bowtie2)
+  --genome-fasta <path>    Path to reference FASTA (strongly recommended for CIMS/CITS;
+                             enables samtools calmd for accurate MD tag recalculation)"
     echo ""
     echo "GENERAL OPTIONS:"
     echo "  -o, --output <str>       Output folder name (default: INPUT_output)"
@@ -129,6 +131,7 @@ ECLIP_MODE=""       # eCLIP mode: "pe" (paired-end) or "se" (single-end), empty 
 FILTER_CHR="true"   # Filter to canonical chromosomes (chr1-22, X, Y, M) - default ON
 DEMUX_MISMATCHES="1"   # Default for barcode demultiplexing
 ALIGN_MISMATCHES="2"   # Default for STAR --outFilterMismatchNmax
+GENOME_FASTA=""        # Path to reference FASTA (optional; strongly recommended for CIMS)
 
 # CTK CIMS/CITS Parameters (with defaults)
 CIMS_ITERATIONS="5"
@@ -194,6 +197,7 @@ while [[ $# -gt 0 ]]; do
         -d|--input-dir) INPUT_DIR="$2"; shift 2 ;;
         --demux-mismatches) DEMUX_MISMATCHES="$2"; shift 2 ;;
         --align-mismatches) ALIGN_MISMATCHES="$2"; shift 2 ;;
+        --genome-fasta) GENOME_FASTA="$2"; shift 2 ;;
         --no-dedup) DEDUP_MODE="false"; shift ;;
         --filter-ncrna) FILTER_NCRNA="true"; shift ;;
         --eclip) ECLIP_MODE="$2"; shift 2 ;;
@@ -441,6 +445,33 @@ if [[ -n "$GROUPS_FILE" ]]; then
     log_info "Groups file: $GROUPS_FILE"
 fi
 
+# Validate and resolve --genome-fasta
+if [[ -n "$GENOME_FASTA" ]]; then
+    if [[ ! -f "$GENOME_FASTA" ]]; then
+        log_error "Genome FASTA not found: $GENOME_FASTA"
+        exit 1
+    fi
+    GENOME_FASTA="$(cd "$(dirname "$GENOME_FASTA")" && pwd)/$(basename "$GENOME_FASTA")"
+    log_info "Genome FASTA:   $GENOME_FASTA (will be used for samtools calmd)"
+    export GENOME_FASTA
+fi
+
+# Warn if CIMS/CITS requested without a genome FASTA
+if [[ ("$RUN_CIMS" == "true" || "$RUN_CITS" == "true") && -z "$GENOME_FASTA" ]]; then
+    log_warning "CIMS/CITS requested but --genome-fasta not provided."
+    log_warning "  samtools calmd cannot recalculate MD tags without a reference FASTA."
+    log_warning "  STAR index directories do not contain the source FASTA by design."
+    log_warning "  Provide --genome-fasta /path/to/genome.fa for optimal deletion detection."
+fi
+
+# Warn if Bowtie2 + CIMS/CITS requested
+if [[ "$ALIGNER" == "bowtie2" && ("$RUN_CIMS" == "true" || "$RUN_CITS" == "true") ]]; then
+    log_warning "Bowtie2 + CIMS/CITS: Bowtie2 has not been tuned for CIMS/CITS analysis."
+    log_warning "  Gap penalties are not optimized for crosslink-induced deletion detection."
+    log_warning "  Junction-spanning reads will be missed (not splice-aware)."
+    log_warning "  STAR is strongly recommended for CIMS/CITS workflows."
+fi
+
 # ------------------------------------------------------------------
 # Log Configuration (Standard or Advanced Results)
 # ------------------------------------------------------------------
@@ -450,7 +481,7 @@ log_info "------------------------------------------------------------------"
 
 # Define defaults for display (matching lib/modules.sh architecture)
 DEF_FASTP="--length_required 16 --average_qual 30"
-DEF_STAR="--outFilterMultimapNmax 10 --outFilterMismatchNmax ${ALIGN_MISMATCHES} --alignEndsType EndToEnd --outSAMattributes ... MD"
+DEF_STAR="--outFilterMultimapNmax 10 --outFilterMismatchNoverReadLmax 0.1 --outFilterMismatchNmax 5 --alignEndsType EndToEnd --scoreDelOpen/Base -1 --scoreInsOpen/Base -1 --outSAMattributes ... MD"
 DEF_BT2="--md --end-to-end (Standard Sensitivity)"
 DEF_HOMER="-style factor -L 2 -localSize 10000 -minDist ${PEAK_DIST:-50}"
 DEF_CTK="-big -ss --valley-seeking -minPH 2 -gap ${PEAK_DIST:-50}"
@@ -655,6 +686,7 @@ if [[ -n "$INPUT_DIR" ]]; then
     if [[ "$SAMPLE_SIZE" -gt 0 ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --sample $SAMPLE_SIZE"; fi
     EXTRA_FLAGS="$EXTRA_FLAGS -m $ALIGNER"
     if [[ -n "$ALIGN_MISMATCHES" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --align-mismatches $ALIGN_MISMATCHES"; fi
+    if [[ -n "$GENOME_FASTA" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --genome-fasta $GENOME_FASTA"; fi
     if [[ -n "$ECLIP_MODE" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --eclip $ECLIP_MODE"; fi
     if [[ "$FILTER_NCRNA" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --filter-ncrna"; fi
     if [[ "$DEDUP_MODE" == "false" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --no-dedup"; fi
@@ -663,7 +695,7 @@ if [[ -n "$INPUT_DIR" ]]; then
     if [[ -n "$BC_LEN" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --bc-len $BC_LEN"; fi
     if [[ -n "$SPACER_LEN" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --spacer-len $SPACER_LEN"; fi
     EXTRA_FLAGS="$EXTRA_FLAGS --child"
-    
+
     console_msg "\n[BATCH ANALYSIS]"
 
     current_sample=0
@@ -761,7 +793,11 @@ if [[ -n "$INPUT_DIR" ]]; then
     fi
     
     console_msg "\n[AGGREGATION]"
-    
+
+    # Initialize master scale_factors.tsv fresh (prevent duplicate entries on reruns,
+    # which corrupt positional col_map in add_matrix_columns)
+    > "$OUTPUT_ROOT/$DIR_BG/scale_factors.tsv"
+
     # Collect outputs from each sample's output directory
     for sample in "${SAMPLE_FILES[@]}"; do
         sample_name=$(basename "$sample")
@@ -1105,6 +1141,7 @@ if [[ "$DEMUX" == "yes" ]]; then
     # Pass Aligner choice
     EXTRA_FLAGS="$EXTRA_FLAGS -m $ALIGNER"
     if [[ -n "$ALIGN_MISMATCHES" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --align-mismatches $ALIGN_MISMATCHES"; fi
+    if [[ -n "$GENOME_FASTA" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --genome-fasta $GENOME_FASTA"; fi
     if [[ -n "$ECLIP_MODE" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --eclip $ECLIP_MODE"; fi
     if [[ "$FILTER_NCRNA" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --filter-ncrna"; fi
     # Pool was already deduped above; tell children to skip dedup
@@ -1226,10 +1263,14 @@ if [[ "$DEMUX" == "yes" ]]; then
              
     console_msg "\n[AGGREGATION]"
     console_msg "  > Collecting files into $OUTPUT_ROOT/..."
-    
+
     # Move Barcode file if exists? Users usually keep input.
     # We leave inputs alone.
-    
+
+    # Initialize master scale_factors.tsv fresh (prevent duplicate entries on reruns,
+    # which corrupt positional col_map in add_matrix_columns)
+    > "$OUTPUT_ROOT/$DIR_BG/scale_factors.tsv"
+
     # Collect files from analysis directories
     count=0
     for sample in "$DEMUX_DIR"/*.fastq; do
@@ -1249,22 +1290,24 @@ if [[ "$DEMUX" == "yes" ]]; then
                  # Let's move them separately at the end.
                 
                 # 1. BAM
-                bam_file=$(find "$analysis_dir" -name "*mapped.Aligned.sortedByCoord.out.bam")
+                # -not -name '._*' excludes macOS AppleDouble resource-fork files on external drives;
+                # head -n 1 ensures a single path (prevents newline-embedded multi-path cp failures)
+                bam_file=$(find "$analysis_dir" -name "*mapped.Aligned.sortedByCoord.out.bam" -not -name '._*' 2>/dev/null | head -n 1)
                 if [[ -n "$bam_file" ]]; then
                     cp "$bam_file" "$OUTPUT_ROOT/$DIR_BAM/${sample_name}.bam"
                     cp "${bam_file}.bai" "$OUTPUT_ROOT/$DIR_BAM/${sample_name}.bam.bai" 2>/dev/null
                 fi
-                
+
                 # 2. BED (Collapsed)
-                bed_file=$(find "$analysis_dir" -name "*_collapsed.bed")
+                bed_file=$(find "$analysis_dir" -name "*_collapsed.bed" -not -name '._*' 2>/dev/null | head -n 1)
                 if [[ -n "$bed_file" ]]; then
                     cp "$bed_file" "$OUTPUT_ROOT/$DIR_BED/${sample_name}.bed"
                     ((count++))
                 fi
-                
+
                 # 3. Bedgraph & Chrom Sizes
-                bg_pos=$(find "$analysis_dir" -name "*_pos.bedgraph")
-                bg_neg=$(find "$analysis_dir" -name "*_neg.bedgraph")
+                bg_pos=$(find "$analysis_dir" -name "*_pos.bedgraph" -not -name '._*' 2>/dev/null | head -n 1)
+                bg_neg=$(find "$analysis_dir" -name "*_neg.bedgraph" -not -name '._*' 2>/dev/null | head -n 1)
                 if [[ -n "$bg_pos" ]]; then cp "$bg_pos" "$OUTPUT_ROOT/$DIR_BG/${sample_name}_pos.bedgraph"; fi
                 if [[ -n "$bg_neg" ]]; then cp "$bg_neg" "$OUTPUT_ROOT/$DIR_BG/${sample_name}_neg.bedgraph"; fi
                 
@@ -1720,8 +1763,15 @@ if [[ "$RUN_CIMS" == "true" ]] || [[ "$RUN_CITS" == "true" ]]; then
     fi
     
     # Find reference FASTA for motif analysis
-    # Priority: 1) *genome*.fa, 2) *primary*.fa, 3) any .fa excluding *ncrna*
-    ref_fasta=$(find "$GENOME_INDEX" -maxdepth 1 \( -name "*genome*.fa" -o -name "*genome*.fasta" \) 2>/dev/null | head -n 1)
+    # Priority: 0) --genome-fasta flag, 1) *genome*.fa in index, 2) *primary*.fa, 3) any .fa excluding *ncrna*
+    ref_fasta=""
+    if [[ -n "${GENOME_FASTA:-}" ]] && [[ -f "$GENOME_FASTA" ]]; then
+        ref_fasta="$GENOME_FASTA"
+        log_info "Using reference FASTA for motif analysis: $ref_fasta"
+    fi
+    if [[ -z "$ref_fasta" ]]; then
+        ref_fasta=$(find "$GENOME_INDEX" -maxdepth 1 \( -name "*genome*.fa" -o -name "*genome*.fasta" \) 2>/dev/null | head -n 1)
+    fi
     if [[ -z "$ref_fasta" ]]; then
         ref_fasta=$(find "$GENOME_INDEX" -maxdepth 1 \( -name "*primary*.fa" -o -name "*primary*.fasta" \) 2>/dev/null | head -n 1)
     fi
@@ -1731,7 +1781,6 @@ if [[ "$RUN_CIMS" == "true" ]] || [[ "$RUN_CITS" == "true" ]]; then
     fi
     if [[ -z "$ref_fasta" ]]; then
         log_warning "Reference FASTA not found. Motif analysis may be skipped."
-        ref_fasta=""
     else
         log_info "Using reference FASTA for motif analysis: $ref_fasta"
     fi
