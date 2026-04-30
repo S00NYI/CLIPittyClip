@@ -3,9 +3,23 @@
 </p>
 
 # CLIPittyClip: Modern CLIP-seq Analysis Pipeline
-**Version 3.2.0**
+**Version 3.3.0**
 
 A comprehensive, single-command CLIP-seq data analysis pipeline from FASTQ to peaks and crosslink sites.
+
+## Update Log (v3.3.0)
+This release introduces the Clink pipeline — a Python-native alternative to CTK for crosslink site calling — enabling direct head-to-head comparison with the standard CTK workflow.
+
+**New Features (v3.3.0):**
+- **Clink pipeline** (`--run-clink`): Python-native crosslink site caller running parallel to CTK
+  - `umi_tools directional` replaces `tag2collapse.pl` for BAM-level UMI deduplication
+  - `pileup.py`: single BAM scan → compressed `.npz` shared by CITS and CIMS (no duplicate scanning)
+  - `cits.py`: truncation site calling with binomial test + Benjamini-Hochberg FDR
+  - `cims.py`: deletion + all 12 substitution types from the same pileup
+  - `--run-cims-cits --run-clink` enables head-to-head comparison in one run
+  - Output in `5_Clink/` or `6_Clink/`; folder numbering auto-adjusts with CTK
+  - Hard dependency check at startup with clear install instructions
+- Install scripts: `pysam` and `umi_tools` added to conda env; Python pinned to `<3.13`
 
 ## Update Log (v3.2.0)
 This release introduces a new preprocessing-only standalone script, a GEO deposit mode, significant runtime improvements via lazy decompression, and cleaner output directory management.
@@ -264,6 +278,67 @@ CLIPittyClip uses a custom hash-based deduplication engine (`lib/fastq_collapse_
 | — | `--notification` | bool | false | Enable system notifications |
 | `-w` | `--wizard` | bool | — | Launch interactive wizard |
 | `-s` | `--sample` | int | — | Test mode: process only first N reads |
+
+## Clink Pipeline (v3.3)
+
+Clink is a Python-native alternative to CTK for crosslink site calling, bundled inside CLIPittyClip. It runs **in parallel** with the standard CTK pipeline — enabling direct comparison on the same dataset.
+
+### What Clink replaces
+
+| Step | CTK (standard) | Clink |
+|---|---|---|
+| BAM dedup | `tag2collapse.pl` (EM, ~48% retained) | `umi_tools dedup` directional (~80% retained) |
+| Signal extraction | `parseAlignment.pl` (BAM → BED → mutations) | `pileup.py` (single BAM scan → `.npz`) |
+| Truncation calling | `CITS.pl` | `cits.py` (binomial test + BH FDR) |
+| Mutation calling | `CIMS.pl` | `cims.py` (all 12 sub types + deletions) |
+| Bedgraph / peaks | unchanged | unchanged (same BAM-based bedgraph) |
+
+### Usage
+
+```bash
+# Clink only (replaces CTK dedup + CITS/CIMS)
+CLIPittyClip.sh -i reads.fastq.gz -x /path/to/star_index -t 8 --run-clink
+
+# Both CTK and Clink (parallel comparison — recommended for validation)
+CLIPittyClip.sh -i reads.fastq.gz -x /path/to/star_index -t 8 \
+    --run-cims-cits --run-clink
+
+# Batch mode
+CLIPittyClip.sh -d /path/to/samples/ -x /path/to/star_index -t 8 --run-clink
+```
+
+### Output structure with Clink
+
+```
+OUTPUT/
+  ├── 1_BAM/
+  ├── 2_COLLAPSED_BED/
+  ├── 3_BEDGRAPH/
+  ├── 4_PEAKS/
+  ├── 5_CTK_Analysis/    ← present only if --run-cims-cits also passed
+  ├── 5_Clink/ or 6_Clink/
+  │     └── {sample}/
+  │           ├── {sample}_dedup.bam           ← umi_tools output
+  │           ├── {sample}_pileup.npz          ← shared pileup (CITS + CIMS)
+  │           ├── {sample}_truncations.bed     ← CITS output
+  │           ├── {sample}_deletions.bed       ← CIMS deletions
+  │           └── {sample}_TtoC.bed            ← CIMS substitutions (all 12 types)
+  ├── 6_OTHERS/ or 7_OTHERS/
+  └── REPORTS/
+```
+
+### Clink options
+
+| Flag | Default | Description |
+|---|---|---|
+| `--run-clink` | off | Enable Clink pipeline |
+| `--clink-umi-len` | auto | UMI length for umi_tools (auto-detected from read names if omitted) |
+| `--clink-fdr` | 0.05 | Benjamini-Hochberg FDR threshold |
+| `--clink-min-cov` | 5 | Minimum coverage to test a position |
+
+### Dependencies
+
+Clink requires `pysam`, `numpy`, `scipy`, and `umi_tools` — all installed automatically by `install_macos.sh` / `install_linux.sh` in the `clipittyclip` conda environment. A hard dependency check runs at startup if `--run-clink` is passed; the pipeline exits with a clear error if any package is missing.
 
 ## CIMS/CITS Mapping Parameters
 

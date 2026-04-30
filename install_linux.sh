@@ -268,12 +268,14 @@ dependencies:
   - seqkit
 
   # Python packages
-  - python>=3.10
+  - "python>=3.10,<3.13"
   - pandas
   - numpy
   - scipy
   - seaborn
   - matplotlib
+  - pysam
+  - umi_tools
 
   # SSL/Certs
   - ca-certificates
@@ -514,4 +516,6 @@ echo -e "  ${CYAN}which parseAlignment.pl${NC}"
 echo -e "  ${CYAN}which findPeaks${NC}"
 echo -e "  ${CYAN}perl -MBio::Seq -e 'print \"BioPerl OK\\n\"'${NC}"
 echo -e "  ${CYAN}perl -MMath::CDF -e 'print \"Math::CDF OK\\n\"'${NC}"
+echo -e "  ${CYAN}python3 -c \"import pysam; print('pysam OK')\"${NC}"
+echo -e "  ${CYAN}umi_tools --version${NC}"
 echo ""
