@@ -613,6 +613,24 @@ run_fastp() {
     update_status_first "Adapter Trimming"
     log_info "Standard mode: fastp adapter trimming"
 
+    # Detect SRA /1 /2 pair suffixes (produced by old fastq-dump, not fasterq-dump).
+    # STAR truncates read names at '/', which strips the fastp-appended #count#UMI
+    # field and crashes tag2collapse.pl in the CTK/CIMS path.
+    # Detection reads one line from the input — effectively free even for large gz files.
+    local first_header
+    if [[ "$input_file" == *.gz ]]; then
+        first_header=$(gzip -dc "$input_file" 2>/dev/null | head -1)
+    else
+        first_header=$(head -1 "$input_file")
+    fi
+    local has_slash_suffix=false
+    if [[ "$first_header" =~ ^@[^[:space:]]+/[12]([[:space:]]|$) ]]; then
+        has_slash_suffix=true
+        log_warning "SRA /1 /2 pair suffixes detected in read names (old fastq-dump format)."
+        log_warning "  Will strip after adapter trimming — STAR truncates read names at '/', which"
+        log_warning "  drops the fastp-appended #count#UMI field and crashes tag2collapse.pl."
+    fi
+
     local fastp_cmd="fastp -i ${input_file} -o ${output_prefix}_cleaned.fastq \
         --thread ${threads} \
         --length_required 16 \
@@ -631,6 +649,15 @@ run_fastp() {
 
     if [ $exit_code -eq 0 ]; then
         log_info "Adapter trimming complete."
+        # Strip /1 /2 suffixes only when detected — no-op cost on clean files.
+        # Pattern: /1 or /2 followed by space, #, or EOL.
+        # Avoids touching any other '/' that may appear legitimately mid-name.
+        if [[ "$has_slash_suffix" == true ]]; then
+            log_info "Stripping /1 /2 suffixes from read names in cleaned output..."
+            sed -i '/^@/s|/\([12]\)\([[:space:]#]\)|\2|; /^@/s|/[12]$||' \
+                "${output_prefix}_cleaned.fastq"
+            log_info "Read name normalization complete."
+        fi
     else
         log_error "fastp failed."
         exit 1
