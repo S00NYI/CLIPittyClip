@@ -234,9 +234,11 @@ call_peaks() {
     mv temp_final.txt "$coverage_file"
     rm colnames.txt
 
-    if [[ -n "$CTK_DIR" ]]; then
+    if [[ -n "$CTK_DIR" ]] && [[ "${MATRIX_CTK_COLS:-true}" == "true" ]]; then
         log_info "Adding CTK columns..."
         add_ctk_columns_to_peak_matrix "$coverage_file" "${out_dir}/peaks_Sorted.bed" "$CTK_DIR" "$CIMS_FDR" "$CITS_PVALUE" "$GROUPS_FILE"
+    elif [[ -n "$CTK_DIR" ]]; then
+        log_info "Skipping CTK columns (MATRIX_CTK_COLS=false)"
     fi
 
     log_info "Peak calling for $output_name complete: $out_dir/"

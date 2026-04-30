@@ -1127,14 +1127,27 @@ run_peak_calling() {
 }
 
 # 4b. Add Enhanced Columns to Peak Coverage Matrix
-# Adds: BC (groups), Raw Group Counts, Normalized Counts, BedGraph Stats
-# Column Order: BC -> Raw Counts -> Normalized Counts -> BG Stats
+# Adds: BC (groups), Normalized Counts, optionally Raw Group Counts and BedGraph Stats
+# Column Order: BC -> TC_ -> NormedTC_ -> BG Stats
+#
+# Parameters:
+#   $1  peak_matrix        Path to peakCoverage.txt
+#   $2  peaks_bed          Path to peaks_Sorted.bed
+#   $3  bg_dir             BedGraph directory
+#   $4  scale_file         Scale factors TSV
+#   $5  groups_file        Optional groups file
+#   $6  enable_raw_tc_group   "true"/"false" — add raw TC_<group> sum columns  (default: true)
+#   $7  enable_bg_sample      "true"/"false" — add per-sample BedGraph stats   (default: true)
+#   $8  enable_bg_group       "true"/"false" — add per-group BedGraph stats    (default: true)
 add_matrix_columns() {
     local peak_matrix="$1"      # Path to peakCoverage.txt
     local peaks_bed="$2"        # Path to peaks_Sorted.bed
     local bg_dir="$3"           # BedGraph directory
     local scale_file="$4"       # Scale factors TSV
     local groups_file="$5"      # Optional groups file
+    local enable_raw_tc_group="${6:-true}"   # Toggle TC_<group> raw sum columns
+    local enable_bg_sample="${7:-true}"      # Toggle per-sample BedGraph stats
+    local enable_bg_group="${8:-true}"       # Toggle per-group BedGraph stats
     
     log_info "Adding enhanced columns to peak matrix..."
     
@@ -1254,31 +1267,32 @@ add_matrix_columns() {
         for group in $unique_groups; do
             local group_samples=$(awk -v g="$group" '{gsub(/^[ \t]+|[ \t]+$/, "", $1); gsub(/^[ \t]+|[ \t]+$/, "", $2)} $2==g {print $1}' "$groups_file" | tr '\n' ' ')
             
-            # Sum raw counts for group
-            awk -F'\t' -v samples="$group_samples" -v allsamples="${samples[*]}" '
-            BEGIN {
-                split(samples, gs, " ")
-                split(allsamples, as, " ")
-                for(i=1; i<=length(as); i++) col_map[as[i]] = i + 6
-            }
-            NR==1 { print "TC_'"$group"'"; next }
-            {
-                sum=0
-                for(i in gs) {
-                    s = gs[i]
-                    if(s in col_map) sum += $col_map[s]
+            # Sum raw counts for group (optional)
+            if [[ "$enable_raw_tc_group" == "true" ]]; then
+                awk -F'\t' -v samples="$group_samples" -v allsamples="${samples[*]}" '
+                BEGIN {
+                    split(samples, gs, " ")
+                    split(allsamples, as, " ")
+                    for(i=1; i<=length(as); i++) col_map[as[i]] = i + 6
                 }
-                print sum
-            }
-            ' "$peak_matrix" > "grp_raw_${group}.col"
-            
-            paste "$new_cols_file" "grp_raw_${group}.col" > "${new_cols_file}.tmp"
-            mv "${new_cols_file}.tmp" "$new_cols_file"
-            rm -f "grp_raw_${group}.col"
+                NR==1 { print "TC_'"$group"'"; next }
+                {
+                    sum=0
+                    for(i in gs) {
+                        s = gs[i]
+                        if(s in col_map) sum += $col_map[s]
+                    }
+                    print sum
+                }
+                ' "$peak_matrix" > "grp_raw_${group}.col"
+                
+                paste "$new_cols_file" "grp_raw_${group}.col" > "${new_cols_file}.tmp"
+                mv "${new_cols_file}.tmp" "$new_cols_file"
+                rm -f "grp_raw_${group}.col"
+            fi
             
             # Sum normalized counts for group
-            # This needs to reference the normalized columns we just added
-            # For simplicity, recalculate using scale factors
+            # Recalculate using scale factors (avoids referencing column indices of not-yet-final matrix)
             awk -F'\t' -v samples="$group_samples" -v allsamples="${samples[*]}" -v sf_file="$scale_file" '
             BEGIN {
                 split(samples, gs, " ")
@@ -1315,7 +1329,7 @@ add_matrix_columns() {
     # -------------------------------------------
     # STEP 4: BedGraph Stats (Sum/Avg/Max) Per Sample
     # -------------------------------------------
-    if [[ -d "$bg_dir" ]] && [[ ${#samples[@]} -gt 0 ]]; then
+    if [[ "$enable_bg_sample" == "true" ]] && [[ -d "$bg_dir" ]] && [[ ${#samples[@]} -gt 0 ]]; then
         log_info "  Adding BedGraph statistics..."
         
         # Split peaks by strand and sort for bedtools compatibility (same as STEP 5)
@@ -1367,7 +1381,7 @@ add_matrix_columns() {
         # -------------------------------------------
         # STEP 5: Group BedGraph Stats (from combined bedgraph) - Groups Only
         # -------------------------------------------
-        if [[ -n "$groups_file" && -f "$groups_file" ]]; then
+        if [[ "$enable_bg_group" == "true" ]] && [[ -n "$groups_file" && -f "$groups_file" ]]; then
             log_info "  Adding group BedGraph statistics..."
             local combined_bg_dir="${bg_dir}/COMBINED_BEDGRAPH"
             local unique_groups=$(awk '{gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2}' "$groups_file" | sort -u)
