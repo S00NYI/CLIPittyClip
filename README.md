@@ -3,9 +3,19 @@
 </p>
 
 # CLIPittyClip: Modern CLIP-seq Analysis Pipeline
-**Version 3.2.0**
+**Version 3.3.0**
 
 A comprehensive, single-command CLIP-seq data analysis pipeline from FASTQ to peaks and crosslink sites.
+
+## Update Log (v3.3.0)
+This release adds the **Clink** pipeline: a Python-native crosslink site caller using `umi_tools` + `pysam`, contributed by the LunaRNALab fork. Clink runs in parallel with CTK and is independent of Perl infrastructure.
+
+**New Features (v3.3.0):**
+- **Clink Pipeline** (`--run-clink`): Python-native crosslink-induced truncation site (CITS) and deletion site (CIMS) caller. Uses `umi_tools directional` BAM deduplication, a pileup engine (`lib/clink/pileup.py`), and separate CITS (`lib/clink/cits.py`) / CIMS (`lib/clink/cims.py`) callers with Benjamini-Hochberg FDR control.
+- **Clink-Only Fast Path**: When `--run-clink` is used without CTK flags, `parseAlignment.pl`/`tag2collapse.pl` are skipped entirely. `umi_tools dedup` → `bedtools bamtobed` produces the collapsed BED directly — faster and Perl-free for crosslink calling.
+- **Parallel Mode**: `--run-cims-cits --run-clink` runs both CTK and Clink on the same BAM. Outputs land in numbered folders (`5_CTK_Analysis/`, `6_Clink/`, `7_OTHERS/`) for side-by-side comparison.
+- **New `lib/clink/` module**: 5 Python scripts (`collapse.py`, `pileup.py`, `cits.py`, `cims.py`, `stats.py`) sourced from `luna/v3.3`, integrated without disturbing any existing CTK hardening.
+- **Install script updates**: `pysam` and `umi_tools` added to conda environments; Python pinned to `<3.13` (umi_tools incompatibility).
 
 ## Update Log (v3.2.0)
 This release introduces a new preprocessing-only standalone script, a GEO deposit mode, significant runtime improvements via lazy decompression, and cleaner output directory management.
@@ -111,6 +121,8 @@ which parseAlignment.pl
 which findPeaks
 perl -MBio::SeqIO -e 'print "Bio::SeqIO OK\n"'
 perl -MMath::CDF -e 'print "Math::CDF OK\n"'
+python3 -c "import pysam; print('pysam OK')"
+umi_tools --version
 ```
 
 ### Installation Options
@@ -151,6 +163,12 @@ CLIPittyClip.sh -i reads.fastq.gz -x /path/to/star_index --genome-fasta /path/to
 CLIPittyClip.sh -i reads.fastq.gz -x /path/to/star_index --genome-fasta /path/to/genome.fa -t 8 --run-cims --run-cits
 # OR equivalently:
 CLIPittyClip.sh -i reads.fastq.gz -x /path/to/star_index --genome-fasta /path/to/genome.fa -t 8 --run-cims-cits
+
+# Clink only (Python-native, no Perl CTK required)
+CLIPittyClip.sh -i reads.fastq.gz -x /path/to/star_index --genome-fasta /path/to/genome.fa -t 8 --run-clink
+
+# CTK + Clink in parallel (side-by-side comparison)
+CLIPittyClip.sh -i reads.fastq.gz -x /path/to/star_index --genome-fasta /path/to/genome.fa -t 8 --run-cims-cits --run-clink
 
 # eCLIP paired-end analysis (post-eclipdemux R2 files, UMI in header)
 CLIPittyClip.sh --eclip pe -d /path/to/samples/ -x /path/to/star_index -t 8 --run-cims --run-cits
@@ -240,7 +258,7 @@ CLIPittyClip uses a custom hash-based deduplication engine (`lib/fastq_collapse_
 
 | Short | Long | Type | Default | Description |
 |-------|------|------|---------|-------------|
-| — | `--run-ctk` | bool | — | Enable full CTK CIMS+CITS analysis |
+| — | `--run-cims-cits` | bool | — | Enable full CTK CIMS+CITS analysis |
 | — | `--run-cims` | bool | — | Enable CIMS analysis (mutation sites) |
 | — | `--run-cits` | bool | — | Enable CITS analysis (truncation sites) |
 | — | `--cims-iter` | int | 5 | CIMS permutation iterations |
@@ -249,6 +267,21 @@ CLIPittyClip uses a custom hash-based deduplication engine (`lib/fastq_collapse_
 | — | `--cits-gap` | int | 25 | CITS clustering gap (-1 disables) |
 | `-f` | `--flank` | int | 10 | Flanked BED nucleotides |
 | — | `--no-motif` | bool | — | Skip flanked BED generation |
+
+> **Note:** `--run-ctk` is a deprecated alias for `--run-cims-cits` (still works, emits a warning).
+
+### Clink Analysis Options
+
+Clink is a Python-native crosslink site caller (`umi_tools` + `pysam`). It runs independently of CTK and can be used alone or in parallel.
+
+| Short | Long | Type | Default | Description |
+|-------|------|------|---------|-------------|
+| — | `--run-clink` | bool | — | Enable Clink pipeline (umi_tools dedup + Python pileup → CITS/CIMS) |
+| — | `--clink-umi-len` | int | -1 | UMI length for umi_tools (-1 = auto-detect) |
+| — | `--clink-fdr` | float | 0.05 | Benjamini-Hochberg FDR threshold |
+| — | `--clink-min-cov` | int | 5 | Minimum coverage to test a position |
+
+**Requires:** `pysam`, `numpy`, `scipy`, `umi_tools` (all installed by `install_macos.sh` / `install_linux.sh`).
 
 ### Grouping Options
 
@@ -323,16 +356,20 @@ Condition_B_Rep2    Condition_B
 │   ├── COMBINED_PEAKS/      # Peaks across all samples (or aggregated)
 │   └── SAMPLE_PEAKS/        # Peaks per sample
 │
-├── 5_CTK_Analysis/          # When --run-ctk
+├── 5_CTK_Analysis/          # When --run-cims-cits  (or --run-cims / --run-cits)
 │   ├── CIMS/
 │   ├── CITS/
 │   └── motif_analysis/
 │ OR
-├── 5_CIMS_Analysis/         # When --cims only
+├── 5_CIMS_Analysis/         # When --run-cims only
 │ OR
-├── 5_CITS_Analysis/         # When --cits only
+├── 5_CITS_Analysis/         # When --run-cits only
+│ OR
+├── 5_Clink/                 # When --run-clink only (no CTK flags)
 │
-├── 6_OTHERS/                # Support files
+├── 6_Clink/                 # When both CTK + Clink (--run-cims-cits --run-clink)
+│
+├── 5_OTHERS/ or 6_OTHERS/ or 7_OTHERS/   # Support files (number auto-adjusts)
 │   ├── STAR_OUTPUT/         # Splice junctions (STAR only)
 │   └── ncRNA_Mapping/       # ncRNA mapping results
 │
@@ -346,6 +383,15 @@ Condition_B_Rep2    Condition_B
 {INPUT_BASENAME}.log         # Complete console log of the run
 
 ```
+
+> **Output folder numbering:**
+>
+> | Flags | Folder layout |
+> |-------|---------------|
+> | *(none)* | `5_OTHERS/` |
+> | `--run-cims-cits` | `5_CTK_Analysis/`, `6_OTHERS/` |
+> | `--run-clink` | `5_Clink/`, `6_OTHERS/` |
+> | `--run-cims-cits --run-clink` | `5_CTK_Analysis/`, `6_Clink/`, `7_OTHERS/` |
 
 
 ## Peak Matrix Metrics
