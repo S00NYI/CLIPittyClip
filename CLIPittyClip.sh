@@ -101,8 +101,8 @@ function show_usage {
     echo "OUTPUT OPTIONS:"
     echo "  -k, --keep               Keep intermediate files (in OUTPUT/OTHERS/sample_analysis/)"
     echo "  --notification           Enable system notifications on completion"
-    echo "  --matrix-slim            Slim peak matrix: keep BC + NormedTC only."
-    echo "                           Disables raw TC_group sums, BedGraph stats, and CTK columns."
+    echo "  --matrix-enhance         Enhanced peak matrix: adds raw TC_sample/group, BedGraph stats, and CTK columns."
+    echo "                           Default matrix contains: base coords + NormedTC_sample + BC_group + NormedTC_group."
     echo "  -w, --wizard             Launch interactive configuration wizard"
     echo ""
     echo "EXAMPLES:"
@@ -160,12 +160,13 @@ CTK_GROUPS_FILE=""  # Optional: group samples for CIMS/CITS aggregation (set by 
 CTK_GROUP_MODE="false"  # Explicit flag for group CTK analysis
 GROUPS_FILE=""      # Standard Groups File for BedGraph/Matrix aggregation
 
-# Matrix column toggles (all default ON for backward compatibility)
-# Use --matrix-slim to disable TC_group, BedGraph, and CTK columns at once.
-MATRIX_RAW_TC_GROUP="true"  # TC_<group> raw sum columns in peak matrix
-MATRIX_BG_SAMPLE="true"     # Per-sample BedGraph stats in peak matrix
-MATRIX_BG_GROUP="true"      # Per-group BedGraph stats in peak matrix
-MATRIX_CTK_COLS="true"      # CTK DEL/SUB/TRUNC site-count columns
+# Matrix column toggles (all default OFF — slim matrix by default)
+# Use --matrix-enhance to enable raw TC counts, BedGraph stats, and CTK columns.
+MATRIX_RAW_TC_SAMPLE="false" # TC_<sample> raw per-sample count columns in peak matrix
+MATRIX_RAW_TC_GROUP="false"  # TC_<group> raw sum columns in peak matrix
+MATRIX_BG_SAMPLE="false"     # Per-sample BedGraph stats in peak matrix
+MATRIX_BG_GROUP="false"      # Per-group BedGraph stats in peak matrix
+MATRIX_CTK_COLS="false"      # CTK/Clink DEL/SUB/TRUNC site-count columns
 
 # Capture Start Time (Seconds) for duration calculation
 PIPELINE_START=$(date +%s)
@@ -231,13 +232,13 @@ while [[ $# -gt 0 ]]; do
         --no-chr-filter) FILTER_CHR="false"; shift ;;
         --notification) NOTIFY_MODE="true"; shift ;;
         --child) CHILD_MODE="true"; shift ;;
-        --matrix-slim)
-            # Slim matrix: BC + NormedTC per sample/group only.
-            # Disables raw TC_group sums, BedGraph stats, and CTK site-count columns.
-            MATRIX_RAW_TC_GROUP="false"
-            MATRIX_BG_SAMPLE="false"
-            MATRIX_BG_GROUP="false"
-            MATRIX_CTK_COLS="false"
+        --matrix-enhance)
+            # Enhanced matrix: adds raw TC_sample/group, BedGraph stats, and CTK/Clink site-count columns.
+            MATRIX_RAW_TC_SAMPLE="true"
+            MATRIX_RAW_TC_GROUP="true"
+            MATRIX_BG_SAMPLE="true"
+            MATRIX_BG_GROUP="true"
+            MATRIX_CTK_COLS="true"
             shift ;;
         -w|--wizard|--advanced) WIZARD_MODE="true"; shift ;;
         -v|--verbose) VERBOSE="true"; shift ;;
@@ -1078,7 +1079,7 @@ if [[ -n "$INPUT_DIR" ]]; then
         add_matrix_columns "$PEAK_MATRIX" "$PEAKS_BED" \
             "$OUTPUT_ROOT/$DIR_BG" "$OUTPUT_ROOT/$DIR_BG/scale_factors.tsv" \
             "$GROUPS_FILE" \
-            "$MATRIX_RAW_TC_GROUP" "$MATRIX_BG_SAMPLE" "$MATRIX_BG_GROUP"
+            "$MATRIX_RAW_TC_GROUP" "$MATRIX_BG_SAMPLE" "$MATRIX_BG_GROUP" "$MATRIX_RAW_TC_SAMPLE"
 
         # Promote sorted peak bed to clearly named FINAL target
         mv "$PEAKS_BED" "$OUTPUT_ROOT/$DIR_PEAKS/COMBINED_PEAKS/FINAL_COMBINED_PEAKS.bed" 2>/dev/null
@@ -1620,7 +1621,7 @@ if [[ "$DEMUX" == "yes" ]]; then
         add_matrix_columns "$PEAK_MATRIX" "$PEAKS_BED" \
             "$OUTPUT_ROOT/$DIR_BG" "$OUTPUT_ROOT/$DIR_BG/scale_factors.tsv" \
             "$GROUPS_FILE" \
-            "$MATRIX_RAW_TC_GROUP" "$MATRIX_BG_SAMPLE" "$MATRIX_BG_GROUP"
+            "$MATRIX_RAW_TC_GROUP" "$MATRIX_BG_SAMPLE" "$MATRIX_BG_GROUP" "$MATRIX_RAW_TC_SAMPLE"
         
         # Cleanup intermediate peak files to save disk space
         rm -f "$OUTPUT_ROOT/$DIR_PEAKS/COMBINED_PEAKS/COMBINED.bed" \
@@ -2061,7 +2062,7 @@ if [[ "$CHILD_MODE" != "true" ]]; then
         if [[ -f "$scale_tsv" ]]; then
             console_msg "  > Normalizing single-sample tag counts..."
             add_matrix_columns "$coverage_file" "$final_peaks" "$SINGLE_OUTPUT_ROOT/$SF_DIR_BG" "$scale_tsv" "" \
-                "$MATRIX_RAW_TC_GROUP" "$MATRIX_BG_SAMPLE" "$MATRIX_BG_GROUP"
+                "$MATRIX_RAW_TC_GROUP" "$MATRIX_BG_SAMPLE" "$MATRIX_BG_GROUP" "$MATRIX_RAW_TC_SAMPLE"
         else
             console_msg "  > Warning: scale_factors.tsv missing, skipping Normalization."
         fi

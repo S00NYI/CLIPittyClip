@@ -1136,18 +1136,20 @@ run_peak_calling() {
 #   $3  bg_dir             BedGraph directory
 #   $4  scale_file         Scale factors TSV
 #   $5  groups_file        Optional groups file
-#   $6  enable_raw_tc_group   "true"/"false" — add raw TC_<group> sum columns  (default: true)
-#   $7  enable_bg_sample      "true"/"false" — add per-sample BedGraph stats   (default: true)
-#   $8  enable_bg_group       "true"/"false" — add per-group BedGraph stats    (default: true)
+#   $6  enable_raw_tc_group   "true"/"false" — add raw TC_<group> sum columns  (default: false)
+#   $7  enable_bg_sample      "true"/"false" — add per-sample BedGraph stats   (default: false)
+#   $8  enable_bg_group       "true"/"false" — add per-group BedGraph stats    (default: false)
+#   $9  enable_raw_tc_sample  "true"/"false" — include TC_<sample> raw counts in output (default: false)
 add_matrix_columns() {
     local peak_matrix="$1"      # Path to peakCoverage.txt
     local peaks_bed="$2"        # Path to peaks_Sorted.bed
     local bg_dir="$3"           # BedGraph directory
     local scale_file="$4"       # Scale factors TSV
     local groups_file="$5"      # Optional groups file
-    local enable_raw_tc_group="${6:-true}"   # Toggle TC_<group> raw sum columns
-    local enable_bg_sample="${7:-true}"      # Toggle per-sample BedGraph stats
-    local enable_bg_group="${8:-true}"       # Toggle per-group BedGraph stats
+    local enable_raw_tc_group="${6:-false}"   # Toggle TC_<group> raw sum columns
+    local enable_bg_sample="${7:-false}"      # Toggle per-sample BedGraph stats
+    local enable_bg_group="${8:-false}"       # Toggle per-group BedGraph stats
+    local enable_raw_tc_sample="${9:-false}" # Toggle TC_<sample> raw count columns in output
     
     log_info "Adding enhanced columns to peak matrix..."
     
@@ -1443,10 +1445,11 @@ add_matrix_columns() {
     
     # -------------------------------------------
     # REORDER: Group columns by type (prefix)
-    # Order: base -> TC_ -> NormedTC_ -> BC_ -> DEL_ -> SUB_ -> TRUNC_ -> BG*
+    # Order: base -> [TC_ if enhanced] -> NormedTC_ -> BC_ -> DEL_ -> SUB_ -> TRUNC_ -> BG*
+    # TC_<sample> raw count columns are suppressed unless enable_raw_tc_sample=true
     # -------------------------------------------
     log_info "Reordering columns by type..."
-    awk -F'\t' '
+    awk -F'\t' -v skip_raw_tc="$enable_raw_tc_sample" '
     BEGIN { OFS="\t" }
     NR==1 {
         # Parse header and categorize columns by prefix
@@ -1463,11 +1466,11 @@ add_matrix_columns() {
             else                     { order[i] = 9; other[i] = h }
             headers[i] = h
         }
-        # Build column order
+        # Build column order; skip TC_ bucket (order=2) when raw sample counts suppressed
         n = 0
         for(o=1; o<=9; o++) {
             for(i=1; i<=NF; i++) {
-                if(order[i] == o) { col_order[++n] = i }
+                if(order[i] == o && (o != 2 || skip_raw_tc == "true")) { col_order[++n] = i }
             }
         }
         total_cols = n
