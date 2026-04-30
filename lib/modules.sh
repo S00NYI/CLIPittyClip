@@ -2590,6 +2590,20 @@ _clink_dir() {
     echo "$(dirname "${BASH_SOURCE[0]}")/clink"
 }
 
+# Execute a Clink Python command, respecting VERBOSE (mirrors execute_cmd behavior).
+# All Clink Python scripts print progress to stderr; with VERBOSE=true those lines
+# are teed to the console so the user can watch in real time.
+_clink_exec() {
+    local log="${LOG_FILE:-/dev/null}"
+    if [[ "${VERBOSE:-false}" == "true" ]]; then
+        eval "$*" 2>&1 | tee -a "$log"
+        return "${PIPESTATUS[0]}"
+    else
+        eval "$*" >> "$log" 2>&1
+        return $?
+    fi
+}
+
 # ---------------------------------------------------------------------------
 # check_clink_deps — hard dependency check, called once before any Clink work
 # ---------------------------------------------------------------------------
@@ -2660,12 +2674,11 @@ run_clink_collapse() {
         extra_args="$extra_args --umi-len $umi_len"
     fi
 
-    python3 "$clink_dir/collapse.py" \
+    _clink_exec python3 "$clink_dir/collapse.py" \
         --bam     "$bam_in" \
         --out     "$bam_out" \
         --threads "$threads" \
-        $extra_args \
-        2>> "${LOG_FILE:-/dev/null}"
+        $extra_args
 
     if [[ $? -ne 0 ]] || [[ ! -s "$bam_out" ]]; then
         log_error "Clink collapse failed. Check log for details."
@@ -2690,10 +2703,9 @@ run_clink_pileup() {
 
     log_info "Clink pileup: scanning BAM → $npz_out"
 
-    python3 "$clink_dir/pileup.py" \
+    _clink_exec python3 "$clink_dir/pileup.py" \
         "$bam_in" \
-        --out "$npz_out" \
-        2>> "${LOG_FILE:-/dev/null}"
+        --out "$npz_out"
 
     if [[ $? -ne 0 ]] || [[ ! -s "$npz_out" ]]; then
         log_error "Clink pileup failed. Check log for details."
@@ -2723,13 +2735,12 @@ run_clink_cits() {
 
     log_info "Clink CITS: truncation site calling"
 
-    python3 "$clink_dir/cits.py" \
+    _clink_exec python3 "$clink_dir/cits.py" \
         --pileup  "$npz_in" \
         --prefix  "$prefix" \
         --min-cov "$min_cov" \
         --min-frac "$min_frac" \
-        --fdr     "$fdr" \
-        2>> "${LOG_FILE:-/dev/null}"
+        --fdr     "$fdr"
 
     if [[ $? -ne 0 ]]; then
         log_error "Clink CITS failed. Check log for details."
@@ -2771,14 +2782,13 @@ run_clink_cims() {
     [[ "$no_subs" == "true" ]]   && extra_args="$extra_args --no-subs"
     [[ -n "$sub_types" ]]        && extra_args="$extra_args --sub-types $sub_types"
 
-    python3 "$clink_dir/cims.py" \
+    _clink_exec python3 "$clink_dir/cims.py" \
         --pileup   "$npz_in" \
         --prefix   "$prefix" \
         --min-cov  "$min_cov" \
         --min-frac "$min_frac" \
         --fdr      "$fdr" \
-        $extra_args \
-        2>> "${LOG_FILE:-/dev/null}"
+        $extra_args
 
     if [[ $? -ne 0 ]]; then
         log_error "Clink CIMS failed. Check log for details."
@@ -2813,6 +2823,7 @@ run_clink_full() {
     local min_cov="${8:-5}"
     local min_frac="${9:-0.05}"
     local fdr="${10:-0.05}"
+    local prebuilt_dedup="${11:-}"  # optional: pre-existing dedup BAM from early Clink-only path
 
     mkdir -p "$out_dir"
 
@@ -2820,8 +2831,14 @@ run_clink_full() {
     local npz="${out_dir}/${sample_name}_pileup.npz"
     local prefix="${out_dir}/${sample_name}"
 
-    update_status "Clink collapse"
-    run_clink_collapse "$bam_in" "$dedup_bam" "$umi_len" "$threads" || return 1
+    # Collapse step: skip if dedup BAM was already built in the early Clink-only path
+    if [[ -n "$prebuilt_dedup" ]] && [[ -f "$prebuilt_dedup" ]]; then
+        log_info "Clink collapse: reusing pre-built dedup BAM: $prebuilt_dedup"
+        dedup_bam="$prebuilt_dedup"
+    else
+        update_status "Clink collapse"
+        run_clink_collapse "$bam_in" "$dedup_bam" "$umi_len" "$threads" || return 1
+    fi
 
     update_status "Clink pileup"
     run_clink_pileup "$dedup_bam" "$npz" || return 1

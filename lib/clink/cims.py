@@ -149,7 +149,8 @@ def run_cims(pileup_path:  str   = None,
     # --- Extract deletion + sub signal, accumulate genome-wide ---
     chrom_data = {}
     g_cov, g_del = [], []
-    g_subs = {}
+    g_subs     = {}   # sub_type -> [signal arrays per chrom]
+    g_subs_cov = {}   # sub_type -> [coverage arrays for same chroms only]
 
     for c, arrays in chrom_data_full.items():
         positions, coverage, truncations, deletions, subs = arrays
@@ -161,6 +162,7 @@ def run_cims(pileup_path:  str   = None,
             if sub_types and sub_type not in sub_types:
                 continue
             g_subs.setdefault(sub_type, []).append(arr)
+            g_subs_cov.setdefault(sub_type, []).append(coverage)
 
     if not chrom_data:
         print("  No signal found.", file=sys.stderr)
@@ -174,8 +176,11 @@ def run_cims(pileup_path:  str   = None,
     lambda_subs = {}
     if not no_subs:
         lambda_subs = {
-            st: estimate_background(np.concatenate(arrs), all_cov, min_coverage)
-            for st, arrs in g_subs.items()
+            st: estimate_background(
+                    np.concatenate(g_subs[st]),
+                    np.concatenate(g_subs_cov[st]),
+                    min_coverage)
+            for st in g_subs
         }
 
     print(f"\n  Background rates (genome-wide):", file=sys.stderr)

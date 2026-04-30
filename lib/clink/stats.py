@@ -228,7 +228,8 @@ def run_analysis(bam_path:     str,
     # --- Convert to arrays, accumulate genome-wide ---
     chrom_data = {}
     g_cov, g_trunc, g_del = [], [], []
-    g_subs = {}
+    g_subs     = {}   # sub_type -> [signal arrays per chrom]
+    g_subs_cov = {}   # sub_type -> [coverage arrays for same chroms only]
 
     for c, pileup in pileups.items():
         result = to_arrays(pileup)
@@ -242,6 +243,7 @@ def run_analysis(bam_path:     str,
         g_del.append(deletions)
         for sub_type, arr in subs.items():
             g_subs.setdefault(sub_type, []).append(arr)
+            g_subs_cov.setdefault(sub_type, []).append(coverage)
 
     if not chrom_data:
         print("No signal found.", file=sys.stderr)
@@ -255,8 +257,11 @@ def run_analysis(bam_path:     str,
     λ_trunc = estimate_background(all_trunc, all_cov, min_coverage)
     λ_del   = estimate_background(all_del,   all_cov, min_coverage)
     λ_subs  = {
-        st: estimate_background(np.concatenate(arrs), all_cov, min_coverage)
-        for st, arrs in g_subs.items()
+        st: estimate_background(
+                np.concatenate(g_subs[st]),
+                np.concatenate(g_subs_cov[st]),
+                min_coverage)
+        for st in g_subs
     }
 
     print(f"\n  Background rates (genome-wide):", file=sys.stderr)
