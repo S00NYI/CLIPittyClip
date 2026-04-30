@@ -219,7 +219,10 @@ while [[ $# -gt 0 ]]; do
         -f|--flank) MOTIF_FLANK="$2"; shift 2 ;;
         --no-motif) RUN_MOTIF="no"; shift ;;
         -g|--groups) GROUPS_FILE="$2"; shift 2 ;;
-        --ctk-group) CTK_GROUP_MODE="true"; shift ;;
+        --ctk-group)
+            echo -e "\033[0;33m[DEPRECATED]\033[0m --ctk-group is deprecated. Group CTK/Clink analysis now runs automatically when -g is provided with --run-cims/cits/clink. Flag is a no-op; remove it from your command." >&2
+            CTK_GROUP_MODE="true"
+            shift ;;
         -s|--sample) SAMPLE_SIZE="$2"; shift 2 ;;
         -b|--barcodes) BARCODE_FILE="$2"; DEMUX="yes"; shift 2 ;;
         -d|--input-dir) INPUT_DIR="$2"; shift 2 ;;
@@ -480,8 +483,9 @@ if [[ -n "$GROUPS_FILE" ]]; then
         exit 1
     fi
     GROUPS_FILE="$(cd "$(dirname "$GROUPS_FILE")" && pwd)/$(basename "$GROUPS_FILE")"
-    # Only set CTK_GROUPS_FILE if group CTK mode is explicitly enabled
-    if [[ "$CTK_GROUP_MODE" == "true" ]]; then
+    # Auto-enable group CTK analysis when groups file + CTK flags are present
+    # (--ctk-group is no longer required; it is deprecated)
+    if [[ "$RUN_CIMS" == "true" || "$RUN_CITS" == "true" ]]; then
         CTK_GROUPS_FILE="$GROUPS_FILE"
         log_info "Group CTK analysis enabled with groups file: $CTK_GROUPS_FILE"
     fi
@@ -735,11 +739,9 @@ if [[ -n "$INPUT_DIR" ]]; then
     
     # Build extra flags for child processes
     EXTRA_FLAGS=""
-    # Only pass CIMS/CITS to children if NOT using groups file (group CTK runs after batch)
-    if [[ -z "$CTK_GROUPS_FILE" ]]; then
-        if [[ "$RUN_CIMS" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --run-cims"; fi
-        if [[ "$RUN_CITS" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --run-cits"; fi
-    fi
+    # Pass CIMS/CITS to children (individual analysis always runs; group runs post-batch)
+    if [[ "$RUN_CIMS" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --run-cims"; fi
+    if [[ "$RUN_CITS" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --run-cits"; fi
     if [[ "$RUN_CLINK" == "true" ]]; then
         EXTRA_FLAGS="$EXTRA_FLAGS --run-clink"
         EXTRA_FLAGS="$EXTRA_FLAGS --clink-umi-len $CLINK_UMI_LEN"
@@ -858,7 +860,7 @@ if [[ -n "$INPUT_DIR" ]]; then
         mkdir -p "$OUTPUT_ROOT/$DIR_OTHERS/STAR_OUTPUT"
     fi
 
-    # Run Group-based CTK Analysis (if groups file provided)
+    # Run Group-based CTK Analysis (auto-triggered by -g + --run-cims/cits)
     if [[ -n "$CTK_GROUPS_FILE" ]]; then
         # Run in WORK_DIR subshell to prevent CITS.pl/tag2profile.pl CWD pollution
         (cd "$WORK_DIR" && run_group_ctk_analysis "$CTK_GROUPS_FILE" "$OUTPUT_ROOT" "$GENOME_INDEX" \
@@ -866,6 +868,15 @@ if [[ -n "$INPUT_DIR" ]]; then
             "$MOTIF_FLANK" "$RUN_MOTIF" "$RUN_CIMS" "$RUN_CITS" "$WORK_DIR")
         # Cleanup any CTK temp dirs that may have landed in CWD despite subshell
         rm -rf CITS.pl_* tag2profile.pl_* 2>/dev/null
+    fi
+
+    # Run Group-based Clink Analysis (auto-triggered by -g + --run-clink)
+    if [[ -n "$GROUPS_FILE" && "$RUN_CLINK" == "true" && -n "${DIR_CLINK:-}" ]]; then
+        run_group_clink_analysis "$GROUPS_FILE" "$OUTPUT_ROOT" "$DIR_CLINK" \
+            "$CLINK_UMI_LEN" "$THREADS" \
+            "$CLINK_RUN_CITS" "$CLINK_RUN_CIMS" \
+            "$CLINK_MIN_COV" "$CLINK_MIN_FRAC" "$CLINK_FDR" \
+            "$WORK_DIR"
     fi
     
     console_msg "\n[AGGREGATION]"
@@ -1376,14 +1387,22 @@ if [[ "$DEMUX" == "yes" ]]; then
         mkdir -p "$OUTPUT_ROOT/$DIR_OTHERS/STAR_OUTPUT"
     fi
 
-    # Run Group-based CTK Analysis (OPT-IN ONLY with --ctk-group flag)
-    if [[ "$CTK_GROUP_MODE" == "true" ]] && [[ -n "$GROUPS_FILE" ]]; then
+    # Run Group-based CTK Analysis (auto-triggered by -g + --run-cims/cits)
+    if [[ -n "$GROUPS_FILE" ]] && [[ "$RUN_CIMS" == "true" || "$RUN_CITS" == "true" ]]; then
         # Run in WORK_DIR subshell to prevent CITS.pl/tag2profile.pl CWD pollution
         (cd "$WORK_DIR" && run_group_ctk_analysis "$GROUPS_FILE" "$OUTPUT_ROOT" "$GENOME_INDEX" \
             "$CIMS_ITERATIONS" "$CIMS_FDR" "$CITS_PVALUE" "$CITS_GAP" \
             "$MOTIF_FLANK" "$RUN_MOTIF" "$RUN_CIMS" "$RUN_CITS" "$WORK_DIR")
-        # Cleanup any CTK temp dirs that may have landed in CWD despite subshell
         rm -rf CITS.pl_* tag2profile.pl_* 2>/dev/null
+    fi
+
+    # Run Group-based Clink Analysis (auto-triggered by -g + --run-clink)
+    if [[ -n "$GROUPS_FILE" && "$RUN_CLINK" == "true" && -n "${DIR_CLINK:-}" ]]; then
+        run_group_clink_analysis "$GROUPS_FILE" "$OUTPUT_ROOT" "$DIR_CLINK" \
+            "$CLINK_UMI_LEN" "$THREADS" \
+            "$CLINK_RUN_CITS" "$CLINK_RUN_CIMS" \
+            "$CLINK_MIN_COV" "$CLINK_MIN_FRAC" "$CLINK_FDR" \
+            "$WORK_DIR"
     fi
              
     console_msg "\n[AGGREGATION]"

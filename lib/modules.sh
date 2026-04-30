@@ -2632,6 +2632,143 @@ run_group_ctk_analysis() {
     
     console_msg "  > Group CTK analysis complete"
 }
+
+# ---------------------------------------------------------------------------
+# run_group_clink_analysis — group-level Clink CITS/CIMS after batch processing
+#
+# Merges per-sample dedup BAMs by group, then runs pileup → cits/cims on the
+# merged BAM (reusing run_clink_full with prebuilt_dedup to skip collapse).
+#
+# Args:
+#   $1  groups_file      Path to groups TSV (sample<TAB>group)
+#   $2  output_root      Root output directory
+#   $3  clink_dir_name   Relative Clink output folder (e.g. "5_Clink")
+#   $4  umi_len          UMI length (-1 = auto; unused for merged BAM but kept for API parity)
+#   $5  threads          Thread count for samtools + pileup
+#   $6  run_cits         "true"|"false"
+#   $7  run_cims         "true"|"false"
+#   $8  min_cov          Minimum coverage threshold (default 5)
+#   $9  min_frac         Minimum signal fraction (default 0.05)
+#   $10 fdr              BH FDR threshold (default 0.05)
+#   $11 work_dir         Directory containing *_analysis subdirs
+# ---------------------------------------------------------------------------
+run_group_clink_analysis() {
+    local groups_file="$1"
+    local output_root="$2"
+    local clink_dir_name="$3"
+    local umi_len="${4:--1}"
+    local threads="${5:-4}"
+    local run_cits="${6:-true}"
+    local run_cims="${7:-true}"
+    local min_cov="${8:-5}"
+    local min_frac="${9:-0.05}"
+    local fdr="${10:-0.05}"
+    local work_dir="${11:-$(pwd)}"
+
+    console_msg "\n[GROUP CLINK ANALYSIS]"
+
+    # 1. Parse groups file
+    local groups_map
+    groups_map=$(mktemp)
+    parse_groups_file "$groups_file" "$groups_map"
+
+    # 2. Build group→sample list
+    local group_samples_file
+    group_samples_file=$(mktemp)
+
+    for sample_dir in "${work_dir}"/*_analysis; do
+        [[ ! -d "$sample_dir" ]] && continue
+        local sample_name
+        sample_name="$(basename "${sample_dir%_analysis}")"
+        local group
+        group=$(grep -w "^${sample_name}" "$groups_map" 2>/dev/null | cut -f2)
+        if [[ -z "$group" ]]; then
+            group="$sample_name"
+            log_info "Clink group: '$sample_name' not in groups file, treating as individual"
+        fi
+        echo -e "${group}\t${sample_name}" >> "$group_samples_file"
+    done
+
+    # 3. Process each group
+    local unique_groups
+    unique_groups=$(cut -f1 "$group_samples_file" | sort -u | grep -v "^unknown$")
+
+    for group in $unique_groups; do
+        local samples
+        samples=$(grep -w "^${group}" "$group_samples_file" | cut -f2 | tr '\n' ' ')
+        local sample_count
+        sample_count=$(echo $samples | wc -w | tr -d ' ')
+
+        if [[ "$sample_count" -eq 1 ]]; then
+            printf "  > Clink group %s: " "$group"
+        else
+            printf "  > Clink group %s (%d samples): " "$group" "$sample_count"
+        fi
+
+        # Create group output dir
+        local group_clink_dir="${output_root}/${clink_dir_name}/${group}"
+        mkdir -p "$group_clink_dir"
+
+        # 4. Collect per-sample dedup BAMs
+        local bam_inputs=()
+        for sample in $samples; do
+            local sample_dir="${work_dir}/${sample}_analysis"
+            local dedup_bam
+            # Clink_Analysis subdir created by run_clink_full / early fast path
+            dedup_bam=$(find "$sample_dir" -name "*_dedup.bam" -path "*/Clink_Analysis/*" 2>/dev/null | head -n 1)
+            if [[ -s "$dedup_bam" ]]; then
+                bam_inputs+=("$dedup_bam")
+                log_info "  Clink group $group: adding $dedup_bam"
+            else
+                log_warning "  Clink group $group: dedup BAM not found for $sample, skipping"
+            fi
+        done
+
+        if [[ ${#bam_inputs[@]} -eq 0 ]]; then
+            log_error "Clink group $group: no dedup BAMs found, skipping"
+            update_status_done
+            continue
+        fi
+
+        # 5. Merge BAMs (or symlink if only one)
+        local merged_bam="${group_clink_dir}/${group}_dedup.bam"
+        if [[ ${#bam_inputs[@]} -eq 1 ]]; then
+            cp "${bam_inputs[0]}" "$merged_bam"
+        else
+            samtools merge -f -@ "$threads" "$merged_bam" "${bam_inputs[@]}"
+        fi
+
+        if [[ ! -s "$merged_bam" ]]; then
+            log_error "Clink group $group: BAM merge failed"
+            update_status_done
+            continue
+        fi
+
+        # Index merged BAM (pysam pileup needs random-access index)
+        samtools sort -@ "$threads" -o "${merged_bam%.bam}_sorted.bam" "$merged_bam"
+        mv "${merged_bam%.bam}_sorted.bam" "$merged_bam"
+        samtools index "$merged_bam"
+
+        # 6. Run pileup → cits/cims via run_clink_full (prebuilt_dedup skips collapse)
+        run_clink_full \
+            "$merged_bam" \
+            "$group_clink_dir" \
+            "$group" \
+            "$umi_len" \
+            "$threads" \
+            "$run_cits" \
+            "$run_cims" \
+            "$min_cov" \
+            "$min_frac" \
+            "$fdr" \
+            "$merged_bam"   # prebuilt_dedup — collapse skipped
+
+        update_status_done
+    done
+
+    rm -f "$groups_map" "$group_samples_file"
+    console_msg "  > Group Clink analysis complete"
+}
 # Resolve the path to the Clink Python scripts bundled in lib/clink/
 _clink_dir() {
     echo "$(dirname "${BASH_SOURCE[0]}")/clink"
