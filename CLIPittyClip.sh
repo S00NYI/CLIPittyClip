@@ -86,6 +86,11 @@ function show_usage {
     echo "  --cims-fdr <float>       CIMS FDR threshold (default: 0.05)"
     echo "  --cits-pval <float>      CITS p-value threshold (default: 0.05)"
     echo "  --cits-gap <int>         CITS clustering gap (default: 25, -1=no cluster)"
+    echo "  --run-clink              Enable Clink pipeline (umi_tools dedup + Python
+                             pileup -> CITS/CIMS). Runs parallel to CTK."
+    echo "  --clink-umi-len <int>    UMI length for umi_tools (default: auto-detect)"
+    echo "  --clink-fdr <float>      Clink FDR threshold (default: 0.05)"
+    echo "  --clink-min-cov <int>    Clink min coverage to test (default: 5)"
     echo "  -f, --flank <int>        Flanked BED nucleotides (default: 10)"
     echo "  --no-motif               Skip flanked BED generation"
     echo "  -g, --groups <file>      Groups file for bedgraph/peak grouping"
@@ -121,6 +126,15 @@ function show_usage {
 
 RUN_CIMS=false
 RUN_CITS=false
+RUN_CLINK=false         # Clink pipeline (umi_tools + Python pileup/cits/cims)
+
+# Clink Parameters
+CLINK_UMI_LEN="-1"     # UMI length for umi_tools (-1 = auto-detect)
+CLINK_MIN_COV="5"      # Minimum coverage to test a position
+CLINK_MIN_FRAC="0.05"  # Minimum signal fraction pre-filter
+CLINK_FDR="0.05"       # Benjamini-Hochberg FDR threshold
+CLINK_RUN_CITS="true"
+CLINK_RUN_CIMS="true"
 VERBOSE=false
 SAMPLE_SIZE=0 
 CHILD_MODE="false"
@@ -197,6 +211,10 @@ while [[ $# -gt 0 ]]; do
         --cims-fdr) CIMS_FDR="$2"; shift 2 ;;
         --cits-pval) CITS_PVALUE="$2"; shift 2 ;;
         --cits-gap) CITS_GAP="$2"; shift 2 ;;
+        --run-clink) RUN_CLINK=true; shift ;;
+        --clink-umi-len) CLINK_UMI_LEN="$2"; shift 2 ;;
+        --clink-fdr) CLINK_FDR="$2"; shift 2 ;;
+        --clink-min-cov) CLINK_MIN_COV="$2"; shift 2 ;;
         -f|--flank) MOTIF_FLANK="$2"; shift 2 ;;
         --no-motif) RUN_MOTIF="no"; shift ;;
         -g|--groups) GROUPS_FILE="$2"; shift 2 ;;
@@ -496,6 +514,20 @@ if [[ "$ALIGNER" == "bowtie2" && ("$RUN_CIMS" == "true" || "$RUN_CITS" == "true"
     log_warning "  STAR is strongly recommended for CIMS/CITS workflows."
 fi
 
+# Clink dependency check (hard fail before any processing)
+if [[ "$RUN_CLINK" == "true" ]]; then
+    if [[ "$ALIGNER" == "bowtie2" ]]; then
+        log_warning "Clink + Bowtie2: Bowtie2 is not splice-aware. STAR is strongly recommended."
+    fi
+    log_info "Checking Clink dependencies (pysam, numpy, scipy, umi_tools)..."
+    if ! check_clink_deps; then
+        log_error "Clink dependencies not satisfied. Cannot run --run-clink."
+        log_error "  Install with: conda install -n clipittyclip pysam umi_tools -c bioconda"
+        exit 1
+    fi
+    log_info "Clink dependencies OK."
+fi
+
 # ------------------------------------------------------------------
 # Log Configuration (Standard or Advanced Results)
 # ------------------------------------------------------------------
@@ -552,7 +584,9 @@ else
 fi
 check_dependency bedtools
 check_dependency samtools
-check_dependency tag2collapse.pl
+if [[ "$RUN_CLINK" != "true" ]] || [[ "$RUN_CIMS" == "true" ]] || [[ "$RUN_CITS" == "true" ]]; then
+    check_dependency tag2collapse.pl
+fi
 if [[ "$PEAK_CALLER" == "ctk" ]]; then
     check_dependency tag2peak.pl
 fi
@@ -705,6 +739,12 @@ if [[ -n "$INPUT_DIR" ]]; then
         if [[ "$RUN_CIMS" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --run-cims"; fi
         if [[ "$RUN_CITS" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --run-cits"; fi
     fi
+    if [[ "$RUN_CLINK" == "true" ]]; then
+        EXTRA_FLAGS="$EXTRA_FLAGS --run-clink"
+        EXTRA_FLAGS="$EXTRA_FLAGS --clink-umi-len $CLINK_UMI_LEN"
+        EXTRA_FLAGS="$EXTRA_FLAGS --clink-fdr $CLINK_FDR"
+        EXTRA_FLAGS="$EXTRA_FLAGS --clink-min-cov $CLINK_MIN_COV"
+    fi
     if [[ "$VERBOSE" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --verbose"; fi
     if [[ "$KEEP_INTERMEDIATE" == "yes" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS -k"; fi
     if [[ "$SAMPLE_SIZE" -gt 0 ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --sample $SAMPLE_SIZE"; fi
@@ -769,26 +809,30 @@ if [[ -n "$INPUT_DIR" ]]; then
     DIR_BED="2_COLLAPSED_BED"
     DIR_BG="3_BEDGRAPH"
     DIR_PEAKS="4_PEAKS"
-    # OTHERS folder number depends on whether CTK analysis is enabled
-    if [[ "$RUN_CIMS" == "true" ]] || [[ "$RUN_CITS" == "true" ]]; then
-        DIR_OTHERS="6_OTHERS"
-        # Determine CTK folder name for PEAKittyPeak.sh
-        if [[ "$RUN_CIMS" == "true" ]] && [[ "$RUN_CITS" == "true" ]]; then
-            DIR_CTK="5_CTK_Analysis"
-        elif [[ "$RUN_CIMS" == "true" ]]; then
-            DIR_CTK="5_CIMS_Analysis"
-        else
-            DIR_CTK="5_CITS_Analysis"
-        fi
+    # Folder numbering: 5=CTK (if on), next=Clink (if on), OTHERS bumps accordingly
+    _ctk_on=false; _clink_on=false
+    { [[ "$RUN_CIMS" == "true" ]] || [[ "$RUN_CITS" == "true" ]]; } && _ctk_on=true
+    [[ "$RUN_CLINK" == "true" ]] && _clink_on=true
+    if [[ "$_ctk_on" == "true" ]] && [[ "$_clink_on" == "true" ]]; then
+        if [[ "$RUN_CIMS" == "true" ]] && [[ "$RUN_CITS" == "true" ]]; then DIR_CTK="5_CTK_Analysis"
+        elif [[ "$RUN_CIMS" == "true" ]]; then DIR_CTK="5_CIMS_Analysis"
+        else DIR_CTK="5_CITS_Analysis"; fi
+        DIR_CLINK="6_Clink"; DIR_OTHERS="7_OTHERS"
+    elif [[ "$_ctk_on" == "true" ]]; then
+        if [[ "$RUN_CIMS" == "true" ]] && [[ "$RUN_CITS" == "true" ]]; then DIR_CTK="5_CTK_Analysis"
+        elif [[ "$RUN_CIMS" == "true" ]]; then DIR_CTK="5_CIMS_Analysis"
+        else DIR_CTK="5_CITS_Analysis"; fi
+        DIR_CLINK=""; DIR_OTHERS="6_OTHERS"
+    elif [[ "$_clink_on" == "true" ]]; then
+        DIR_CTK=""; DIR_CLINK="5_Clink"; DIR_OTHERS="6_OTHERS"
     else
-        DIR_OTHERS="5_OTHERS"
-        DIR_CTK="" # No CTK analysis, so no CTK folder
+        DIR_CTK=""; DIR_CLINK=""; DIR_OTHERS="5_OTHERS"
     fi
     DIR_REPORTS="REPORTS"
     DIR_PEAK_LOGS="REPORTS/PEAK"
     DIR_IND_PEAK_LOGS="$DIR_PEAK_LOGS"
     
-    # Create base directories (CTK folders created conditionally during aggregation)
+    # Create base directories (CTK/Clink folders created conditionally during aggregation)
     mkdir -p "$OUTPUT_ROOT/$DIR_BAM" \
              "$OUTPUT_ROOT/$DIR_BED" \
              "$OUTPUT_ROOT/$DIR_BG" \
@@ -800,6 +844,9 @@ if [[ -n "$INPUT_DIR" ]]; then
              "$OUTPUT_ROOT/$DIR_REPORTS/SAMPLES" \
              "$OUTPUT_ROOT/$DIR_PEAK_LOGS" \
              "$OUTPUT_ROOT/$DIR_IND_PEAK_LOGS"
+    if [[ -n "$DIR_CLINK" ]]; then
+        mkdir -p "$OUTPUT_ROOT/$DIR_CLINK"
+    fi
 
     # Truncate scale_factors.tsv before aggregation — prevents stale entries from
     # a prior run contaminating the mapping depth summary when -o reuses a directory
@@ -903,6 +950,11 @@ if [[ -n "$INPUT_DIR" ]]; then
                         break
                     fi
                 done
+            fi
+            # Clink Analysis — copy per-sample Clink output
+            if [[ -n "$DIR_CLINK" ]] && [[ -d "$sample_out/Clink_Analysis" ]]; then
+                mkdir -p "$OUTPUT_ROOT/$DIR_CLINK/${sample_name}"
+                cp -r "$sample_out/Clink_Analysis/"* "$OUTPUT_ROOT/$DIR_CLINK/${sample_name}/" 2>/dev/null
             fi
             
             # 6. Reports & Logs
@@ -1071,6 +1123,9 @@ if [[ -n "$INPUT_DIR" ]]; then
     if [[ -n "${DIR_CTK:-}" ]]; then
         console_msg "  ├── ${DIR_CTK}/"
     fi
+    if [[ -n "${DIR_CLINK:-}" ]]; then
+        console_msg "  ├── ${DIR_CLINK}/"
+    fi
     console_msg "  ├── ${DIR_OTHERS}/"
     console_msg "  └── REPORTS/"
 
@@ -1186,6 +1241,12 @@ if [[ "$DEMUX" == "yes" ]]; then
     else
         log_info "Group CTK mode: skipping individual CIMS/CITS (will run on grouped data)"
     fi
+    if [[ "$RUN_CLINK" == "true" ]]; then
+        EXTRA_FLAGS="$EXTRA_FLAGS --run-clink"
+        EXTRA_FLAGS="$EXTRA_FLAGS --clink-umi-len $CLINK_UMI_LEN"
+        EXTRA_FLAGS="$EXTRA_FLAGS --clink-fdr $CLINK_FDR"
+        EXTRA_FLAGS="$EXTRA_FLAGS --clink-min-cov $CLINK_MIN_COV"
+    fi
     if [[ "$VERBOSE" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --verbose"; fi
     if [[ "$SAMPLE_SIZE" -gt 0 ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --sample $SAMPLE_SIZE"; fi
     if [[ "$KEEP_INTERMEDIATE" == "yes" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS -k"; fi
@@ -1265,26 +1326,30 @@ if [[ "$DEMUX" == "yes" ]]; then
     DIR_BED="2_COLLAPSED_BED"
     DIR_BG="3_BEDGRAPH"
     DIR_PEAKS="4_PEAKS"
-    # OTHERS folder number depends on whether CTK analysis is enabled
-    if [[ "$RUN_CIMS" == "true" ]] || [[ "$RUN_CITS" == "true" ]]; then
-        DIR_OTHERS="6_OTHERS"
-        # Determine CTK folder name for PEAKittyPeak.sh
-        if [[ "$RUN_CIMS" == "true" ]] && [[ "$RUN_CITS" == "true" ]]; then
-            DIR_CTK="5_CTK_Analysis"
-        elif [[ "$RUN_CIMS" == "true" ]]; then
-            DIR_CTK="5_CIMS_Analysis"
-        else
-            DIR_CTK="5_CITS_Analysis"
-        fi
+    # Folder numbering: 5=CTK (if on), next=Clink (if on), OTHERS bumps accordingly
+    _ctk_on=false; _clink_on=false
+    { [[ "$RUN_CIMS" == "true" ]] || [[ "$RUN_CITS" == "true" ]]; } && _ctk_on=true
+    [[ "$RUN_CLINK" == "true" ]] && _clink_on=true
+    if [[ "$_ctk_on" == "true" ]] && [[ "$_clink_on" == "true" ]]; then
+        if [[ "$RUN_CIMS" == "true" ]] && [[ "$RUN_CITS" == "true" ]]; then DIR_CTK="5_CTK_Analysis"
+        elif [[ "$RUN_CIMS" == "true" ]]; then DIR_CTK="5_CIMS_Analysis"
+        else DIR_CTK="5_CITS_Analysis"; fi
+        DIR_CLINK="6_Clink"; DIR_OTHERS="7_OTHERS"
+    elif [[ "$_ctk_on" == "true" ]]; then
+        if [[ "$RUN_CIMS" == "true" ]] && [[ "$RUN_CITS" == "true" ]]; then DIR_CTK="5_CTK_Analysis"
+        elif [[ "$RUN_CIMS" == "true" ]]; then DIR_CTK="5_CIMS_Analysis"
+        else DIR_CTK="5_CITS_Analysis"; fi
+        DIR_CLINK=""; DIR_OTHERS="6_OTHERS"
+    elif [[ "$_clink_on" == "true" ]]; then
+        DIR_CTK=""; DIR_CLINK="5_Clink"; DIR_OTHERS="6_OTHERS"
     else
-        DIR_OTHERS="5_OTHERS"
-        DIR_CTK="" # No CTK analysis, so no CTK folder
+        DIR_CTK=""; DIR_CLINK=""; DIR_OTHERS="5_OTHERS"
     fi
     DIR_REPORTS="REPORTS"
     DIR_PEAK_LOGS="REPORTS/PEAK"
     DIR_IND_PEAK_LOGS="REPORTS/PEAK/INDIVIDUAL_SAMPLES"
     
-    # Create Central Output Directories (CTK folders created conditionally during aggregation)
+    # Create Central Output Directories (CTK/Clink folders created conditionally during aggregation)
     # Note: 0_DEMUX_FASTQ is only created when -k (--keep) is passed
     mkdir -p "$OUTPUT_ROOT/$DIR_BAM" \
              "$OUTPUT_ROOT/$DIR_BED" \
@@ -1297,6 +1362,9 @@ if [[ "$DEMUX" == "yes" ]]; then
              "$OUTPUT_ROOT/$DIR_REPORTS/SAMPLES" \
              "$OUTPUT_ROOT/$DIR_PEAK_LOGS" \
              "$OUTPUT_ROOT/$DIR_IND_PEAK_LOGS"
+    if [[ -n "$DIR_CLINK" ]]; then
+        mkdir -p "$OUTPUT_ROOT/$DIR_CLINK"
+    fi
 
     # Truncate scale_factors.tsv before aggregation — prevents stale entries from
     # a prior run contaminating the mapping depth summary when -o reuses a directory
@@ -1437,6 +1505,11 @@ if [[ "$DEMUX" == "yes" ]]; then
                             mv "$analysis_dir/$ctk_dir" "$CTK_DEST/$sample_name/" 2>/dev/null
                         fi
                     done
+                fi
+                # Clink Analysis — copy per-sample Clink output
+                if [[ -n "$DIR_CLINK" ]] && [[ -d "$analysis_dir/Clink_Analysis" ]]; then
+                    mkdir -p "$OUTPUT_ROOT/$DIR_CLINK/$sample_name"
+                    cp -r "$analysis_dir/Clink_Analysis/"* "$OUTPUT_ROOT/$DIR_CLINK/$sample_name/" 2>/dev/null
                 fi
 
                 # Pipeline Log (The child specific one)
@@ -1792,14 +1865,25 @@ fi
 COLLAPSED_BED="${BASENAME}_collapsed.bed"
 MUTATION_FILE="${BASENAME}_mutations.txt"
 
-# Unified preprocessing: Always use parseAlignment.pl for consistent output
-# This generates both tags.bed and mutations.txt (future-proofing for CIMS/CITS)
-log_info "Unified preprocessing: samtools calmd → parseAlignment.pl → tag2collapse.pl"
-check_dependency parseAlignment.pl
+CLINK_PREBUILT_DEDUP_BAM=""   # set below when Clink-only path does early dedup
 
-run_parse_alignment "${BAM_FILE}" "${BASENAME}_parsed.bed" "${MUTATION_FILE}" "$GENOME_INDEX"
-
-run_collapse_pcr "${BASENAME}_parsed.bed" "${COLLAPSED_BED}" "${UMI_LEN}" "${DEDUP_MODE}"
+if [[ "$RUN_CIMS" == "true" ]] || [[ "$RUN_CITS" == "true" ]] || [[ "$RUN_CLINK" != "true" ]]; then
+    # CTK path, or no crosslink analysis at all: standard parseAlignment + tag2collapse
+    log_info "Preprocessing: samtools calmd -> parseAlignment.pl -> tag2collapse.pl"
+    check_dependency parseAlignment.pl
+    run_parse_alignment "${BAM_FILE}" "${BASENAME}_parsed.bed" "${MUTATION_FILE}" "$GENOME_INDEX"
+    run_collapse_pcr "${BASENAME}_parsed.bed" "${COLLAPSED_BED}" "${UMI_LEN}" "${DEDUP_MODE}"
+else
+    # Clink-only: skip CTK preprocessing; use umi_tools dedup + bamtobed
+    # COLLAPSED_BED is still produced here — coverage and peak calling are unchanged.
+    log_info "Clink-only mode: skipping parseAlignment/tag2collapse — using umi_tools dedup"
+    mkdir -p "Clink_Analysis"
+    CLINK_PREBUILT_DEDUP_BAM="Clink_Analysis/${BASENAME}_dedup.bam"
+    run_clink_collapse "$BAM_FILE" "$CLINK_PREBUILT_DEDUP_BAM" "$CLINK_UMI_LEN" "$THREADS" || true
+    bedtools bamtobed -i "$CLINK_PREBUILT_DEDUP_BAM" -split 2>/dev/null \
+        | sort -k1,1 -k2,2n > "$COLLAPSED_BED"
+    log_info "Collapsed BED from Clink dedup: $COLLAPSED_BED ($(wc -l < "$COLLAPSED_BED") reads)"
+fi
 
 # 4. Coverage Analysis (Bedgraph)
 run_coverage "${COLLAPSED_BED}" "${BASENAME}" "$GENOME_INDEX/chrom.sizes" "${BAM_FILE}" # Pass genome file if available
@@ -1864,6 +1948,28 @@ if [[ "$RUN_CIMS" == "true" ]] || [[ "$RUN_CITS" == "true" ]]; then
         "$RUN_CITS"
     
     log_info "CTK Analysis complete. Output: $CTK_OUTPUT"
+fi
+
+# 7. Clink pipeline (parallel to CTK — independent dedup + pileup + cits/cims)
+if [[ "$RUN_CLINK" == "true" ]]; then
+    log_info "Running Clink pipeline..."
+    CLINK_OUTPUT="Clink_Analysis"
+    mkdir -p "$CLINK_OUTPUT"
+
+    run_clink_full \
+        "$BAM_FILE" \
+        "$CLINK_OUTPUT" \
+        "$BASENAME" \
+        "$CLINK_UMI_LEN" \
+        "$THREADS" \
+        "$CLINK_RUN_CITS" \
+        "$CLINK_RUN_CIMS" \
+        "$CLINK_MIN_COV" \
+        "$CLINK_MIN_FRAC" \
+        "$CLINK_FDR" \
+        "${CLINK_PREBUILT_DEDUP_BAM:-}"
+
+    log_info "Clink pipeline complete. Output: $CLINK_OUTPUT"
 fi
 
 # Finalize status line (prints "Done!" to end the Preprocessing > ... > Peaks > chain)
@@ -1973,6 +2079,18 @@ if [[ "$CHILD_MODE" != "true" ]]; then
             SF_DIR_CTK="$CTK_OUT_DIR"
         fi
     done
+
+    # Clink Analysis output
+    if [[ -d "Clink_Analysis" ]]; then
+        if [[ -n "${SF_DIR_CTK:-}" ]]; then
+            _clink_dest="6_Clink"
+        else
+            _clink_dest="5_Clink"
+        fi
+        mkdir -p "$SINGLE_OUTPUT_ROOT/$_clink_dest/$BASENAME"
+        cp -r "Clink_Analysis/"* "$SINGLE_OUTPUT_ROOT/$_clink_dest/$BASENAME/" 2>/dev/null
+        SF_DIR_CLINK="$_clink_dest"
+    fi
 
     # ncRNA mapping output
     if [[ -d "OTHERS/ncRNA_Mapping" ]]; then
@@ -2087,6 +2205,9 @@ if [[ "$CHILD_MODE" != "true" ]]; then
     console_msg "  ├── 4_PEAKS/"
     if [[ -n "${SF_DIR_CTK:-}" ]]; then
         console_msg "  ├── ${SF_DIR_CTK}/"
+    fi
+    if [[ -n "${SF_DIR_CLINK:-}" ]]; then
+        console_msg "  ├── ${SF_DIR_CLINK}/"
     fi
     console_msg "  ├── ${SF_DIR_OTHERS}/"
     console_msg "  └── REPORTS/"
