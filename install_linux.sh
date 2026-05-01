@@ -274,6 +274,7 @@ dependencies:
   - pandas
   - numpy
   - scipy
+  - setuptools
   - seaborn
   - matplotlib
 

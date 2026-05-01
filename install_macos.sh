@@ -275,6 +275,7 @@ if [[ -z "$SKIP_CONDA" ]]; then
         pandas \
         numpy \
         scipy \
+        setuptools \
         seaborn \
         matplotlib \
         ca-certificates \
