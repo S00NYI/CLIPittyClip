@@ -350,7 +350,7 @@ fi
 # path. The db.h header is found via the explicit INC path.
 print_info "Installing DB_File (required for Bio::SeqIO)..."
 cpanm --notest --configure-args="LIBS=-L${SYS_LIB_DIR} -ldb INC=-I${SYS_INC_DIR}" DB_File 2>/dev/null || true
-if perl -MDB_File -e '1' 2>/dev/null; then
+if LD_LIBRARY_PATH="${SYS_LIB_DIR}:${LD_LIBRARY_PATH:-}" perl -MDB_File -e '1' 2>/dev/null; then
     print_success "DB_File installed successfully"
 else
     print_warning "DB_File installation failed - some BioPerl features may not work"
