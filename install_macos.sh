@@ -256,7 +256,7 @@ if [[ -z "$SKIP_CONDA" ]]; then
     $CONDA_CMD install -n "$ENV_NAME" -y \
         -c conda-forge -c bioconda \
         wget \
-        "python>=3.10,<3.13" \  # umi_tools incompatible with Python 3.13
+        "python>=3.10,<3.12" \  # umi_tools 1.1.6 requires distutils (removed in Python 3.12+)
         pysam \
         umi_tools \
         perl \
