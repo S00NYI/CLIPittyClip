@@ -2714,8 +2714,8 @@ run_group_clink_analysis() {
         for sample in $samples; do
             local sample_dir="${work_dir}/${sample}_analysis"
             local dedup_bam
-            # Clink_Analysis subdir created by run_clink_full / early fast path
-            dedup_bam=$(find "$sample_dir" -name "*_dedup.bam" -path "*/Clink_Analysis/*" 2>/dev/null | head -n 1)
+            # CLINK_ANALYSIS subdir created by run_clink_full / early fast path
+            dedup_bam=$(find "$sample_dir" -name "*_dedup.bam" -path "*/CLINK_ANALYSIS/*" 2>/dev/null | head -n 1)
             if [[ -s "$dedup_bam" ]]; then
                 bam_inputs+=("$dedup_bam")
                 log_info "  Clink group $group: adding $dedup_bam"
@@ -3048,7 +3048,5 @@ run_clink_full() {
         log_warning "Clink: bedtools bamtobed produced empty BED — peak calling may be affected"
     fi
 
-    update_status_done
     log_info "Clink full pipeline complete for $sample_name"
-    echo "$collapsed_bed"   # Return path for caller to use in peak calling
 }

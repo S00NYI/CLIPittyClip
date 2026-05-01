@@ -964,9 +964,9 @@ if [[ -n "$INPUT_DIR" ]]; then
                 done
             fi
             # Clink Analysis — copy per-sample Clink output
-            if [[ -n "$DIR_CLINK" ]] && [[ -d "$sample_out/Clink_Analysis" ]]; then
+            if [[ -n "$DIR_CLINK" ]] && [[ -d "$sample_out/CLINK_ANALYSIS" ]]; then
                 mkdir -p "$OUTPUT_ROOT/$DIR_CLINK/${sample_name}"
-                cp -r "$sample_out/Clink_Analysis/"* "$OUTPUT_ROOT/$DIR_CLINK/${sample_name}/" 2>/dev/null
+                cp -r "$sample_out/CLINK_ANALYSIS/"* "$OUTPUT_ROOT/$DIR_CLINK/${sample_name}/" 2>/dev/null
             fi
             
             # 6. Reports & Logs
@@ -1527,9 +1527,9 @@ if [[ "$DEMUX" == "yes" ]]; then
                     done
                 fi
                 # Clink Analysis — copy per-sample Clink output
-                if [[ -n "$DIR_CLINK" ]] && [[ -d "$analysis_dir/Clink_Analysis" ]]; then
+                if [[ -n "$DIR_CLINK" ]] && [[ -d "$analysis_dir/CLINK_ANALYSIS" ]]; then
                     mkdir -p "$OUTPUT_ROOT/$DIR_CLINK/$sample_name"
-                    cp -r "$analysis_dir/Clink_Analysis/"* "$OUTPUT_ROOT/$DIR_CLINK/$sample_name/" 2>/dev/null
+                    cp -r "$analysis_dir/CLINK_ANALYSIS/"* "$OUTPUT_ROOT/$DIR_CLINK/$sample_name/" 2>/dev/null
                 fi
 
                 # Pipeline Log (The child specific one)
@@ -1897,8 +1897,8 @@ else
     # Clink-only: skip CTK preprocessing; use umi_tools dedup + bamtobed
     # COLLAPSED_BED is still produced here — coverage and peak calling are unchanged.
     log_info "Clink-only mode: skipping parseAlignment/tag2collapse — using umi_tools dedup"
-    mkdir -p "Clink_Analysis"
-    CLINK_PREBUILT_DEDUP_BAM="Clink_Analysis/${BASENAME}_dedup.bam"
+    mkdir -p "CLINK_ANALYSIS"
+    CLINK_PREBUILT_DEDUP_BAM="CLINK_ANALYSIS/${BASENAME}_dedup.bam"
     run_clink_collapse "$BAM_FILE" "$CLINK_PREBUILT_DEDUP_BAM" "$CLINK_UMI_LEN" "$THREADS" || true
     bedtools bamtobed -i "$CLINK_PREBUILT_DEDUP_BAM" -split 2>/dev/null \
         | sort -k1,1 -k2,2n > "$COLLAPSED_BED"
@@ -1973,7 +1973,7 @@ fi
 # 7. Clink pipeline (parallel to CTK — independent dedup + pileup + cits/cims)
 if [[ "$RUN_CLINK" == "true" ]]; then
     log_info "Running Clink pipeline..."
-    CLINK_OUTPUT="Clink_Analysis"
+    CLINK_OUTPUT="CLINK_ANALYSIS"
     mkdir -p "$CLINK_OUTPUT"
 
     run_clink_full \
@@ -2101,14 +2101,14 @@ if [[ "$CHILD_MODE" != "true" ]]; then
     done
 
     # Clink Analysis output
-    if [[ -d "Clink_Analysis" ]]; then
+    if [[ -d "CLINK_ANALYSIS" ]]; then
         if [[ -n "${SF_DIR_CTK:-}" ]]; then
             _clink_dest="6_Clink"
         else
             _clink_dest="5_Clink"
         fi
         mkdir -p "$SINGLE_OUTPUT_ROOT/$_clink_dest/$BASENAME"
-        cp -r "Clink_Analysis/"* "$SINGLE_OUTPUT_ROOT/$_clink_dest/$BASENAME/" 2>/dev/null
+        cp -r "CLINK_ANALYSIS/"* "$SINGLE_OUTPUT_ROOT/$_clink_dest/$BASENAME/" 2>/dev/null
         SF_DIR_CLINK="$_clink_dest"
     fi
 
