@@ -2735,7 +2735,7 @@ run_group_clink_analysis() {
         if [[ ${#bam_inputs[@]} -eq 1 ]]; then
             cp "${bam_inputs[0]}" "$merged_bam"
         else
-            samtools merge -f -@ "$threads" "$merged_bam" "${bam_inputs[@]}"
+            samtools merge -f -@ "$threads" "$merged_bam" "${bam_inputs[@]}" 2>>"${LOG_FILE:-/dev/null}"
         fi
 
         if [[ ! -s "$merged_bam" ]]; then
@@ -2745,9 +2745,9 @@ run_group_clink_analysis() {
         fi
 
         # Index merged BAM (pysam pileup needs random-access index)
-        samtools sort -@ "$threads" -o "${merged_bam%.bam}_sorted.bam" "$merged_bam"
+        samtools sort -@ "$threads" -o "${merged_bam%.bam}_sorted.bam" "$merged_bam" 2>>"${LOG_FILE:-/dev/null}"
         mv "${merged_bam%.bam}_sorted.bam" "$merged_bam"
-        samtools index "$merged_bam"
+        samtools index "$merged_bam" 2>>"${LOG_FILE:-/dev/null}"
 
         # 6. Run pileup → cits/cims via run_clink_full (prebuilt_dedup skips collapse)
         run_clink_full \

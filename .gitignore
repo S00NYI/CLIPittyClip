@@ -17,3 +17,8 @@ install_log*.txt
 .agents/
 *.swp
 *~
+
+# Python
+__pycache__/
+*.pyc
+*.pyo

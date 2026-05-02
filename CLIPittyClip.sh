@@ -820,14 +820,14 @@ if [[ -n "$INPUT_DIR" ]]; then
         if [[ "$RUN_CIMS" == "true" ]] && [[ "$RUN_CITS" == "true" ]]; then DIR_CTK="5_CTK_Analysis"
         elif [[ "$RUN_CIMS" == "true" ]]; then DIR_CTK="5_CIMS_Analysis"
         else DIR_CTK="5_CITS_Analysis"; fi
-        DIR_CLINK="6_Clink"; DIR_OTHERS="7_OTHERS"
+        DIR_CLINK="6_CLINK"; DIR_OTHERS="7_OTHERS"
     elif [[ "$_ctk_on" == "true" ]]; then
         if [[ "$RUN_CIMS" == "true" ]] && [[ "$RUN_CITS" == "true" ]]; then DIR_CTK="5_CTK_Analysis"
         elif [[ "$RUN_CIMS" == "true" ]]; then DIR_CTK="5_CIMS_Analysis"
         else DIR_CTK="5_CITS_Analysis"; fi
         DIR_CLINK=""; DIR_OTHERS="6_OTHERS"
     elif [[ "$_clink_on" == "true" ]]; then
-        DIR_CTK=""; DIR_CLINK="5_Clink"; DIR_OTHERS="6_OTHERS"
+        DIR_CTK=""; DIR_CLINK="5_CLINK"; DIR_OTHERS="6_OTHERS"
     else
         DIR_CTK=""; DIR_CLINK=""; DIR_OTHERS="5_OTHERS"
     fi
@@ -1346,14 +1346,14 @@ if [[ "$DEMUX" == "yes" ]]; then
         if [[ "$RUN_CIMS" == "true" ]] && [[ "$RUN_CITS" == "true" ]]; then DIR_CTK="5_CTK_Analysis"
         elif [[ "$RUN_CIMS" == "true" ]]; then DIR_CTK="5_CIMS_Analysis"
         else DIR_CTK="5_CITS_Analysis"; fi
-        DIR_CLINK="6_Clink"; DIR_OTHERS="7_OTHERS"
+        DIR_CLINK="6_CLINK"; DIR_OTHERS="7_OTHERS"
     elif [[ "$_ctk_on" == "true" ]]; then
         if [[ "$RUN_CIMS" == "true" ]] && [[ "$RUN_CITS" == "true" ]]; then DIR_CTK="5_CTK_Analysis"
         elif [[ "$RUN_CIMS" == "true" ]]; then DIR_CTK="5_CIMS_Analysis"
         else DIR_CTK="5_CITS_Analysis"; fi
         DIR_CLINK=""; DIR_OTHERS="6_OTHERS"
     elif [[ "$_clink_on" == "true" ]]; then
-        DIR_CTK=""; DIR_CLINK="5_Clink"; DIR_OTHERS="6_OTHERS"
+        DIR_CTK=""; DIR_CLINK="5_CLINK"; DIR_OTHERS="6_OTHERS"
     else
         DIR_CTK=""; DIR_CLINK=""; DIR_OTHERS="5_OTHERS"
     fi
@@ -1725,6 +1725,9 @@ if [[ "$DEMUX" == "yes" ]]; then
     console_msg "  ├── 4_PEAKS/"
     if [[ -n "$DIR_CTK" ]]; then
         console_msg "  ├── ${DIR_CTK}/"
+    fi
+    if [[ -n "$DIR_CLINK" ]]; then
+        console_msg "  ├── ${DIR_CLINK}/"
     fi
     console_msg "  ├── ${DIR_OTHERS}/"
     console_msg "  └── REPORTS/"
@@ -2103,9 +2106,9 @@ if [[ "$CHILD_MODE" != "true" ]]; then
     # Clink Analysis output
     if [[ -d "CLINK_ANALYSIS" ]]; then
         if [[ -n "${SF_DIR_CTK:-}" ]]; then
-            _clink_dest="6_Clink"
+            _clink_dest="6_CLINK"
         else
-            _clink_dest="5_Clink"
+            _clink_dest="5_CLINK"
         fi
         mkdir -p "$SINGLE_OUTPUT_ROOT/$_clink_dest/$BASENAME"
         cp -r "CLINK_ANALYSIS/"* "$SINGLE_OUTPUT_ROOT/$_clink_dest/$BASENAME/" 2>/dev/null
