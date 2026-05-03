@@ -2709,18 +2709,34 @@ run_group_clink_analysis() {
         local group_clink_dir="${output_root}/${clink_dir_name}/${group}"
         mkdir -p "$group_clink_dir"
 
-        # 4. Collect per-sample dedup BAMs
+        # 4. Collect per-sample dedup BAMs.
+        #    Prefers CLINK_ANALYSIS dedup BAMs (individual CLINK ran).
+        #    Falls back to inline per-sample dedup from mapped BAMs (--group-xlsite mode).
         local bam_inputs=()
         for sample in $samples; do
             local sample_dir="${work_dir}/${sample}_analysis"
             local dedup_bam
-            # CLINK_ANALYSIS subdir created by run_clink_full / early fast path
+            # Try prebuilt dedup BAM first (individual CLINK ran)
             dedup_bam=$(find "$sample_dir" -name "*_dedup.bam" -path "*/CLINK_ANALYSIS/*" 2>/dev/null | head -n 1)
             if [[ -s "$dedup_bam" ]]; then
                 bam_inputs+=("$dedup_bam")
-                log_info "  Clink group $group: adding $dedup_bam"
+                log_info "  Clink group $group: adding prebuilt dedup BAM $dedup_bam"
             else
-                log_warning "  Clink group $group: dedup BAM not found for $sample, skipping"
+                # --group-xlsite: per-sample CLINK was skipped; dedup inline from mapped BAM
+                local mapped_bam
+                mapped_bam=$(find "$sample_dir" -name "*mapped.Aligned.sortedByCoord.out.bam" 2>/dev/null | head -n 1)
+                if [[ -s "$mapped_bam" ]]; then
+                    local inline_dedup="${group_clink_dir}/${sample}_dedup.bam"
+                    echo -ne "Dedup ${sample} > "
+                    run_clink_collapse "$mapped_bam" "$inline_dedup" "$umi_len" "$threads" || {
+                        log_warning "  Clink group $group: inline dedup failed for $sample, skipping"
+                        continue
+                    }
+                    bam_inputs+=("$inline_dedup")
+                    log_info "  Clink group $group: inline-deduped $sample → $inline_dedup"
+                else
+                    log_warning "  Clink group $group: no BAM found for $sample, skipping"
+                fi
             fi
         done
 
@@ -2730,11 +2746,12 @@ run_group_clink_analysis() {
             continue
         fi
 
-        # 5. Merge BAMs (or symlink if only one)
+        # 5. Merge BAMs (or copy if only one)
         local merged_bam="${group_clink_dir}/${group}_dedup.bam"
         if [[ ${#bam_inputs[@]} -eq 1 ]]; then
             cp "${bam_inputs[0]}" "$merged_bam"
         else
+            echo -ne "Merge > "
             samtools merge -f -@ "$threads" "$merged_bam" "${bam_inputs[@]}" 2>>"${LOG_FILE:-/dev/null}"
         fi
 
@@ -2744,7 +2761,7 @@ run_group_clink_analysis() {
             continue
         fi
 
-        # Index merged BAM (pysam pileup needs random-access index)
+        # Sort + index merged BAM (pysam pileup needs random-access index)
         samtools sort -@ "$threads" -o "${merged_bam%.bam}_sorted.bam" "$merged_bam" 2>>"${LOG_FILE:-/dev/null}"
         mv "${merged_bam%.bam}_sorted.bam" "$merged_bam"
         samtools index "$merged_bam" 2>>"${LOG_FILE:-/dev/null}"
@@ -2761,7 +2778,7 @@ run_group_clink_analysis() {
             "$min_cov" \
             "$min_frac" \
             "$fdr" \
-            "$merged_bam"   # prebuilt_dedup — collapse skipped
+            "$merged_bam"   # prebuilt_dedup — all BAMs already deduped
 
         update_status_done
     done

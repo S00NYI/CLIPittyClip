@@ -90,7 +90,7 @@ while [[ $# -gt 0 ]]; do
         --peak-caller-args) ADV_PEAK_CALLER_ARGS="$2"; shift 2 ;;
         --peak-caller) PEAK_CALLER="$2"; shift 2 ;;
         --ctk-dir) CTK_DIR="$2"; shift 2 ;;
-        -g|--groups|--ctk-group) GROUPS_FILE="$2"; shift 2 ;;
+        -g|--groups|--group-xlsite) GROUPS_FILE="$2"; shift 2 ;;
         --cims-fdr) CIMS_FDR="$2"; shift 2 ;;
         --cits-pval) CITS_PVALUE="$2"; shift 2 ;;
         --wizard|--advanced) WIZARD_MODE="true"; shift ;;

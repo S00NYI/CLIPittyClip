@@ -94,7 +94,7 @@ function show_usage {
     echo "  -f, --flank <int>        Flanked BED nucleotides (default: 10)"
     echo "  --no-motif               Skip flanked BED generation"
     echo "  -g, --groups <file>      Groups file for bedgraph/peak grouping"
-    echo "  --ctk-group              Enable group CTK analysis (pools samples in groups.txt)"
+    echo "  --group-xlsite           Group-only xlsite analysis: skip per-sample CTK+CLINK,"
     echo "  -s, --sample <int>       Test mode: process only first N reads"
     echo "  --filter-ncrna           Enable ncRNA pre-filtering (off by default)"
     echo ""
@@ -156,8 +156,8 @@ CITS_PVALUE="0.05"
 CITS_GAP="25"
 RUN_MOTIF="yes"
 MOTIF_FLANK="10"
-CTK_GROUPS_FILE=""  # Optional: group samples for CIMS/CITS aggregation (set by --ctk-group)
-CTK_GROUP_MODE="false"  # Explicit flag for group CTK analysis
+CTK_GROUPS_FILE=""       # Optional: group samples for CIMS/CITS aggregation (set by --group-xlsite)
+GROUP_XLSITE_MODE="false" # --group-xlsite: skip individual CTK+CLINK, run group analysis only
 GROUPS_FILE=""      # Standard Groups File for BedGraph/Matrix aggregation
 
 # Matrix column toggles (all default OFF — slim matrix by default)
@@ -219,9 +219,8 @@ while [[ $# -gt 0 ]]; do
         -f|--flank) MOTIF_FLANK="$2"; shift 2 ;;
         --no-motif) RUN_MOTIF="no"; shift ;;
         -g|--groups) GROUPS_FILE="$2"; shift 2 ;;
-        --ctk-group)
-            echo -e "\033[0;33m[DEPRECATED]\033[0m --ctk-group is deprecated. Group CTK/Clink analysis now runs automatically when -g is provided with --run-cims/cits/clink. Flag is a no-op; remove it from your command." >&2
-            CTK_GROUP_MODE="true"
+        --group-xlsite)
+            GROUP_XLSITE_MODE="true"
             shift ;;
         -s|--sample) SAMPLE_SIZE="$2"; shift 2 ;;
         -b|--barcodes) BARCODE_FILE="$2"; DEMUX="yes"; shift 2 ;;
@@ -466,28 +465,28 @@ if [[ $THREADS -gt $MAX_SAFE_THREADS ]]; then
     THREADS=$MAX_SAFE_THREADS
 fi
 
-# Validate groups file (requires --run-cims or --run-cits)
-if [[ "$CTK_GROUP_MODE" == "true" ]] && [[ -z "$GROUPS_FILE" ]]; then
-    log_error "--ctk-group requires a groups file (-g). Please provide a groups file."
+# Validate --group-xlsite requires -g
+if [[ "$GROUP_XLSITE_MODE" == "true" ]] && [[ -z "$GROUPS_FILE" ]]; then
+    log_error "--group-xlsite requires a groups file (-g). Please provide a groups file."
     show_usage
     exit 1
 fi
 
 if [[ -n "$GROUPS_FILE" ]]; then
-    if [[ "$RUN_CIMS" != "true" ]] && [[ "$RUN_CITS" != "true" ]] && [[ "$CTK_GROUP_MODE" == "true" ]]; then
-        log_warning "--ctk-group requires --run-cims and/or --run-cits. Group CTK will be disabled."
-        CTK_GROUP_MODE="false"
+    if [[ "$GROUP_XLSITE_MODE" == "true" ]] && \
+       [[ "$RUN_CIMS" != "true" ]] && [[ "$RUN_CITS" != "true" ]] && [[ "$RUN_CLINK" != "true" ]]; then
+        log_warning "--group-xlsite requires at least one of --run-cims, --run-cits, or --run-clink. Disabling."
+        GROUP_XLSITE_MODE="false"
     fi
     if [[ ! -f "$GROUPS_FILE" ]]; then
         log_error "Groups file not found: $GROUPS_FILE"
         exit 1
     fi
     GROUPS_FILE="$(cd "$(dirname "$GROUPS_FILE")" && pwd)/$(basename "$GROUPS_FILE")"
-    # Auto-enable group CTK analysis when groups file + CTK flags are present
-    # (--ctk-group is no longer required; it is deprecated)
-    if [[ "$RUN_CIMS" == "true" || "$RUN_CITS" == "true" ]]; then
+    # Group CTK analysis only when --group-xlsite is explicitly passed
+    if [[ "$GROUP_XLSITE_MODE" == "true" ]] && [[ "$RUN_CIMS" == "true" || "$RUN_CITS" == "true" ]]; then
         CTK_GROUPS_FILE="$GROUPS_FILE"
-        log_info "Group CTK analysis enabled with groups file: $CTK_GROUPS_FILE"
+        log_info "Group xlsite analysis enabled with groups file: $CTK_GROUPS_FILE"
     fi
     log_info "Groups file: $GROUPS_FILE"
 fi
@@ -739,14 +738,18 @@ if [[ -n "$INPUT_DIR" ]]; then
     
     # Build extra flags for child processes
     EXTRA_FLAGS=""
-    # Pass CIMS/CITS to children (individual analysis always runs; group runs post-batch)
-    if [[ "$RUN_CIMS" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --run-cims"; fi
-    if [[ "$RUN_CITS" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --run-cits"; fi
-    if [[ "$RUN_CLINK" == "true" ]]; then
-        EXTRA_FLAGS="$EXTRA_FLAGS --run-clink"
-        EXTRA_FLAGS="$EXTRA_FLAGS --clink-umi-len $CLINK_UMI_LEN"
-        EXTRA_FLAGS="$EXTRA_FLAGS --clink-fdr $CLINK_FDR"
-        EXTRA_FLAGS="$EXTRA_FLAGS --clink-min-cov $CLINK_MIN_COV"
+    # --group-xlsite: skip individual CTK+CLINK entirely; group analysis runs post-batch
+    if [[ "$GROUP_XLSITE_MODE" != "true" ]]; then
+        if [[ "$RUN_CIMS" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --run-cims"; fi
+        if [[ "$RUN_CITS" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --run-cits"; fi
+        if [[ "$RUN_CLINK" == "true" ]]; then
+            EXTRA_FLAGS="$EXTRA_FLAGS --run-clink"
+            EXTRA_FLAGS="$EXTRA_FLAGS --clink-umi-len $CLINK_UMI_LEN"
+            EXTRA_FLAGS="$EXTRA_FLAGS --clink-fdr $CLINK_FDR"
+            EXTRA_FLAGS="$EXTRA_FLAGS --clink-min-cov $CLINK_MIN_COV"
+        fi
+    else
+        log_info "--group-xlsite: skipping individual CTK+CLINK (group analysis runs post-batch)"
     fi
     if [[ "$VERBOSE" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --verbose"; fi
     if [[ "$KEEP_INTERMEDIATE" == "yes" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS -k"; fi
@@ -860,7 +863,7 @@ if [[ -n "$INPUT_DIR" ]]; then
         mkdir -p "$OUTPUT_ROOT/$DIR_OTHERS/STAR_OUTPUT"
     fi
 
-    # Run Group-based CTK Analysis (auto-triggered by -g + --run-cims/cits)
+    # Run Group-based CTK Analysis (requires --group-xlsite)
     if [[ -n "$CTK_GROUPS_FILE" ]]; then
         # Run in WORK_DIR subshell to prevent CITS.pl/tag2profile.pl CWD pollution
         (cd "$WORK_DIR" && run_group_ctk_analysis "$CTK_GROUPS_FILE" "$OUTPUT_ROOT" "$GENOME_INDEX" \
@@ -870,8 +873,8 @@ if [[ -n "$INPUT_DIR" ]]; then
         rm -rf CITS.pl_* tag2profile.pl_* 2>/dev/null
     fi
 
-    # Run Group-based Clink Analysis (auto-triggered by -g + --run-clink)
-    if [[ -n "$GROUPS_FILE" && "$RUN_CLINK" == "true" && -n "${DIR_CLINK:-}" ]]; then
+    # Run Group-based Clink Analysis (requires --group-xlsite)
+    if [[ "$GROUP_XLSITE_MODE" == "true" && -n "$GROUPS_FILE" && "$RUN_CLINK" == "true" && -n "${DIR_CLINK:-}" ]]; then
         run_group_clink_analysis "$GROUPS_FILE" "$OUTPUT_ROOT" "$DIR_CLINK" \
             "$CLINK_UMI_LEN" "$THREADS" \
             "$CLINK_RUN_CITS" "$CLINK_RUN_CIMS" \
@@ -1058,7 +1061,7 @@ if [[ -n "$INPUT_DIR" ]]; then
         PEAK_CMD="$PEAK_CMD --ctk-dir \"$OUTPUT_ROOT/$DIR_CTK\""
     fi
     if [[ -n "$CTK_GROUPS_FILE" ]]; then
-        PEAK_CMD="$PEAK_CMD --ctk-group \"$CTK_GROUPS_FILE\""
+        PEAK_CMD="$PEAK_CMD --group-xlsite \"$CTK_GROUPS_FILE\""
     fi
     if [[ "$RUN_CIMS" == "true" ]]; then
         PEAK_CMD="$PEAK_CMD --cims-fdr \"$CIMS_FDR\""
@@ -1243,21 +1246,20 @@ if [[ "$DEMUX" == "yes" ]]; then
     # 2. Iterate and Recurse
     console_msg "\n[BATCH ANALYSIS]"
     
-    # Check if we need to pass CIMS/CITS flags
+    # Check if we need to pass CIMS/CITS/CLINK flags
     EXTRA_FLAGS=""
-    # Only pass CIMS/CITS to children if NOT using group CTK mode
-    # When --ctk-group is enabled, skip individual CTK (group CTK runs after batch)
-    if [[ "$CTK_GROUP_MODE" != "true" ]]; then
+    # --group-xlsite: skip individual CTK+CLINK entirely; group analysis runs post-batch
+    if [[ "$GROUP_XLSITE_MODE" != "true" ]]; then
         if [[ "$RUN_CIMS" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --run-cims"; fi
         if [[ "$RUN_CITS" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --run-cits"; fi
+        if [[ "$RUN_CLINK" == "true" ]]; then
+            EXTRA_FLAGS="$EXTRA_FLAGS --run-clink"
+            EXTRA_FLAGS="$EXTRA_FLAGS --clink-umi-len $CLINK_UMI_LEN"
+            EXTRA_FLAGS="$EXTRA_FLAGS --clink-fdr $CLINK_FDR"
+            EXTRA_FLAGS="$EXTRA_FLAGS --clink-min-cov $CLINK_MIN_COV"
+        fi
     else
-        log_info "Group CTK mode: skipping individual CIMS/CITS (will run on grouped data)"
-    fi
-    if [[ "$RUN_CLINK" == "true" ]]; then
-        EXTRA_FLAGS="$EXTRA_FLAGS --run-clink"
-        EXTRA_FLAGS="$EXTRA_FLAGS --clink-umi-len $CLINK_UMI_LEN"
-        EXTRA_FLAGS="$EXTRA_FLAGS --clink-fdr $CLINK_FDR"
-        EXTRA_FLAGS="$EXTRA_FLAGS --clink-min-cov $CLINK_MIN_COV"
+        log_info "--group-xlsite: skipping individual CTK+CLINK (group analysis runs post-batch)"
     fi
     if [[ "$VERBOSE" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --verbose"; fi
     if [[ "$SAMPLE_SIZE" -gt 0 ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --sample $SAMPLE_SIZE"; fi
@@ -1387,8 +1389,8 @@ if [[ "$DEMUX" == "yes" ]]; then
         mkdir -p "$OUTPUT_ROOT/$DIR_OTHERS/STAR_OUTPUT"
     fi
 
-    # Run Group-based CTK Analysis (auto-triggered by -g + --run-cims/cits)
-    if [[ -n "$GROUPS_FILE" ]] && [[ "$RUN_CIMS" == "true" || "$RUN_CITS" == "true" ]]; then
+    # Run Group-based CTK Analysis (requires --group-xlsite)
+    if [[ "$GROUP_XLSITE_MODE" == "true" ]] && [[ -n "$GROUPS_FILE" ]] && [[ "$RUN_CIMS" == "true" || "$RUN_CITS" == "true" ]]; then
         # Run in WORK_DIR subshell to prevent CITS.pl/tag2profile.pl CWD pollution
         (cd "$WORK_DIR" && run_group_ctk_analysis "$GROUPS_FILE" "$OUTPUT_ROOT" "$GENOME_INDEX" \
             "$CIMS_ITERATIONS" "$CIMS_FDR" "$CITS_PVALUE" "$CITS_GAP" \
@@ -1396,8 +1398,8 @@ if [[ "$DEMUX" == "yes" ]]; then
         rm -rf CITS.pl_* tag2profile.pl_* 2>/dev/null
     fi
 
-    # Run Group-based Clink Analysis (auto-triggered by -g + --run-clink)
-    if [[ -n "$GROUPS_FILE" && "$RUN_CLINK" == "true" && -n "${DIR_CLINK:-}" ]]; then
+    # Run Group-based Clink Analysis (requires --group-xlsite)
+    if [[ "$GROUP_XLSITE_MODE" == "true" && -n "$GROUPS_FILE" && "$RUN_CLINK" == "true" && -n "${DIR_CLINK:-}" ]]; then
         run_group_clink_analysis "$GROUPS_FILE" "$OUTPUT_ROOT" "$DIR_CLINK" \
             "$CLINK_UMI_LEN" "$THREADS" \
             "$CLINK_RUN_CITS" "$CLINK_RUN_CIMS" \
