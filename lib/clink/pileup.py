@@ -25,10 +25,11 @@ Usage:
 import sys
 import re
 import argparse
+import multiprocessing
 from collections import defaultdict, Counter
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pysam
@@ -174,19 +175,92 @@ def extract_signals(read: pysam.AlignedSegment, pileup: ChromPileup) -> None:
 # BAM scan
 # ---------------------------------------------------------------------------
 
+def scan_one_chrom(
+    bam_path: str,
+    chrom:    str,
+    min_mapq: int,
+    max_nh:   int,
+    verbose:  bool,
+) -> Tuple[str, Dict[str, 'ChromPileup']]:
+    """
+    Scan one chromosome from a BAM file. Top-level function so it is
+    picklable by multiprocessing.Pool.
+
+    Each worker opens its own BAM handle — no shared state across processes.
+
+    Returns (chrom, {'pos': ChromPileup, 'neg': ChromPileup}).
+    """
+    p_pos = ChromPileup(chrom=chrom)
+    p_neg = ChromPileup(chrom=chrom)
+
+    with pysam.AlignmentFile(bam_path, 'rb') as bam:
+        for read in bam.fetch(chrom):
+
+            # Skip unmapped / secondary / supplementary
+            if read.is_unmapped or read.is_secondary or read.is_supplementary:
+                p_pos.n_skipped += 1
+                continue
+
+            # Mapping quality filter
+            if read.mapping_quality < min_mapq:
+                p_pos.n_skipped += 1
+                continue
+
+            # Multimapper filter via NH tag
+            try:
+                if read.get_tag('NH') > max_nh:
+                    p_pos.n_skipped += 1
+                    continue
+            except KeyError:
+                pass  # no NH tag — allow through
+
+            # No CIGAR (shouldn't happen, but guard)
+            if read.cigartuples is None:
+                p_pos.n_skipped += 1
+                continue
+
+            # Route to strand-specific pileup
+            strand_pileup = p_neg if read.is_reverse else p_pos
+            strand_pileup.n_reads += 1
+            extract_signals(read, strand_pileup)
+
+    if verbose:
+        for s_label, sp in (('pos', p_pos), ('neg', p_neg)):
+            print(
+                f"  {chrom} [{s_label}]: {sp.n_reads:>10,} reads | "
+                f"{len(sp.coverage):>10,} covered positions | "
+                f"{sum(sp.truncations.values()):>8,} truncation events | "
+                f"{sum(sp.deletions.values()):>8,} deletion events | "
+                f"{sp.n_skipped:>8,} skipped",
+                file=sys.stderr,
+            )
+
+    # Convert defaultdicts to plain dicts so the result is picklable by
+    # multiprocessing.Pool (lambda-backed defaultdicts are not picklable).
+    for sp in (p_pos, p_neg):
+        sp.coverage    = dict(sp.coverage)
+        sp.truncations = dict(sp.truncations)
+        sp.deletions   = dict(sp.deletions)
+        sp.subs        = {pos: dict(counter)
+                          for pos, counter in sp.subs.items()}
+
+    return chrom, {'pos': p_pos, 'neg': p_neg}
+
+
 def scan_bam(
     bam_path: str,
     chrom:    Optional[str] = None,
     min_mapq: int = 20,
     max_nh:   int = 1,
     verbose:  bool = True,
+    threads:  int = 1,
 ) -> Dict[str, Dict[str, 'ChromPileup']]:
     """
-    One-pass BAM scan. Returns {chrom: {'pos': ChromPileup, 'neg': ChromPileup}}.
+    BAM scan dispatcher. Returns {chrom: {'pos': ChromPileup, 'neg': ChromPileup}}.
 
-    Reads are routed to the appropriate strand-specific ChromPileup by
-    read.is_reverse. Downstream callers iterate both strand keys to accumulate
-    genome-wide background rates and write strand-labelled BED output.
+    When threads > 1, chromosomes are scanned in parallel via
+    multiprocessing.Pool — each worker opens its own BAM handle.
+    Pool size is capped to the number of chromosomes actually present.
 
     Args:
         bam_path : sorted, indexed BAM
@@ -194,62 +268,33 @@ def scan_bam(
         min_mapq : minimum mapping quality filter (STAR unique = 255, BT2 varies)
         max_nh   : max NH tag value; 1 = unique mappers only
         verbose  : print per-chromosome summary to stderr
+        threads  : worker processes for parallel chromosome scanning
     """
-    pileups: Dict[str, Dict[str, ChromPileup]] = {}
-
+    # Resolve chromosome list before entering workers
     with pysam.AlignmentFile(bam_path, 'rb') as bam:
-        chroms_to_scan = (
+        chroms_to_scan: List[str] = (
             [chrom] if chrom
             else [sq['SN'] for sq in bam.header['SQ']
                   if is_standard_chrom(sq['SN'])]
         )
 
+    pileups: Dict[str, Dict[str, ChromPileup]] = {}
+
+    use_parallel = threads > 1 and len(chroms_to_scan) > 1
+
+    if use_parallel:
+        n_workers = min(threads, len(chroms_to_scan))
+        print(f"  Parallel pileup: {n_workers} workers × {len(chroms_to_scan)} chromosomes",
+              file=sys.stderr)
+        args = [(bam_path, c, min_mapq, max_nh, verbose) for c in chroms_to_scan]
+        with multiprocessing.Pool(n_workers) as pool:
+            results = pool.starmap(scan_one_chrom, args)
+        for c, strand_data in results:
+            pileups[c] = strand_data
+    else:
         for c in chroms_to_scan:
-            p_pos = ChromPileup(chrom=c)
-            p_neg = ChromPileup(chrom=c)
-            pileups[c] = {'pos': p_pos, 'neg': p_neg}
-
-            for read in bam.fetch(c):
-
-                # Skip unmapped / secondary / supplementary
-                # Rejects go to p_pos.n_skipped (QC counter only, not signal)
-                if read.is_unmapped or read.is_secondary or read.is_supplementary:
-                    p_pos.n_skipped += 1
-                    continue
-
-                # Mapping quality filter
-                if read.mapping_quality < min_mapq:
-                    p_pos.n_skipped += 1
-                    continue
-
-                # Multimapper filter via NH tag
-                try:
-                    if read.get_tag('NH') > max_nh:
-                        p_pos.n_skipped += 1
-                        continue
-                except KeyError:
-                    pass  # no NH tag — allow through
-
-                # No CIGAR (shouldn't happen, but guard)
-                if read.cigartuples is None:
-                    p_pos.n_skipped += 1
-                    continue
-
-                # Route to strand-specific pileup
-                strand_pileup = p_neg if read.is_reverse else p_pos
-                strand_pileup.n_reads += 1
-                extract_signals(read, strand_pileup)
-
-            if verbose:
-                for s_label, sp in (('pos', p_pos), ('neg', p_neg)):
-                    print(
-                        f"  {c} [{s_label}]: {sp.n_reads:>10,} reads | "
-                        f"{len(sp.coverage):>10,} covered positions | "
-                        f"{sum(sp.truncations.values()):>8,} truncation events | "
-                        f"{sum(sp.deletions.values()):>8,} deletion events | "
-                        f"{sp.n_skipped:>8,} skipped",
-                        file=sys.stderr,
-                    )
+            _, strand_data = scan_one_chrom(bam_path, c, min_mapq, max_nh, verbose)
+            pileups[c] = strand_data
 
     return pileups
 
@@ -445,6 +490,8 @@ if __name__ == '__main__':
         help='Minimum mapping quality (default: 255 = STAR unique-only).')
     parser.add_argument('--nh', type=int, default=1,
         help='Maximum NH tag value — 1 = unique mappers only (default: 1).')
+    parser.add_argument('--threads', type=int, default=1,
+        help='Worker processes for parallel chromosome scanning (default: 1).')
     parser.add_argument('--summary', action='store_true',
         help='Print per-chromosome signal summary (top sites etc).')
     parser.add_argument('--top', type=int, default=10,
@@ -463,6 +510,7 @@ if __name__ == '__main__':
         chrom=args.chrom,
         min_mapq=args.mapq,
         max_nh=args.nh,
+        threads=args.threads,
     )
 
     chrom_data = {}
