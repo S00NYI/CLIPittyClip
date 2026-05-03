@@ -16,7 +16,7 @@ Algorithm:
 Output columns:
     chrom  start  end  name  score  strand  signal  coverage  fraction  pvalue  qvalue
     score = min(-log10(qvalue) * 100, 1000)   BED-compatible 0–1000 range
-    strand = '.'  (unstranded; strand tracking to be added in Rust port)
+    strand = '+' (forward) or '-' (reverse)
 
 Usage:
     python stats.py sample.bam --chrom chr1
@@ -177,17 +177,18 @@ HEADER = (
     "signal\tcoverage\tfraction\tpvalue\tqvalue\n"
 )
 
-def write_bed(results: list, chrom: str, signal_label: str, fh):
+def write_bed(results: list, chrom: str, signal_label: str, fh, strand: str = '.'):
     """
     Write significant sites in BED6 + extra columns.
     score = min(-log10(qvalue) * 100, 1000)  — BED-compatible 0–1000 integer
+    strand: '+' or '-' (or '.' for legacy unstranded callers)
     """
     for r in results:
         pos   = r['pos']
         score = min(int(-np.log10(max(r['qvalue'], 1e-300)) * 100), 1000)
         name  = f"{signal_label}:{chrom}:{pos}"
         fh.write(
-            f"{chrom}\t{pos}\t{pos+1}\t{name}\t{score}\t.\t"
+            f"{chrom}\t{pos}\t{pos+1}\t{name}\t{score}\t{strand}\t"
             f"{r['signal']}\t{r['coverage']}\t{r['fraction']:.4f}\t"
             f"{r['pvalue']:.3e}\t{r['qvalue']:.3e}\n"
         )
@@ -225,25 +226,31 @@ def run_analysis(bam_path:     str,
     pileups = scan_bam(bam_path, chrom=chrom, min_mapq=min_mapq,
                        max_nh=max_nh, verbose=verbose)
 
-    # --- Convert to arrays, accumulate genome-wide ---
+    # --- Convert to arrays, accumulate genome-wide per strand ---
+    # chrom_data: {chrom: {strand: (positions, coverage, truncations, deletions, subs)}}
     chrom_data = {}
     g_cov, g_trunc, g_del = [], [], []
-    g_subs     = {}   # sub_type -> [signal arrays per chrom]
-    g_subs_cov = {}   # sub_type -> [coverage arrays for same chroms only]
+    g_subs     = {}   # sub_type -> [signal arrays per (chrom, strand)]
+    g_subs_cov = {}   # sub_type -> [coverage arrays for same (chrom, strand)s
 
-    for c, pileup in pileups.items():
-        result = to_arrays(pileup)
-        if result is None:
-            continue
-        positions, coverage, truncations, deletions, subs = result
-        chrom_data[c] = (positions, coverage, truncations, deletions, subs)
+    for c, strand_pileups in pileups.items():
+        chrom_data[c] = {}
+        for s_label, pileup in strand_pileups.items():
+            result = to_arrays(pileup)
+            if result is None:
+                continue
+            positions, coverage, truncations, deletions, subs = result
+            chrom_data[c][s_label] = (positions, coverage, truncations, deletions, subs)
 
-        g_cov.append(coverage)
-        g_trunc.append(truncations)
-        g_del.append(deletions)
-        for sub_type, arr in subs.items():
-            g_subs.setdefault(sub_type, []).append(arr)
-            g_subs_cov.setdefault(sub_type, []).append(coverage)
+            g_cov.append(coverage)
+            g_trunc.append(truncations)
+            g_del.append(deletions)
+            for sub_type, arr in subs.items():
+                g_subs.setdefault(sub_type, []).append(arr)
+                g_subs_cov.setdefault(sub_type, []).append(coverage)
+        # Drop chrom entry if no strand had signal
+        if not chrom_data[c]:
+            del chrom_data[c]
 
     if not chrom_data:
         print("No signal found.", file=sys.stderr)
@@ -293,30 +300,34 @@ def run_analysis(bam_path:     str,
     totals = {'trunc': 0, 'del': 0}
     totals.update({st: 0 for st in λ_subs})
 
-    # --- Per-chromosome testing ---
-    for c, (positions, coverage, truncations, deletions, subs) in chrom_data.items():
+    # --- Per-chromosome, per-strand testing ---
+    STRAND_CHAR = {'pos': '+', 'neg': '-'}
+    for c, strands in chrom_data.items():
+        for s_label, (positions, coverage, truncations, deletions, subs) in strands.items():
+            strand_char = STRAND_CHAR.get(s_label, '.')
 
-        # Truncation sites (CITS-equivalent)
-        t_res = test_signal(positions, truncations, coverage,
-                            λ_trunc, min_coverage, min_fraction, fdr)
-        write_bed(t_res, c, "trunc", fh_trunc)
-        totals['trunc'] += len(t_res)
+            # Truncation sites (CITS-equivalent)
+            t_res = test_signal(positions, truncations, coverage,
+                                λ_trunc, min_coverage, min_fraction, fdr)
+            write_bed(t_res, c, "trunc", fh_trunc, strand=strand_char)
+            totals['trunc'] += len(t_res)
 
-        # Deletion sites (CIMS-equivalent)
-        d_res = test_signal(positions, deletions, coverage,
-                            λ_del, min_coverage, min_fraction, fdr)
-        write_bed(d_res, c, "del", fh_del)
-        totals['del'] += len(d_res)
+            # Deletion sites (CIMS-equivalent)
+            d_res = test_signal(positions, deletions, coverage,
+                                λ_del, min_coverage, min_fraction, fdr)
+            write_bed(d_res, c, "del", fh_del, strand=strand_char)
+            totals['del'] += len(d_res)
 
-        # Substitution sites (PAR-CLIP T>C, iCLIP any sub)
-        for sub_type, sub_arr in subs.items():
-            if sub_type not in λ_subs:
-                continue
-            s_res = test_signal(positions, sub_arr, coverage,
-                                λ_subs[sub_type], min_coverage, min_fraction, fdr)
-            _, fh_sub = sub_files[sub_type]
-            write_bed(s_res, c, f"{sub_type[0]}to{sub_type[1]}", fh_sub)
-            totals[sub_type] = totals.get(sub_type, 0) + len(s_res)
+            # Substitution sites (PAR-CLIP T>C, iCLIP any sub)
+            for sub_type, sub_arr in subs.items():
+                if sub_type not in λ_subs:
+                    continue
+                s_res = test_signal(positions, sub_arr, coverage,
+                                    λ_subs[sub_type], min_coverage, min_fraction, fdr)
+                _, fh_sub = sub_files[sub_type]
+                write_bed(s_res, c, f"{sub_type[0]}to{sub_type[1]}", fh_sub,
+                          strand=strand_char)
+                totals[sub_type] = totals.get(sub_type, 0) + len(s_res)
 
     # --- Close files ---
     fh_trunc.close()

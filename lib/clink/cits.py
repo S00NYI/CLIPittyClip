@@ -87,26 +87,35 @@ def run_cits(pileup_path:  str   = None,
         pileups = scan_bam(bam_path, chrom=chrom, min_mapq=min_mapq,
                            max_nh=max_nh, verbose=verbose)
         chrom_data_full = {}
-        for c, pileup in pileups.items():
-            result = to_arrays(pileup)
-            if result is None:
-                continue
-            positions, coverage, truncations, deletions, subs = result
-            chrom_data_full[c] = (positions, coverage, truncations, deletions, subs)
+        for c, strand_pileups in pileups.items():
+            chrom_data_full[c] = {}
+            for s_label, pileup in strand_pileups.items():
+                result = to_arrays(pileup)
+                if result is None:
+                    continue
+                positions, coverage, truncations, deletions, subs = result
+                chrom_data_full[c][s_label] = (positions, coverage, truncations, deletions, subs)
+            if not chrom_data_full[c]:
+                del chrom_data_full[c]
 
     # --- Filter to requested chrom if specified ---
     if chrom:
         chrom_data_full = {c: v for c, v in chrom_data_full.items() if c == chrom}
 
-    # --- Extract truncation signal, accumulate genome-wide ---
+    # --- Extract truncation signal, accumulate genome-wide (both strands) ---
+    # chrom_data: {chrom: {strand: (positions, coverage, truncations)}}
     chrom_data = {}
     g_cov, g_trunc = [], []
 
-    for c, arrays in chrom_data_full.items():
-        positions, coverage, truncations = arrays[0], arrays[1], arrays[2]
-        chrom_data[c] = (positions, coverage, truncations)
-        g_cov.append(coverage)
-        g_trunc.append(truncations)
+    for c, strands in chrom_data_full.items():
+        chrom_data[c] = {}
+        for s_label, arrays in strands.items():
+            positions, coverage, truncations = arrays[0], arrays[1], arrays[2]
+            chrom_data[c][s_label] = (positions, coverage, truncations)
+            g_cov.append(coverage)
+            g_trunc.append(truncations)
+        if not chrom_data[c]:
+            del chrom_data[c]
 
     if not chrom_data:
         print("  No signal found.", file=sys.stderr)
@@ -130,16 +139,19 @@ def run_cits(pileup_path:  str   = None,
     out_path = f"{prefix}_truncations.bed"
     total = 0
 
+    STRAND_CHAR = {'pos': '+', 'neg': '-'}
     with open(out_path, 'w') as fh:
         fh.write(HEADER)
 
-        for c, (positions, coverage, truncations) in chrom_data.items():
-            results = test_signal(
-                positions, truncations, coverage,
-                lambda_trunc, min_coverage, min_fraction, fdr
-            )
-            write_bed(results, c, 'trunc', fh)
-            total += len(results)
+        for c, strands in chrom_data.items():
+            for s_label, (positions, coverage, truncations) in strands.items():
+                strand_char = STRAND_CHAR.get(s_label, '.')
+                results = test_signal(
+                    positions, truncations, coverage,
+                    lambda_trunc, min_coverage, min_fraction, fdr
+                )
+                write_bed(results, c, 'trunc', fh, strand=strand_char)
+                total += len(results)
 
     print(f"\n  Significant truncation sites (FDR < {fdr}): {total:,}", file=sys.stderr)
     print(f"  Output: {out_path}", file=sys.stderr)

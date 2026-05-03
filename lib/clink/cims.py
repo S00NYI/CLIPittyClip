@@ -135,34 +135,43 @@ def run_cims(pileup_path:  str   = None,
         pileups = scan_bam(bam_path, chrom=chrom, min_mapq=min_mapq,
                            max_nh=max_nh, verbose=verbose)
         chrom_data_full = {}
-        for c, pileup in pileups.items():
-            result = to_arrays(pileup)
-            if result is None:
-                continue
-            positions, coverage, truncations, deletions, subs = result
-            chrom_data_full[c] = (positions, coverage, truncations, deletions, subs)
+        for c, strand_pileups in pileups.items():
+            chrom_data_full[c] = {}
+            for s_label, pileup in strand_pileups.items():
+                result = to_arrays(pileup)
+                if result is None:
+                    continue
+                positions, coverage, truncations, deletions, subs = result
+                chrom_data_full[c][s_label] = (positions, coverage, truncations, deletions, subs)
+            if not chrom_data_full[c]:
+                del chrom_data_full[c]
 
     # --- Filter to requested chrom if specified ---
     if chrom:
         chrom_data_full = {c: v for c, v in chrom_data_full.items() if c == chrom}
 
-    # --- Extract deletion + sub signal, accumulate genome-wide ---
+    # --- Extract deletion + sub signal, accumulate genome-wide (both strands) ---
+    # chrom_data: {chrom: {strand: (positions, coverage, deletions, subs)}}
     chrom_data = {}
     g_cov, g_del = [], []
-    g_subs     = {}   # sub_type -> [signal arrays per chrom]
-    g_subs_cov = {}   # sub_type -> [coverage arrays for same chroms only]
+    g_subs     = {}   # sub_type -> [signal arrays per (chrom, strand)]
+    g_subs_cov = {}   # sub_type -> [coverage arrays for same (chrom, strand)s]
 
-    for c, arrays in chrom_data_full.items():
-        positions, coverage, truncations, deletions, subs = arrays
-        chrom_data[c] = (positions, coverage, deletions, subs)
+    for c, strands in chrom_data_full.items():
+        chrom_data[c] = {}
+        for s_label, arrays in strands.items():
+            positions, coverage, truncations, deletions, subs = arrays
+            chrom_data[c][s_label] = (positions, coverage, deletions, subs)
 
-        g_cov.append(coverage)
-        g_del.append(deletions)
-        for sub_type, arr in subs.items():
-            if sub_types and sub_type not in sub_types:
-                continue
-            g_subs.setdefault(sub_type, []).append(arr)
-            g_subs_cov.setdefault(sub_type, []).append(coverage)
+            g_cov.append(coverage)
+            g_del.append(deletions)
+            for sub_type, arr in subs.items():
+                if sub_types and sub_type not in sub_types:
+                    continue
+                g_subs.setdefault(sub_type, []).append(arr)
+                g_subs_cov.setdefault(sub_type, []).append(coverage)
+        if not chrom_data[c]:
+            del chrom_data[c]
 
     if not chrom_data:
         print("  No signal found.", file=sys.stderr)
@@ -199,6 +208,7 @@ def run_cims(pileup_path:  str   = None,
     totals = {'del': 0}
     totals.update({st: 0 for st in lambda_subs})
 
+    STRAND_CHAR = {'pos': '+', 'neg': '-'}
     with open(out_del, 'w') as fh_del:
         fh_del.write(HEADER)
 
@@ -207,26 +217,29 @@ def run_cims(pileup_path:  str   = None,
             sub_fhs[st] = open(path, 'w')
             sub_fhs[st].write(HEADER)
 
-        for c, (positions, coverage, deletions, subs) in chrom_data.items():
+        for c, strands in chrom_data.items():
+            for s_label, (positions, coverage, deletions, subs) in strands.items():
+                strand_char = STRAND_CHAR.get(s_label, '.')
 
-            # Deletions
-            if lambda_del > 0:
-                d_res = test_signal(positions, deletions, coverage,
-                                    lambda_del, min_coverage, min_fraction, fdr)
-                write_bed(d_res, c, 'del', fh_del)
-                totals['del'] += len(d_res)
+                # Deletions
+                if lambda_del > 0:
+                    d_res = test_signal(positions, deletions, coverage,
+                                        lambda_del, min_coverage, min_fraction, fdr)
+                    write_bed(d_res, c, 'del', fh_del, strand=strand_char)
+                    totals['del'] += len(d_res)
 
-            # Substitutions
-            for sub_type, fh_sub in sub_fhs.items():
-                if sub_type not in subs:
-                    continue
-                lam = lambda_subs.get(sub_type, 0)
-                if lam <= 0:
-                    continue
-                s_res = test_signal(positions, subs[sub_type], coverage,
-                                    lam, min_coverage, min_fraction, fdr)
-                write_bed(s_res, c, f"{sub_type[0]}to{sub_type[1]}", fh_sub)
-                totals[sub_type] = totals.get(sub_type, 0) + len(s_res)
+                # Substitutions
+                for sub_type, fh_sub in sub_fhs.items():
+                    if sub_type not in subs:
+                        continue
+                    lam = lambda_subs.get(sub_type, 0)
+                    if lam <= 0:
+                        continue
+                    s_res = test_signal(positions, subs[sub_type], coverage,
+                                        lam, min_coverage, min_fraction, fdr)
+                    write_bed(s_res, c, f"{sub_type[0]}to{sub_type[1]}", fh_sub,
+                              strand=strand_char)
+                    totals[sub_type] = totals.get(sub_type, 0) + len(s_res)
 
         for fh in sub_fhs.values():
             fh.close()

@@ -180,9 +180,13 @@ def scan_bam(
     min_mapq: int = 20,
     max_nh:   int = 1,
     verbose:  bool = True,
-) -> Dict[str, ChromPileup]:
+) -> Dict[str, Dict[str, 'ChromPileup']]:
     """
-    One-pass BAM scan. Returns {chrom: ChromPileup}.
+    One-pass BAM scan. Returns {chrom: {'pos': ChromPileup, 'neg': ChromPileup}}.
+
+    Reads are routed to the appropriate strand-specific ChromPileup by
+    read.is_reverse. Downstream callers iterate both strand keys to accumulate
+    genome-wide background rates and write strand-labelled BED output.
 
     Args:
         bam_path : sorted, indexed BAM
@@ -191,7 +195,7 @@ def scan_bam(
         max_nh   : max NH tag value; 1 = unique mappers only
         verbose  : print per-chromosome summary to stderr
     """
-    pileups: Dict[str, ChromPileup] = {}
+    pileups: Dict[str, Dict[str, ChromPileup]] = {}
 
     with pysam.AlignmentFile(bam_path, 'rb') as bam:
         chroms_to_scan = (
@@ -201,46 +205,51 @@ def scan_bam(
         )
 
         for c in chroms_to_scan:
-            p = ChromPileup(chrom=c)
-            pileups[c] = p
+            p_pos = ChromPileup(chrom=c)
+            p_neg = ChromPileup(chrom=c)
+            pileups[c] = {'pos': p_pos, 'neg': p_neg}
 
             for read in bam.fetch(c):
 
                 # Skip unmapped / secondary / supplementary
+                # Rejects go to p_pos.n_skipped (QC counter only, not signal)
                 if read.is_unmapped or read.is_secondary or read.is_supplementary:
-                    p.n_skipped += 1
+                    p_pos.n_skipped += 1
                     continue
 
                 # Mapping quality filter
                 if read.mapping_quality < min_mapq:
-                    p.n_skipped += 1
+                    p_pos.n_skipped += 1
                     continue
 
                 # Multimapper filter via NH tag
                 try:
                     if read.get_tag('NH') > max_nh:
-                        p.n_skipped += 1
+                        p_pos.n_skipped += 1
                         continue
                 except KeyError:
                     pass  # no NH tag — allow through
 
                 # No CIGAR (shouldn't happen, but guard)
                 if read.cigartuples is None:
-                    p.n_skipped += 1
+                    p_pos.n_skipped += 1
                     continue
 
-                p.n_reads += 1
-                extract_signals(read, p)
+                # Route to strand-specific pileup
+                strand_pileup = p_neg if read.is_reverse else p_pos
+                strand_pileup.n_reads += 1
+                extract_signals(read, strand_pileup)
 
             if verbose:
-                print(
-                    f"  {c}: {p.n_reads:>10,} reads | "
-                    f"{len(p.coverage):>10,} covered positions | "
-                    f"{sum(p.truncations.values()):>8,} truncation events | "
-                    f"{sum(p.deletions.values()):>8,} deletion events | "
-                    f"{p.n_skipped:>8,} skipped",
-                    file=sys.stderr,
-                )
+                for s_label, sp in (('pos', p_pos), ('neg', p_neg)):
+                    print(
+                        f"  {c} [{s_label}]: {sp.n_reads:>10,} reads | "
+                        f"{len(sp.coverage):>10,} covered positions | "
+                        f"{sum(sp.truncations.values()):>8,} truncation events | "
+                        f"{sum(sp.deletions.values()):>8,} deletion events | "
+                        f"{sp.n_skipped:>8,} skipped",
+                        file=sys.stderr,
+                    )
 
     return pileups
 
@@ -304,23 +313,29 @@ def save_pileup(chrom_data: dict, path: str) -> None:
     """
     Save pileup arrays for all chromosomes to a compressed .npz file.
 
-    Key naming convention (double-underscore separator):
-        {chrom}__positions
-        {chrom}__coverage
-        {chrom}__truncations
-        {chrom}__deletions
-        {chrom}__sub__{ref}{alt}   e.g. chr1__sub__TC
+    Key naming convention (triple-segment, double-underscore separator):
+        {chrom}__{strand}__positions        e.g. chr1__pos__positions
+        {chrom}__{strand}__coverage
+        {chrom}__{strand}__truncations
+        {chrom}__{strand}__deletions
+        {chrom}__{strand}__sub__{ref}{alt}  e.g. chr1__pos__sub__TC
 
-    chrom_data format: {chrom: (positions, coverage, truncations, deletions, subs)}
+    strand is 'pos' (forward, +) or 'neg' (reverse, -).
+
+    chrom_data format:
+        {chrom: {'pos': (positions, coverage, truncations, deletions, subs),
+                 'neg': (positions, coverage, truncations, deletions, subs)}}
     """
     arrays = {}
-    for chrom, (positions, coverage, truncations, deletions, subs) in chrom_data.items():
-        arrays[f'{chrom}__positions']   = positions
-        arrays[f'{chrom}__coverage']    = coverage
-        arrays[f'{chrom}__truncations'] = truncations
-        arrays[f'{chrom}__deletions']   = deletions
-        for (ref, alt), arr in subs.items():
-            arrays[f'{chrom}__sub__{ref}{alt}'] = arr
+    for chrom, strands in chrom_data.items():
+        for s_label, (positions, coverage, truncations, deletions, subs) in strands.items():
+            pfx = f'{chrom}__{s_label}'
+            arrays[f'{pfx}__positions']   = positions
+            arrays[f'{pfx}__coverage']    = coverage
+            arrays[f'{pfx}__truncations'] = truncations
+            arrays[f'{pfx}__deletions']   = deletions
+            for (ref, alt), arr in subs.items():
+                arrays[f'{pfx}__sub__{ref}{alt}'] = arr
 
     np.savez_compressed(path, **arrays)
     print(f"  Pileup saved → {path}  ({len(chrom_data)} chromosomes)", file=sys.stderr)
@@ -330,31 +345,38 @@ def load_pileup(path: str) -> dict:
     """
     Load pileup arrays from a .npz file written by save_pileup().
 
-    Returns: {chrom: (positions, coverage, truncations, deletions, subs)}
+    Returns:
+        {chrom: {'pos': (positions, coverage, truncations, deletions, subs),
+                 'neg': (positions, coverage, truncations, deletions, subs)}}
     """
     data = np.load(path)
 
-    # Discover chromosomes from key prefixes
-    chroms = set()
+    # Keys: {chrom}__{strand}__{field}  e.g. chr1__pos__positions
+    # Discover (chrom, strand) pairs from first two segments
+    chrom_strands: set = set()
     for key in data.files:
-        chroms.add(key.split('__')[0])
+        parts = key.split('__')
+        if len(parts) >= 2:
+            chrom_strands.add((parts[0], parts[1]))
 
-    chrom_data = {}
-    for chrom in sorted(chroms):
-        positions   = data[f'{chrom}__positions']
-        coverage    = data[f'{chrom}__coverage']
-        truncations = data[f'{chrom}__truncations']
-        deletions   = data[f'{chrom}__deletions']
+    chrom_data: dict = {}
+    for chrom, s_label in sorted(chrom_strands):
+        pfx = f'{chrom}__{s_label}'
+        positions   = data[f'{pfx}__positions']
+        coverage    = data[f'{pfx}__coverage']
+        truncations = data[f'{pfx}__truncations']
+        deletions   = data[f'{pfx}__deletions']
 
         subs = {}
-        prefix = f'{chrom}__sub__'
+        sub_pfx = f'{pfx}__sub__'
         for key in data.files:
-            if key.startswith(prefix):
-                code = key[len(prefix):]        # e.g. 'TC'
-                ref, alt = code[0], code[1]
-                subs[(ref, alt)] = data[key]
+            if key.startswith(sub_pfx):
+                code = key[len(sub_pfx):]   # e.g. 'TC'
+                subs[(code[0], code[1])] = data[key]
 
-        chrom_data[chrom] = (positions, coverage, truncations, deletions, subs)
+        if chrom not in chrom_data:
+            chrom_data[chrom] = {}
+        chrom_data[chrom][s_label] = (positions, coverage, truncations, deletions, subs)
 
     print(f"  Pileup loaded ← {path}  ({len(chrom_data)} chromosomes)", file=sys.stderr)
     return chrom_data
@@ -444,15 +466,20 @@ if __name__ == '__main__':
     )
 
     chrom_data = {}
-    for chrom, pileup in pileups.items():
-        result = to_arrays(pileup)
-        if result is None:
-            print(f"  {chrom}: no signal", file=sys.stderr)
-            continue
-        positions, coverage, truncations, deletions, subs = result
-        chrom_data[chrom] = (positions, coverage, truncations, deletions, subs)
-        if args.summary:
-            print_summary(chrom, positions, coverage, truncations, deletions, subs,
-                          top_n=args.top)
+    for chrom, strand_pileups in pileups.items():
+        chrom_data[chrom] = {}
+        for s_label, pileup in strand_pileups.items():
+            result = to_arrays(pileup)
+            if result is None:
+                print(f"  {chrom} [{s_label}]: no signal", file=sys.stderr)
+                continue
+            positions, coverage, truncations, deletions, subs = result
+            chrom_data[chrom][s_label] = (positions, coverage, truncations, deletions, subs)
+            if args.summary:
+                print_summary(chrom, positions, coverage, truncations, deletions, subs,
+                              top_n=args.top)
+        # Drop chrom entry if neither strand has signal
+        if not chrom_data[chrom]:
+            del chrom_data[chrom]
 
     save_pileup(chrom_data, out_path)
