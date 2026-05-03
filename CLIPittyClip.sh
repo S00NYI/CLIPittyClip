@@ -29,6 +29,7 @@ INPUT_DIR=""  # Directory mode for pre-demultiplexed FASTQs
 UMI_LEN=0
 BC_LEN=""
 SPACER_LEN="0"
+BC_FIRST="false"   # --bc-first: read starts with BC then UMI (e.g. BrdU-CLIP, irCLIP2)
 ADAPTER_3="GTGTCAGTCACTTCCAGCGG" # L32 default
 PEAK_DIST=50
 PEAK_SIZE=20
@@ -66,6 +67,8 @@ function show_usage {
     echo "  -u, --umi-length <int>   UMI length (e.g., 7 for CoCLIP)"
     echo "  --bc-len <int>           Barcode length to trim (auto-detected if -b is provided)"
     echo "  --spacer-len <int>       Spacer length to trim after barcode (default: 0)"
+    echo "  --bc-first               Barcode precedes UMI: layout [BC][UMI][spacer][READ]"
+    echo "                             e.g. BrdU-CLIP, irCLIP2 (default: [UMI][BC][spacer][READ])"
     echo "  -a, --adapter <str>      3' adapter sequence (default: L32)"
     echo "  --no-dedup               Disable FASTQ deduplication (default: ON)"
     echo "  --eclip <pe|se>          eCLIP mode: 'pe' for paired-end (post-eclipdemux R2, UMI in header),
@@ -94,7 +97,9 @@ function show_usage {
     echo "  -f, --flank <int>        Flanked BED nucleotides (default: 10)"
     echo "  --no-motif               Skip flanked BED generation"
     echo "  -g, --groups <file>      Groups file for bedgraph/peak grouping"
-    echo "  --ctk-group              Enable group CTK analysis (pools samples in groups.txt)"
+    echo "  --ctk-group              Enable group CTK analysis (pools samples in groups.txt)
+  --group-xlsite           Group crosslink site analysis for CTK + Clink (requires -g).
+                             Implies --ctk-group for CTK; also runs group Clink CITS/CIMS."
     echo "  -s, --sample <int>       Test mode: process only first N reads"
     echo "  --filter-ncrna           Enable ncRNA pre-filtering (off by default)"
     echo ""
@@ -157,6 +162,7 @@ MOTIF_FLANK="10"
 CTK_GROUPS_FILE=""  # Optional: group samples for CIMS/CITS aggregation (set by --ctk-group)
 CTK_GROUP_MODE="false"  # Explicit flag for group CTK analysis
 GROUPS_FILE=""      # Standard Groups File for BedGraph/Matrix aggregation
+GROUP_XLSITE="false"    # --group-xlsite: group crosslink analysis for CTK + Clink
 
 # Capture Start Time (Seconds) for duration calculation
 PIPELINE_START=$(date +%s)
@@ -188,6 +194,7 @@ while [[ $# -gt 0 ]]; do
         -u|--umi-length) UMI_LEN="$2"; shift 2 ;;
         --bc-len) BC_LEN="$2"; shift 2 ;;
         --spacer-len) SPACER_LEN="$2"; shift 2 ;;
+        --bc-first) BC_FIRST="true"; shift ;;
         -a|--adapter) ADAPTER_3="$2"; shift 2 ;;
         -k|--keep) KEEP_INTERMEDIATE="yes"; shift ;;
         --peak-caller) PEAK_CALLER=$(echo "$2" | tr '[:upper:]' '[:lower:]'); shift 2 ;;
@@ -210,6 +217,7 @@ while [[ $# -gt 0 ]]; do
         --no-motif) RUN_MOTIF="no"; shift ;;
         -g|--groups) GROUPS_FILE="$2"; shift 2 ;;
         --ctk-group) CTK_GROUP_MODE="true"; shift ;;
+        --group-xlsite) GROUP_XLSITE="true"; shift ;;
         -s|--sample) SAMPLE_SIZE="$2"; shift 2 ;;
         -b|--barcodes) BARCODE_FILE="$2"; DEMUX="yes"; shift 2 ;;
         -d|--input-dir) INPUT_DIR="$2"; shift 2 ;;
@@ -436,6 +444,23 @@ if [[ $THREADS -gt $MAX_SAFE_THREADS ]]; then
     log_warning "Requested $THREADS threads but only $MAX_AVAILABLE_THREADS cores available."
     log_warning "Capping to $MAX_SAFE_THREADS threads (leaving 1 for system stability)."
     THREADS=$MAX_SAFE_THREADS
+fi
+
+# --group-xlsite: grouped crosslink site analysis for both CTK and Clink
+if [[ "$GROUP_XLSITE" == "true" ]]; then
+    if [[ -z "$GROUPS_FILE" ]]; then
+        log_error "--group-xlsite requires a groups file (-g). Please provide a groups file."
+        show_usage
+        exit 1
+    fi
+    # Activate CTK group mode when mutation analysis is also running
+    if [[ "$RUN_CIMS" == "true" ]] || [[ "$RUN_CITS" == "true" ]]; then
+        CTK_GROUP_MODE="true"
+        log_info "--group-xlsite: CTK group analysis enabled"
+    fi
+    if [[ "$RUN_CLINK" != "true" ]]; then
+        log_warning "--group-xlsite: --run-clink not specified; Clink group analysis will be skipped."
+    fi
 fi
 
 # Validate groups file (requires --run-cims or --run-cits)
@@ -734,6 +759,7 @@ if [[ -n "$INPUT_DIR" ]]; then
     if [[ -n "$ADV_PEAK_CALLER_ARGS" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --peak-caller-args \"$ADV_PEAK_CALLER_ARGS\""; fi
     if [[ -n "$BC_LEN" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --bc-len $BC_LEN"; fi
     if [[ -n "$SPACER_LEN" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --spacer-len $SPACER_LEN"; fi
+    if [[ "$BC_FIRST" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --bc-first"; fi
     EXTRA_FLAGS="$EXTRA_FLAGS --child"
 
     console_msg "\n[BATCH ANALYSIS]"
@@ -958,6 +984,15 @@ if [[ -n "$INPUT_DIR" ]]; then
         fi
     done
 
+    # Group Clink Analysis (--group-xlsite with --run-clink)
+    # Runs after per-sample aggregation so dedup BAMs are in OUTPUT_ROOT/DIR_CLINK/
+    if [[ "$GROUP_XLSITE" == "true" ]] && [[ "$RUN_CLINK" == "true" ]] && \
+       [[ -n "$GROUPS_FILE" ]] && [[ -n "$DIR_CLINK" ]]; then
+        run_group_clink_analysis "$GROUPS_FILE" "$OUTPUT_ROOT/$DIR_CLINK" "$THREADS" \
+            "$CLINK_RUN_CITS" "$CLINK_RUN_CIMS" \
+            "$CLINK_MIN_COV" "$CLINK_MIN_FRAC" "$CLINK_FDR"
+    fi
+
     # Batch WORK_DIR cleanup
     if [[ "$KEEP_INTERMEDIATE" != "yes" ]]; then
         rm -rf "$WORK_DIR"
@@ -967,7 +1002,7 @@ if [[ -n "$INPUT_DIR" ]]; then
     fi
     # Remove sampled input if it was created
     if [[ -n "$SAMPLED_INPUT" && -f "$SAMPLED_INPUT" ]]; then rm -f "$SAMPLED_INPUT"; fi
-    
+
     # Combined BedGraph Generation (Directory Mode)
     # Only runs when --groups/-g is explicitly provided
     if [[ -n "$GROUPS_FILE" ]]; then
@@ -1204,11 +1239,12 @@ if [[ "$DEMUX" == "yes" ]]; then
     if [[ "$FILTER_NCRNA" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --filter-ncrna"; fi
     # Pool was already deduped above; tell children to skip dedup
     EXTRA_FLAGS="$EXTRA_FLAGS --no-dedup"
-    
+
     EXTRA_FLAGS="$EXTRA_FLAGS --peak-caller $PEAK_CALLER"
     if [[ -n "$ADV_PEAK_CALLER_ARGS" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --peak-caller-args \"$ADV_PEAK_CALLER_ARGS\""; fi
     if [[ -n "$BC_LEN" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --bc-len $BC_LEN"; fi
     if [[ -n "$SPACER_LEN" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --spacer-len $SPACER_LEN"; fi
+    if [[ "$BC_FIRST" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --bc-first"; fi
 
     # Pass --child to suppress header in sub-calls
     EXTRA_FLAGS="$EXTRA_FLAGS --child"
@@ -1749,7 +1785,7 @@ if   [[ "$ECLIP_MODE" == "pe" ]]; then
 elif [[ "$ECLIP_MODE" == "se" ]]; then
     run_eclip_se_preprocessing "$INPUT_FILE" "$BASENAME" "$THREADS" "$SAMPLE_SIZE"
 else
-    run_fastp "$INPUT_FILE" "$BASENAME" "$UMI_LEN" "$ADAPTER_3" "$THREADS" "$SAMPLE_SIZE" "$BC_LEN" "$SPACER_LEN"
+    run_fastp "$INPUT_FILE" "$BASENAME" "$UMI_LEN" "$ADAPTER_3" "$THREADS" "$SAMPLE_SIZE" "$BC_LEN" "$SPACER_LEN" "$BC_FIRST"
 fi
 
 # Propagate eCLIP-detected UMI length for downstream tag2collapse.pl
