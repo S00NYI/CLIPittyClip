@@ -609,6 +609,7 @@ run_fastp() {
     local sample_size="$6"
     local bc_len="${7:-0}"
     local spacer_len="${8:-0}"
+    local bc_first="${9:-false}"
 
     update_status_first "Adapter Trimming"
     log_info "Standard mode: fastp adapter trimming"
@@ -631,21 +632,53 @@ run_fastp() {
         log_warning "  drops the fastp-appended #count#UMI field and crashes tag2collapse.pl."
     fi
 
-    local fastp_cmd="fastp -i ${input_file} -o ${output_prefix}_cleaned.fastq \
-        --thread ${threads} \
-        --length_required 16 \
-        --average_qual 30 \
-        --html ${output_prefix}_fastp.html \
-        --json ${output_prefix}_fastp.json"
-    if [ -n "$adapter3" ]; then fastp_cmd+=" --adapter_sequence ${adapter3}"; fi
-    if [ "$umi_len" -gt 0 ]; then fastp_cmd+=" --umi --umi_loc=read1 --umi_len=${umi_len} --umi_delim=#"; fi
-    local front_trim=$(( bc_len + spacer_len ))
-    if [ "$front_trim" -gt 0 ]; then fastp_cmd+=" --trim_front1 ${front_trim}"; fi
-    if [ "$sample_size" -gt 0 ]; then fastp_cmd+=" --reads_to_process $sample_size"; fi
+    if [[ "$bc_first" == "true" && "$bc_len" -gt 0 ]]; then
+        # Pass 1: strip BC so UMI lands at position 0
+        local pass1_out="${output_prefix}_bc_stripped.fastq"
+        local pass1_cmd="fastp -i ${input_file} -o ${pass1_out} \
+            --thread ${threads} \
+            --trim_front1 ${bc_len} \
+            --disable_quality_filtering \
+            --disable_length_filtering \
+            --html ${output_prefix}_fastp_pass1.html \
+            --json ${output_prefix}_fastp_pass1.json"
+        if [ "$sample_size" -gt 0 ]; then pass1_cmd+=" --reads_to_process $sample_size"; fi
+        log_info "bc-first pass 1 (strip BC): $pass1_cmd"
+        execute_cmd "$pass1_cmd" || { log_error "fastp pass 1 failed."; exit 1; }
 
-    log_info "Running: $fastp_cmd"
-    execute_cmd "$fastp_cmd"
-    local exit_code=$?
+        # Pass 2: extract UMI, trim spacer, QC, adapter trim
+        # fastp extracts UMI before applying trim_front1 — spacer trim is safe in same call
+        local fastp_cmd="fastp -i ${pass1_out} -o ${output_prefix}_cleaned.fastq \
+            --thread ${threads} \
+            --length_required 16 \
+            --average_qual 30 \
+            --html ${output_prefix}_fastp.html \
+            --json ${output_prefix}_fastp.json"
+        if [ -n "$adapter3" ]; then fastp_cmd+=" --adapter_sequence ${adapter3}"; fi
+        if [ "$umi_len" -gt 0 ]; then fastp_cmd+=" --umi --umi_loc=read1 --umi_len=${umi_len} --umi_delim=#"; fi
+        if [ "$spacer_len" -gt 0 ]; then fastp_cmd+=" --trim_front1 ${spacer_len}"; fi
+        log_info "bc-first pass 2 (UMI + QC): $fastp_cmd"
+        execute_cmd "$fastp_cmd"
+        local exit_code=$?
+        rm -f "$pass1_out"
+
+    else
+        # Standard single-pass
+        local fastp_cmd="fastp -i ${input_file} -o ${output_prefix}_cleaned.fastq \
+            --thread ${threads} \
+            --length_required 16 \
+            --average_qual 30 \
+            --html ${output_prefix}_fastp.html \
+            --json ${output_prefix}_fastp.json"
+        if [ -n "$adapter3" ]; then fastp_cmd+=" --adapter_sequence ${adapter3}"; fi
+        if [ "$umi_len" -gt 0 ]; then fastp_cmd+=" --umi --umi_loc=read1 --umi_len=${umi_len} --umi_delim=#"; fi
+        local front_trim=$(( bc_len + spacer_len ))
+        if [ "$front_trim" -gt 0 ]; then fastp_cmd+=" --trim_front1 ${front_trim}"; fi
+        if [ "$sample_size" -gt 0 ]; then fastp_cmd+=" --reads_to_process $sample_size"; fi
+        log_info "Running: $fastp_cmd"
+        execute_cmd "$fastp_cmd"
+        local exit_code=$?
+    fi
 
     if [ $exit_code -eq 0 ]; then
         log_info "Adapter trimming complete."
@@ -2894,19 +2927,21 @@ run_clink_collapse() {
 # Args:
 #   $1  deduplicated BAM
 #   $2  output .npz path
-#   $3  threads (unused by pileup, kept for API consistency)
+#   $3  threads
 # ---------------------------------------------------------------------------
 run_clink_pileup() {
     local bam_in="$1"
     local npz_out="$2"
+    local threads="${3:-${THREADS:-1}}"
     local clink_dir
     clink_dir=$(_clink_dir)
 
-    log_info "Clink pileup: scanning BAM → $npz_out"
+    log_info "Clink pileup: scanning BAM → $npz_out (threads: $threads)"
 
     _clink_exec python3 "$clink_dir/pileup.py" \
         "$bam_in" \
-        --out "$npz_out"
+        --out "$npz_out" \
+        --threads "$threads"
 
     if [[ $? -ne 0 ]] || [[ ! -s "$npz_out" ]]; then
         log_error "Clink pileup failed. Check log for details."
@@ -3042,7 +3077,7 @@ run_clink_full() {
     fi
 
     update_status "Clink pileup"
-    run_clink_pileup "$dedup_bam" "$npz" || return 1
+    run_clink_pileup "$dedup_bam" "$npz" "$threads" || return 1
 
     if [[ "$run_cits" == "true" ]]; then
         update_status "Clink CITS"
