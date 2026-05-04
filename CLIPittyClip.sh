@@ -29,6 +29,7 @@ INPUT_DIR=""  # Directory mode for pre-demultiplexed FASTQs
 UMI_LEN=0
 BC_LEN=""
 SPACER_LEN="0"
+BC_FIRST="false"
 ADAPTER_3="GTGTCAGTCACTTCCAGCGG" # L32 default
 PEAK_DIST=50
 PEAK_SIZE=20
@@ -66,6 +67,9 @@ function show_usage {
     echo "  -u, --umi-length <int>   UMI length (e.g., 7 for CoCLIP)"
     echo "  --bc-len <int>           Barcode length to trim (auto-detected if -b is provided)"
     echo "  --spacer-len <int>       Spacer length to trim after barcode (default: 0)"
+    echo "  --bc-first               Barcode-first layout: [BC][UMI][spacer?][READ]"
+    echo "                             BrdU-CLIP: --bc-len 5 -u 8 --spacer-len 1"
+    echo "                             irCLIP2:   --bc-len 6 -u 8 --spacer-len 12"
     echo "  -a, --adapter <str>      3' adapter sequence (default: L32)"
     echo "  --no-dedup               Disable FASTQ deduplication (default: ON)"
     echo "  --eclip <pe|se>          eCLIP mode: 'pe' for paired-end (post-eclipdemux R2, UMI in header),
@@ -198,6 +202,7 @@ while [[ $# -gt 0 ]]; do
         -u|--umi-length) UMI_LEN="$2"; shift 2 ;;
         --bc-len) BC_LEN="$2"; shift 2 ;;
         --spacer-len) SPACER_LEN="$2"; shift 2 ;;
+        --bc-first) BC_FIRST="true"; shift ;;
         -a|--adapter) ADAPTER_3="$2"; shift 2 ;;
         -k|--keep) KEEP_INTERMEDIATE="yes"; shift ;;
         --peak-caller) PEAK_CALLER=$(echo "$2" | tr '[:upper:]' '[:lower:]'); shift 2 ;;
@@ -369,6 +374,10 @@ if [[ -n "$BARCODE_FILE" ]]; then
     BC_LEN="$bc_file_len"
 fi
 BC_LEN="${BC_LEN:-0}"
+if [[ "$BC_FIRST" == "true" ]]; then
+    [[ "${BC_LEN:-0}" -eq 0 ]] && { echo "[ERROR] --bc-first requires --bc-len <int>." >&2; exit 1; }
+    [[ "$UMI_LEN" -eq 0 ]]     && { echo "[ERROR] --bc-first requires -u <int>." >&2; exit 1; }
+fi
 
 # Resolve absolute paths
 if [[ -n "$INPUT_FILE" ]]; then
@@ -764,6 +773,7 @@ if [[ -n "$INPUT_DIR" ]]; then
     if [[ -n "$ADV_PEAK_CALLER_ARGS" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --peak-caller-args \"$ADV_PEAK_CALLER_ARGS\""; fi
     if [[ -n "$BC_LEN" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --bc-len $BC_LEN"; fi
     if [[ -n "$SPACER_LEN" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --spacer-len $SPACER_LEN"; fi
+    if [[ "$BC_FIRST" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --bc-first"; fi
     EXTRA_FLAGS="$EXTRA_FLAGS --child"
 
     console_msg "\n[BATCH ANALYSIS]"
@@ -1278,6 +1288,7 @@ if [[ "$DEMUX" == "yes" ]]; then
     if [[ -n "$ADV_PEAK_CALLER_ARGS" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --peak-caller-args \"$ADV_PEAK_CALLER_ARGS\""; fi
     if [[ -n "$BC_LEN" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --bc-len $BC_LEN"; fi
     if [[ -n "$SPACER_LEN" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --spacer-len $SPACER_LEN"; fi
+    if [[ "$BC_FIRST" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --bc-first"; fi
 
     # Pass --child to suppress header in sub-calls
     EXTRA_FLAGS="$EXTRA_FLAGS --child"
@@ -1842,7 +1853,7 @@ if   [[ "$ECLIP_MODE" == "pe" ]]; then
 elif [[ "$ECLIP_MODE" == "se" ]]; then
     run_eclip_se_preprocessing "$INPUT_FILE" "$BASENAME" "$THREADS" "$SAMPLE_SIZE"
 else
-    run_fastp "$INPUT_FILE" "$BASENAME" "$UMI_LEN" "$ADAPTER_3" "$THREADS" "$SAMPLE_SIZE" "$BC_LEN" "$SPACER_LEN"
+    run_fastp "$INPUT_FILE" "$BASENAME" "$UMI_LEN" "$ADAPTER_3" "$THREADS" "$SAMPLE_SIZE" "$BC_LEN" "$SPACER_LEN" "$BC_FIRST"
 fi
 
 # Propagate eCLIP-detected UMI length for downstream tag2collapse.pl
