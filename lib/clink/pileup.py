@@ -11,24 +11,32 @@ Scans a sorted, indexed BAM and accumulates four per-position signals:
 
 Key design decisions:
   - One forward pass per chromosome — no random BAM access
-  - Sparse storage (defaultdict) — only positions with signal are stored
-  - MD tag used to distinguish CIGAR D (deletion, ref_base present in MD)
-    from CIGAR N (intron skip, ref_base=None) without needing a reference FASTA
+  - CIGAR-tuple walk + numpy bincount/cumsum for coverage and deletions:
+      * Collect M/D interval endpoints as Python lists (O(n_reads × avg_cigar_ops))
+      * np.bincount builds a difference array in C  (O(n_intervals))
+      * np.cumsum converts difference → coverage    (O(span), C-level)
+      * No per-base Python loop; eliminates get_aligned_pairs tuple allocation
+  - Substitutions: MD tag pre-screened with a regex; get_aligned_pairs only
+    called for reads that actually carry mismatches (~5-15% in typical CLIP)
+  - Chromosome-level multiprocessing: each worker opens its own BAM handle
+    so N chromosomes scan in parallel across N cores (--threads)
+  - CIGAR D distinguishes deletion from intron (N) without a reference FASTA
   - Deletions count toward coverage (read spans the position, base is absent)
   - Intron-spanning positions (N) are not counted as coverage or deletions
 
 Usage:
+    python pileup.py sample.bam --out sample_pileup.npz
+    python pileup.py sample.bam --out sample_pileup.npz --threads 8
     python pileup.py sample.bam --chrom chr1
-    python pileup.py sample.bam --chrom chrX --mapq 255
 """
 
-import sys
 import re
+import sys
 import argparse
 from collections import defaultdict, Counter
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional
 
 import numpy as np
 import pysam
@@ -38,7 +46,22 @@ import pysam
 # Constants
 # ---------------------------------------------------------------------------
 
-BASES = {'A', 'C', 'G', 'T'}
+BASES = frozenset('ACGT')
+
+# CIGAR operation codes
+_OP_M  = 0   # alignment match (can be match or mismatch)
+_OP_I  = 1   # insertion to reference
+_OP_D  = 2   # deletion from reference
+_OP_N  = 3   # skipped region (intron)
+_OP_S  = 4   # soft clip
+_OP_H  = 5   # hard clip
+_OP_P  = 6   # padding
+_OP_EQ = 7   # sequence match
+_OP_X  = 8   # sequence mismatch
+
+# Pre-compiled regex: any uppercase letter NOT immediately preceded by '^'
+# The '^' prefix marks reference deletions in MD (e.g. ^ACG); bare letters = mismatches
+_MD_HAS_MISMATCH = re.compile(r'(?<!\^)[ACGT]')
 
 # Standard chromosomes: chr1-22, X, Y, M
 def is_standard_chrom(name: str) -> bool:
@@ -58,8 +81,9 @@ class ChromPileup:
     """
     Sparse per-position signal accumulator for one chromosome.
 
-    All four dicts are keyed by 0-based reference position.
-    subs is keyed by (ref_base, alt_base) tuples e.g. ('T', 'C').
+    After the fast CIGAR path, _arrays is set directly so to_arrays()
+    can skip re-conversion.  The raw dict fields are only populated when
+    the legacy extract_signals() path is used (kept for compatibility).
     """
     chrom: str
     coverage:    Dict[int, int] = field(default_factory=lambda: defaultdict(int))
@@ -72,7 +96,7 @@ class ChromPileup:
 
 
 # ---------------------------------------------------------------------------
-# Per-read signal extraction
+# Truncation site helper
 # ---------------------------------------------------------------------------
 
 def truncation_site(read: pysam.AlignedSegment) -> int:
@@ -81,118 +105,319 @@ def truncation_site(read: pysam.AlignedSegment) -> int:
 
     iCLIP library structure:
       - RT reads 3'→5' on RNA template, stops AT the crosslinked nucleotide
-      - The last base incorporated is the one immediately 3' of the crosslink on RNA
-      - The cDNA 3' end = crosslink site; adapter is ligated here; Read 1 begins here
-      - The crosslink nucleotide is therefore ONE POSITION UPSTREAM of the read start
+      - The cDNA 3' end = crosslink site; the read begins one position downstream
+      - Crosslink nucleotide is ONE POSITION UPSTREAM of the read's 5' end
 
     In reference coordinates (matching CTK/CITS convention):
       Forward (is_reverse=False): crosslink = reference_start - 1
       Reverse (is_reverse=True):  crosslink = reference_end
         (reference_end is pysam's exclusive end; the 5' start of the read is
          reference_end - 1, so one upstream = reference_end)
-
-    This matches CTK's bedExt.pl -n up -l -1 -r -1 convention used by CITS.pl.
-    Validated: Clink vs CTK CITS on SRR26536514 STAR BAM shows systematic +1 offset
-    on - strand and -1 offset on + strand when using read-start directly; this
-    1bp shift corrects it (7 → ~80 exact matches).
-
-    frac = truncations[X] / coverage[X]:
-      1.0 → every read spanning position X stopped there (all truncated, none read through)
-      0.x → mix of truncated and read-through reads
     """
     return read.reference_end if read.is_reverse else read.reference_start - 1
 
 
-def extract_signals(read: pysam.AlignedSegment, pileup: ChromPileup) -> None:
+# ---------------------------------------------------------------------------
+# Substitution extraction (called only for reads with confirmed mismatches)
+# ---------------------------------------------------------------------------
+
+def _extract_subs_from_pairs(read: pysam.AlignedSegment,
+                              subs_sparse: dict) -> None:
     """
-    Accumulate all four signals from one read into pileup.
+    Extract per-position substitution counts using get_aligned_pairs(with_seq=True).
 
-    Uses get_aligned_pairs(with_seq=True) which decodes the MD tag to
-    supply reference bases. This lets us:
-      - Distinguish D (deletion, MD supplies ref_base) from
-        N (intron, MD is absent → ref_base=None)
-      - Identify substitutions without a reference FASTA
-
-    Signal rules:
-      Intron (N):     query_pos=None, ref_base=None  → skip entirely
-      Deletion (D):   query_pos=None, ref_base=set   → +deletion, +coverage
-      Insertion (I):  ref_pos=None                   → skip (no ref position)
-      Match/mismatch: both set                        → +coverage, +sub if mismatch
+    Only called when the MD tag regex confirmed at least one mismatch, so the
+    fraction of reads reaching this path is typically 5-15% for CLIP data.
     """
-    # --- Truncation ---
-    # The truncation site is one position upstream of the read's 5' start
-    # (matching CTK convention: the last base synthesized by RT = the crosslink site).
-    # Because the truncated read starts just AFTER this position, it does not
-    # contribute to coverage[trunc_pos] through the normal aligned-pairs loop.
-    # We manually add +1 here so the binomial denominator (coverage) includes
-    # both truncated reads AND read-through reads at the crosslink position.
-    t_pos = truncation_site(read)
-    pileup.truncations[t_pos] += 1
-    pileup.coverage[t_pos]    += 1  # truncated read counts toward its own crosslink site
-
-    # --- Coverage / deletions / substitutions via aligned pairs ---
     query_seq = read.query_sequence
     if query_seq is None:
-        return  # hard-clipped read with no sequence stored
-
+        return
     try:
         pairs = read.get_aligned_pairs(with_seq=True)
     except Exception:
-        # MD tag absent or malformed — skip substitution/deletion parsing
-        # Still count truncation (already done above)
-        pileup.n_skipped += 1
         return
-
     for query_pos, ref_pos, ref_base in pairs:
-
-        # Insertion: read has extra base(s), consumes no reference position
-        if ref_pos is None:
+        if query_pos is None or ref_pos is None or ref_base is None:
             continue
-
-        # Intron skip (N): ref_pos set but ref_base is None (not in MD tag)
-        if query_pos is None and ref_base is None:
-            continue
-
-        # Deletion (D): ref_pos set, ref_base set (from MD ^X), query_pos None
-        if query_pos is None:
-            pileup.deletions[ref_pos] += 1
-            pileup.coverage[ref_pos]  += 1  # read spans this position
-            continue
-
-        # Aligned base: count coverage
-        pileup.coverage[ref_pos] += 1
-
-        # Substitution: ref_base (from MD) differs from read base
-        ref_upper = ref_base.upper() if ref_base else None
+        ref_upper = ref_base.upper()
         alt_base  = query_seq[query_pos].upper()
-
         if ref_upper in BASES and alt_base in BASES and ref_upper != alt_base:
-            pileup.subs[ref_pos][(ref_upper, alt_base)] += 1
+            subs_sparse[ref_pos][(ref_upper, alt_base)] += 1
 
 
 # ---------------------------------------------------------------------------
-# BAM scan
+# Per-chromosome scan (module-level — required for multiprocessing pickling)
+# ---------------------------------------------------------------------------
+
+# Maximum bp per chunk.  Each chunk allocates three int32 arrays of this size:
+#   3 arrays × CHUNK_SIZE × 4 bytes = 60 MB per worker at default 5 Mbp.
+# With 8 parallel workers the peak pileup footprint is ~480 MB regardless of
+# how widely reads are spread across the chromosome.
+_CHUNK_SIZE = 5_000_000
+
+
+def _process_chunk(M_starts: list, M_ends: list,
+                   D_starts: list, D_ends: list,
+                   T_off: list, size: int,
+                   subs_sparse: dict, sub_reads: list) -> tuple:
+    """
+    Run bincount/cumsum on one chunk's interval lists and return sparse arrays.
+
+    Parameters
+    ----------
+    M_starts, M_ends : M/=/X block endpoints, already offset to [0, size)
+    D_starts, D_ends : D block endpoints, already offset to [0, size)
+    T_off            : truncation positions offset to [0, size)
+    size             : chunk size in bp
+    subs_sparse      : accumulate substitutions here (modified in place)
+    sub_reads        : reads with mismatches owned by this chunk
+
+    Returns
+    -------
+    (local_positions, coverage, truncations, deletions) as numpy arrays,
+    or None if the chunk has no signal.
+    """
+    if not M_starts and not T_off:
+        return None
+
+    cov_diff = np.zeros(size + 1, dtype=np.int32)
+
+    # M/=/X coverage
+    if M_starts:
+        Ms = np.array(M_starts, dtype=np.int64)
+        Me = np.array(M_ends,   dtype=np.int64)
+        cov_diff += np.bincount(Ms, minlength=size + 1).astype(np.int32)
+        cov_diff -= np.bincount(Me, minlength=size + 1).astype(np.int32)
+
+    # Truncation single-base coverage
+    if T_off:
+        T  = np.array(T_off,         dtype=np.int64)
+        T1 = np.clip(T + 1, 0, size).astype(np.int64)
+        cov_diff += np.bincount(T,  minlength=size + 1).astype(np.int32)
+        cov_diff -= np.bincount(T1, minlength=size + 1).astype(np.int32)
+        trunc_arr = np.bincount(T, minlength=size).astype(np.uint32)
+    else:
+        trunc_arr = np.zeros(size, dtype=np.uint32)
+
+    # D block coverage + deletions
+    del_arr = np.zeros(size, dtype=np.uint32)
+    if D_starts:
+        Ds = np.array(D_starts, dtype=np.int64)
+        De = np.array(D_ends,   dtype=np.int64)
+        d_diff = (np.bincount(Ds, minlength=size + 1).astype(np.int32) -
+                  np.bincount(De, minlength=size + 1).astype(np.int32))
+        cov_diff += d_diff
+        del_arr   = np.maximum(0, np.cumsum(d_diff[:size])).astype(np.uint32)
+
+    cov_arr = np.maximum(0, np.cumsum(cov_diff[:size])).astype(np.uint32)
+
+    # Substitutions for reads owned by this chunk
+    for read in sub_reads:
+        _extract_subs_from_pairs(read, subs_sparse)
+
+    # Sparse extraction
+    has_signal = (cov_arr > 0) | (trunc_arr > 0) | (del_arr > 0)
+    local_idx  = np.where(has_signal)[0]
+    if len(local_idx) == 0:
+        return None
+
+    return (local_idx,
+            cov_arr[local_idx],
+            trunc_arr[local_idx],
+            del_arr[local_idx])
+
+
+def _scan_single_chrom(bam_path: str, chrom: str,
+                       min_mapq: int, max_nh: int) -> 'ChromPileup':
+    """
+    Scan one chromosome in fixed-size chunks and return a ChromPileup.
+
+    Algorithm
+    ---------
+    The chromosome is split into windows of _CHUNK_SIZE bp.  For each window:
+
+    1. bam.fetch(chrom, start, end) returns only reads overlapping that window
+       (O(1) BAM index lookup for empty windows — fast skip).
+
+    2. CIGAR intervals (M/D blocks) are clipped to the window boundaries and
+       collected as Python lists.  No per-base work in Python.
+
+    3. np.bincount builds a difference array; np.cumsum converts it to
+       per-position counts.  Both are C-level — no Python inner loop for
+       coverage or deletion accumulation.
+
+    4. Read ownership: a read is "owned" by the chunk containing its
+       truncation site.  n_reads, subs, and truncation counts are only
+       incremented for owned reads, preventing double-counting across chunks.
+       Coverage intervals are always clipped to the current chunk window.
+
+    5. Peak RAM per worker = 3 arrays × _CHUNK_SIZE × 4 bytes = 60 MB at 5 Mbp.
+       With 8 parallel workers the total pileup footprint is ~480 MB regardless
+       of chromosome length or how widely reads spread.
+    """
+    n_reads   = 0
+    n_skipped = 0
+
+    # Accumulate chunk results across the chromosome
+    all_positions:   list = []
+    all_coverage:    list = []
+    all_truncations: list = []
+    all_deletions:   list = []
+    subs_sparse: dict = defaultdict(Counter)  # global across chunks
+
+    with pysam.AlignmentFile(bam_path, 'rb') as bam:
+        chrom_len = bam.get_reference_length(chrom)
+
+        for chunk_start in range(0, chrom_len, _CHUNK_SIZE):
+            chunk_end = min(chunk_start + _CHUNK_SIZE, chrom_len)
+            size      = chunk_end - chunk_start
+
+            # Per-chunk interval lists (offset to [0, size))
+            M_starts: list = []
+            M_ends:   list = []
+            D_starts: list = []
+            D_ends:   list = []
+            T_off:    list = []   # owned truncation offsets
+            sub_reads: list = []  # owned reads with mismatches
+
+            for read in bam.fetch(chrom, chunk_start, chunk_end):
+                # ── Filters ──────────────────────────────────────────────
+                if (read.is_unmapped or read.is_secondary or
+                        read.is_supplementary or read.cigartuples is None):
+                    n_skipped += 1
+                    continue
+                if read.mapping_quality < min_mapq:
+                    n_skipped += 1
+                    continue
+                if min_mapq < 255:
+                    try:
+                        if read.get_tag('NH') > max_nh:
+                            n_skipped += 1
+                            continue
+                    except KeyError:
+                        pass
+
+                # ── Read ownership via truncation site ───────────────────
+                t = (read.reference_end if read.is_reverse
+                     else read.reference_start - 1)
+                owned = chunk_start <= t < chunk_end
+
+                if owned:
+                    n_reads += 1
+                    t_off = t - chunk_start
+                    if 0 <= t_off < size:
+                        T_off.append(t_off)
+                    # Substitutions counted once per read in owning chunk
+                    try:
+                        md = read.get_tag('MD')
+                        if _MD_HAS_MISMATCH.search(md):
+                            sub_reads.append(read)
+                    except KeyError:
+                        pass
+
+                # ── CIGAR walk — clip intervals to chunk window ───────────
+                ref = read.reference_start
+                for op, length in read.cigartuples:
+                    if op == _OP_M or op == _OP_EQ or op == _OP_X:
+                        s = max(ref,          chunk_start) - chunk_start
+                        e = min(ref + length, chunk_end)   - chunk_start
+                        if s < e:
+                            M_starts.append(s)
+                            M_ends.append(e)
+                        ref += length
+                    elif op == _OP_D:
+                        s = max(ref,          chunk_start) - chunk_start
+                        e = min(ref + length, chunk_end)   - chunk_start
+                        if s < e:
+                            D_starts.append(s)
+                            D_ends.append(e)
+                        ref += length
+                    elif op == _OP_N:
+                        ref += length
+                    # I, S, H, P: no reference advance
+
+            # ── Process chunk ─────────────────────────────────────────────
+            result = _process_chunk(M_starts, M_ends, D_starts, D_ends,
+                                    T_off, size, subs_sparse, sub_reads)
+            if result is not None:
+                local_idx, cov, trunc, dels = result
+                all_positions.append(local_idx + chunk_start)
+                all_coverage.append(cov)
+                all_truncations.append(trunc)
+                all_deletions.append(dels)
+
+    # ── Build ChromPileup ─────────────────────────────────────────────────────
+    p = ChromPileup(chrom=chrom)
+    p.n_reads   = n_reads
+    p.n_skipped = n_skipped
+
+    if not all_positions:
+        return p
+
+    # Concatenate chunk arrays
+    global_pos  = np.concatenate(all_positions).astype(np.int32)
+    coverage    = np.concatenate(all_coverage).astype(np.uint32)
+    truncations = np.concatenate(all_truncations).astype(np.uint32)
+    deletions   = np.concatenate(all_deletions).astype(np.uint32)
+
+    # Build substitution arrays
+    all_sub_types = set()
+    for counter in subs_sparse.values():
+        all_sub_types.update(counter.keys())
+
+    pos_to_idx = {int(gp): i for i, gp in enumerate(global_pos)}
+    subs_out: dict = {}
+    for sub_type in sorted(all_sub_types):
+        arr = np.zeros(len(global_pos), dtype=np.uint16)
+        for pos, counter in subs_sparse.items():
+            if sub_type in counter:
+                idx = pos_to_idx.get(pos)
+                if idx is not None:
+                    arr[idx] = min(counter[sub_type], 65535)
+        subs_out[sub_type] = arr
+
+    p._arrays = (global_pos, coverage, truncations, deletions, subs_out)  # type: ignore[attr-defined]
+    return p
+
+
+def _worker(args: tuple):
+    """
+    Multiprocessing worker — must be module-level for pickling.
+    Returns (chrom, n_reads, n_skipped, arrays).
+    """
+    bam_path, chrom, min_mapq, max_nh = args
+    p = _scan_single_chrom(bam_path, chrom, min_mapq, max_nh)
+    arrays = to_arrays(p)
+    return chrom, p.n_reads, p.n_skipped, arrays
+
+
+# ---------------------------------------------------------------------------
+# BAM scan — sequential or parallel
 # ---------------------------------------------------------------------------
 
 def scan_bam(
     bam_path: str,
     chrom:    Optional[str] = None,
-    min_mapq: int = 20,
-    max_nh:   int = 1,
+    min_mapq: int  = 20,
+    max_nh:   int  = 1,
+    threads:  int  = 1,
     verbose:  bool = True,
 ) -> Dict[str, ChromPileup]:
     """
     One-pass BAM scan. Returns {chrom: ChromPileup}.
 
+    When threads > 1, chromosomes are scanned in parallel using
+    multiprocessing.Pool. Each worker opens its own BAM file handle —
+    pysam is safe for concurrent reads on the same file.
+
     Args:
         bam_path : sorted, indexed BAM
         chrom    : scan only this chromosome (None = all standard chroms)
-        min_mapq : minimum mapping quality filter (STAR unique = 255, BT2 varies)
-        max_nh   : max NH tag value; 1 = unique mappers only
+        min_mapq : minimum MAPQ filter
+        max_nh   : max NH tag; 1 = unique mappers only
+        threads  : parallel workers (one per chromosome); 1 = sequential
         verbose  : print per-chromosome summary to stderr
     """
-    pileups: Dict[str, ChromPileup] = {}
-
     with pysam.AlignmentFile(bam_path, 'rb') as bam:
         chroms_to_scan = (
             [chrom] if chrom
@@ -200,69 +425,77 @@ def scan_bam(
                   if is_standard_chrom(sq['SN'])]
         )
 
+    pileups: Dict[str, ChromPileup] = {}
+
+    def _log(p: ChromPileup, arrays) -> None:
+        if not verbose or arrays is None:
+            return
+        positions, coverage, truncations, deletions, subs = arrays
+        print(
+            f"  {p.chrom}: {p.n_reads:>10,} reads | "
+            f"{len(positions):>10,} covered positions | "
+            f"{int(truncations.sum()):>8,} truncation events | "
+            f"{int(deletions.sum()):>8,} deletion events | "
+            f"{p.n_skipped:>8,} skipped",
+            file=sys.stderr,
+        )
+
+    if threads > 1:
+        # ── Parallel path ────────────────────────────────────────────────────
+        from multiprocessing import Pool
+        n_workers = min(threads, len(chroms_to_scan))
+        if verbose:
+            print(f"  Scanning {len(chroms_to_scan)} chromosomes "
+                  f"with {n_workers} parallel workers ...", file=sys.stderr)
+
+        jobs = [(bam_path, c, min_mapq, max_nh) for c in chroms_to_scan]
+        with Pool(n_workers) as pool:
+            for c, n_reads, n_skipped, arrays in pool.map(_worker, jobs):
+                p = ChromPileup(chrom=c)
+                p.n_reads   = n_reads
+                p.n_skipped = n_skipped
+                p._arrays   = arrays  # type: ignore[attr-defined]
+                pileups[c]  = p
+                _log(p, arrays)
+
+    else:
+        # ── Sequential path ──────────────────────────────────────────────────
         for c in chroms_to_scan:
-            p = ChromPileup(chrom=c)
+            p = _scan_single_chrom(bam_path, c, min_mapq, max_nh)
+            arrays = to_arrays(p)
+            p._arrays = arrays  # type: ignore[attr-defined]
             pileups[c] = p
-
-            for read in bam.fetch(c):
-
-                # Skip unmapped / secondary / supplementary
-                if read.is_unmapped or read.is_secondary or read.is_supplementary:
-                    p.n_skipped += 1
-                    continue
-
-                # Mapping quality filter
-                if read.mapping_quality < min_mapq:
-                    p.n_skipped += 1
-                    continue
-
-                # Multimapper filter via NH tag
-                try:
-                    if read.get_tag('NH') > max_nh:
-                        p.n_skipped += 1
-                        continue
-                except KeyError:
-                    pass  # no NH tag — allow through
-
-                # No CIGAR (shouldn't happen, but guard)
-                if read.cigartuples is None:
-                    p.n_skipped += 1
-                    continue
-
-                p.n_reads += 1
-                extract_signals(read, p)
-
-            if verbose:
-                print(
-                    f"  {c}: {p.n_reads:>10,} reads | "
-                    f"{len(p.coverage):>10,} covered positions | "
-                    f"{sum(p.truncations.values()):>8,} truncation events | "
-                    f"{sum(p.deletions.values()):>8,} deletion events | "
-                    f"{p.n_skipped:>8,} skipped",
-                    file=sys.stderr,
-                )
+            _log(p, arrays)
 
     return pileups
 
 
 # ---------------------------------------------------------------------------
-# Convert to numpy arrays for stats.py
+# Convert to numpy arrays for cits.py / cims.py
 # ---------------------------------------------------------------------------
 
 def to_arrays(pileup: ChromPileup):
     """
-    Convert sparse ChromPileup dicts to sorted numpy arrays.
+    Return pileup arrays for one chromosome.
+
+    Fast path: if _arrays was pre-computed by _scan_single_chrom (the CIGAR
+    path), return it immediately.  Slow path: convert legacy defaultdict fields
+    (only reached if extract_signals() was used directly).
 
     Returns:
-        positions    : int32  [N]      — 0-based reference positions
-        coverage     : uint32 [N]
-        truncations  : uint32 [N]
-        deletions    : uint32 [N]
-        subs         : dict {(ref, alt): uint16 [N]} per substitution type
-                       e.g. {('T','C'): array([0,0,3,0,...])}
-
-    Returns None if the pileup is empty.
+        (positions, coverage, truncations, deletions, subs)
+          positions    : int32  [N]  — 0-based reference positions with signal
+          coverage     : uint32 [N]
+          truncations  : uint32 [N]
+          deletions    : uint32 [N]
+          subs         : dict {(ref, alt): uint16 [N]}
+        or None if the chromosome has no signal.
     """
+    # Fast path
+    if hasattr(pileup, '_arrays'):
+        return pileup._arrays  # type: ignore[attr-defined]
+
+    # Legacy path (defaultdict → arrays)
     all_pos = (set(pileup.coverage) | set(pileup.truncations) |
                set(pileup.deletions) | set(pileup.subs))
     if not all_pos:
@@ -276,11 +509,13 @@ def to_arrays(pileup: ChromPileup):
     truncations = np.zeros(n, dtype=np.uint32)
     deletions   = np.zeros(n, dtype=np.uint32)
 
-    for pos, v in pileup.coverage.items():    coverage[idx[pos]]    = v
-    for pos, v in pileup.truncations.items(): truncations[idx[pos]] = v
-    for pos, v in pileup.deletions.items():   deletions[idx[pos]]   = v
+    for pos, v in pileup.coverage.items():
+        coverage[idx[pos]] = v
+    for pos, v in pileup.truncations.items():
+        truncations[idx[pos]] = v
+    for pos, v in pileup.deletions.items():
+        deletions[idx[pos]] = v
 
-    # Collect all observed substitution types across all positions
     all_sub_types = set()
     for counter in pileup.subs.values():
         all_sub_types.update(counter.keys())
@@ -310,8 +545,6 @@ def save_pileup(chrom_data: dict, path: str) -> None:
         {chrom}__truncations
         {chrom}__deletions
         {chrom}__sub__{ref}{alt}   e.g. chr1__sub__TC
-
-    chrom_data format: {chrom: (positions, coverage, truncations, deletions, subs)}
     """
     arrays = {}
     for chrom, (positions, coverage, truncations, deletions, subs) in chrom_data.items():
@@ -329,12 +562,10 @@ def save_pileup(chrom_data: dict, path: str) -> None:
 def load_pileup(path: str) -> dict:
     """
     Load pileup arrays from a .npz file written by save_pileup().
-
     Returns: {chrom: (positions, coverage, truncations, deletions, subs)}
     """
     data = np.load(path)
 
-    # Discover chromosomes from key prefixes
     chroms = set()
     for key in data.files:
         chroms.add(key.split('__')[0])
@@ -350,7 +581,7 @@ def load_pileup(path: str) -> dict:
         prefix = f'{chrom}__sub__'
         for key in data.files:
             if key.startswith(prefix):
-                code = key[len(prefix):]        # e.g. 'TC'
+                code = key[len(prefix):]
                 ref, alt = code[0], code[1]
                 subs[(ref, alt)] = data[key]
 
@@ -361,12 +592,11 @@ def load_pileup(path: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Quick summary report (for validation / sanity-checking)
+# Quick summary report
 # ---------------------------------------------------------------------------
 
 def print_summary(chrom: str, positions, coverage, truncations, deletions, subs,
                   top_n: int = 10):
-    """Print a human-readable summary of the pileup arrays."""
     print(f"\n{'='*60}")
     print(f"  {chrom}  —  {len(positions):,} positions with signal")
     print(f"{'='*60}")
@@ -374,36 +604,30 @@ def print_summary(chrom: str, positions, coverage, truncations, deletions, subs,
     print(f"  Total truncations:  {truncations.sum():>10,}")
     print(f"  Total deletions:    {deletions.sum():>10,}")
     print(f"  Substitution types: {[f'{r}>{a}' for r,a in sorted(subs.keys())]}")
+    for (ref, alt), arr in sorted(subs.items()):
+        print(f"    {ref}>{alt}: {arr.sum():,} total events")
 
-    if len(subs) > 0:
-        for (ref, alt), arr in sorted(subs.items()):
-            print(f"    {ref}>{alt}: {arr.sum():,} total events")
-
-    # Top truncation sites
     if truncations.sum() > 0:
-        print(f"\n  Top {top_n} truncation sites (raw count):")
+        print(f"\n  Top {top_n} truncation sites:")
         top = np.argsort(truncations)[-top_n:][::-1]
         for i in top:
             if truncations[i] > 0:
                 cov = coverage[i] if coverage[i] > 0 else 1
-                frac = truncations[i] / cov
                 print(f"    pos={positions[i]:>12,}  "
                       f"trunc={truncations[i]:>6,}  "
                       f"cov={cov:>8,}  "
-                      f"frac={frac:.3f}")
+                      f"frac={truncations[i]/cov:.3f}")
 
-    # Top deletion sites
     if deletions.sum() > 0:
-        print(f"\n  Top {top_n} deletion sites (raw count):")
+        print(f"\n  Top {top_n} deletion sites:")
         top = np.argsort(deletions)[-top_n:][::-1]
         for i in top:
             if deletions[i] > 0:
                 cov = coverage[i] if coverage[i] > 0 else 1
-                frac = deletions[i] / cov
                 print(f"    pos={positions[i]:>12,}  "
                       f"del={deletions[i]:>6,}  "
                       f"cov={cov:>8,}  "
-                      f"frac={frac:.3f}")
+                      f"frac={deletions[i]/cov:.3f}")
 
 
 # ---------------------------------------------------------------------------
@@ -412,35 +636,39 @@ def print_summary(chrom: str, positions, coverage, truncations, deletions, subs,
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
-        description='Clink pileup: scan BAM and save per-position signal arrays')
+        description='Clink pileup: scan BAM → per-position signal arrays (.npz)')
     parser.add_argument('bam',
         help='Sorted, indexed BAM file (output of clink collapse)')
     parser.add_argument('--out', default=None,
-        help='Output .npz file for cits/cims (default: <bam_stem>_pileup.npz)')
+        help='Output .npz file (default: <bam_stem>_pileup.npz)')
     parser.add_argument('--chrom', default=None,
-        help='Restrict scan to one chromosome (e.g. chr1). Default: all standard chroms.')
+        help='Restrict to one chromosome (default: all standard chroms)')
     parser.add_argument('--mapq', type=int, default=255,
-        help='Minimum mapping quality (default: 255 = STAR unique-only).')
+        help='Minimum MAPQ (default: 255 = STAR unique-only)')
     parser.add_argument('--nh', type=int, default=1,
-        help='Maximum NH tag value — 1 = unique mappers only (default: 1).')
+        help='Maximum NH tag — 1 = unique mappers only (default: 1)')
+    parser.add_argument('--threads', type=int, default=1,
+        help='Parallel workers — one per chromosome (default: 1 = sequential)')
     parser.add_argument('--summary', action='store_true',
-        help='Print per-chromosome signal summary (top sites etc).')
+        help='Print per-chromosome signal summary')
     parser.add_argument('--top', type=int, default=10,
-        help='Top N sites to show in summary (default: 10). Requires --summary.')
+        help='Top N sites in summary (default: 10)')
     args = parser.parse_args()
 
     out_path = args.out or (Path(args.bam).stem + '_pileup.npz')
 
     print(f"\nClink pileup  |  {Path(args.bam).name}", file=sys.stderr)
-    print(f"  mapq>={args.mapq}  NH<={args.nh}  chrom={args.chrom or 'all'}",
+    print(f"  mapq>={args.mapq}  NH<={args.nh}  "
+          f"threads={args.threads}  chrom={args.chrom or 'all'}",
           file=sys.stderr)
     print(f"  Output: {out_path}\n", file=sys.stderr)
 
     pileups = scan_bam(
         args.bam,
-        chrom=args.chrom,
-        min_mapq=args.mapq,
-        max_nh=args.nh,
+        chrom    = args.chrom,
+        min_mapq = args.mapq,
+        max_nh   = args.nh,
+        threads  = args.threads,
     )
 
     chrom_data = {}

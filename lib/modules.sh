@@ -2745,19 +2745,21 @@ run_clink_collapse() {
 # Args:
 #   $1  deduplicated BAM
 #   $2  output .npz path
-#   $3  threads (unused by pileup, kept for API consistency)
+#   $3  threads (default 1; passed to pileup.py --threads for chromosome-level parallelism)
 # ---------------------------------------------------------------------------
 run_clink_pileup() {
     local bam_in="$1"
     local npz_out="$2"
+    local threads="${3:-1}"
     local clink_dir
     clink_dir=$(_clink_dir)
 
-    log_info "Clink pileup: scanning BAM → $npz_out"
+    log_info "Clink pileup: scanning BAM → $npz_out (threads=$threads)"
 
     _clink_exec python3 "$clink_dir/pileup.py" \
         "$bam_in" \
-        --out "$npz_out"
+        --out "$npz_out" \
+        --threads "$threads"
 
     if [[ $? -ne 0 ]] || [[ ! -s "$npz_out" ]]; then
         log_error "Clink pileup failed. Check log for details."
@@ -2893,7 +2895,7 @@ run_clink_full() {
     fi
 
     update_status "Clink pileup"
-    run_clink_pileup "$dedup_bam" "$npz" || return 1
+    run_clink_pileup "$dedup_bam" "$npz" "$threads" || return 1
 
     if [[ "$run_cits" == "true" ]]; then
         update_status "Clink CITS"
@@ -3036,7 +3038,7 @@ run_group_clink_analysis() {
         # --- Pileup ---
         local npz="$group_dir/${group}_pileup.npz"
         update_status "Clink group $group pileup"
-        if ! run_clink_pileup "$merged_bam" "$npz"; then
+        if ! run_clink_pileup "$merged_bam" "$npz" "$threads"; then
             log_error "Clink group $group: pileup failed"
             printf "FAILED\n"
             continue
