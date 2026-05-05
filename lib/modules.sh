@@ -610,6 +610,7 @@ run_fastp() {
     local bc_len="${7:-0}"
     local spacer_len="${8:-0}"
     local bc_first="${9:-false}"
+    local fastp_min_qual="${10:-30}"
 
     update_status_first "Adapter Trimming"
     log_info "Standard mode: fastp adapter trimming"
@@ -651,7 +652,7 @@ run_fastp() {
         local fastp_cmd="fastp -i ${pass1_out} -o ${output_prefix}_cleaned.fastq \
             --thread ${threads} \
             --length_required 16 \
-            --average_qual 30 \
+            --average_qual ${fastp_min_qual} \
             --html ${output_prefix}_fastp.html \
             --json ${output_prefix}_fastp.json"
         if [ -n "$adapter3" ]; then fastp_cmd+=" --adapter_sequence ${adapter3}"; fi
@@ -667,7 +668,7 @@ run_fastp() {
         local fastp_cmd="fastp -i ${input_file} -o ${output_prefix}_cleaned.fastq \
             --thread ${threads} \
             --length_required 16 \
-            --average_qual 30 \
+            --average_qual ${fastp_min_qual} \
             --html ${output_prefix}_fastp.html \
             --json ${output_prefix}_fastp.json"
         if [ -n "$adapter3" ]; then fastp_cmd+=" --adapter_sequence ${adapter3}"; fi
