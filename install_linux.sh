@@ -190,6 +190,9 @@ fi
 if ! dpkg -l libdb-dev &> /dev/null 2>&1; then
     MISSING_PKGS+=("libdb-dev")
 fi
+if ! dpkg -l bioperl &> /dev/null 2>&1; then
+    MISSING_PKGS+=("bioperl")
+fi
 if [[ ${#MISSING_PKGS[@]} -gt 0 ]]; then
     print_info "Installing missing system libraries: ${MISSING_PKGS[*]}"
     sudo apt-get install -y "${MISSING_PKGS[@]}" || {
