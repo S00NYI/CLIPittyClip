@@ -16,7 +16,7 @@ Algorithm:
 Output columns:
     chrom  start  end  name  score  strand  signal  coverage  fraction  pvalue  qvalue
     score = min(-log10(qvalue) * 100, 1000)   BED-compatible 0–1000 range
-    strand = '.'  (unstranded; strand tracking to be added in Rust port)
+    strand = '+' or '-'  (from read strand; '.' for legacy unstranded pileups)
 
 Usage:
     python stats.py sample.bam --chrom chr1
@@ -177,17 +177,19 @@ HEADER = (
     "signal\tcoverage\tfraction\tpvalue\tqvalue\n"
 )
 
-def write_bed(results: list, chrom: str, signal_label: str, fh):
+def write_bed(results: list, chrom: str, signal_label: str, fh,
+              strand: str = '.'):
     """
     Write significant sites in BED6 + extra columns.
     score = min(-log10(qvalue) * 100, 1000)  — BED-compatible 0–1000 integer
+    strand: '+', '-', or '.' (default '.' for legacy unstranded pileups)
     """
     for r in results:
         pos   = r['pos']
         score = min(int(-np.log10(max(r['qvalue'], 1e-300)) * 100), 1000)
-        name  = f"{signal_label}:{chrom}:{pos}"
+        name  = f"{signal_label}:{chrom}:{pos}:{strand}"
         fh.write(
-            f"{chrom}\t{pos}\t{pos+1}\t{name}\t{score}\t.\t"
+            f"{chrom}\t{pos}\t{pos+1}\t{name}\t{score}\t{strand}\t"
             f"{r['signal']}\t{r['coverage']}\t{r['fraction']:.4f}\t"
             f"{r['pvalue']:.3e}\t{r['qvalue']:.3e}\n"
         )

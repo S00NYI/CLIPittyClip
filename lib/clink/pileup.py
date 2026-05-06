@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
-Clink pileup.py — Single-pass BAM signal extractor
+Clink pileup.py — Single-pass BAM signal extractor (strand-aware)
 
-Scans a sorted, indexed BAM and accumulates four per-position signals:
+Scans a sorted, indexed BAM and accumulates four per-position signals
+separately for forward (+) and reverse (-) strand reads:
 
   coverage     : reads spanning each position
   truncations  : 5' read ends (RT stop sites — CITS signal)
@@ -10,6 +11,7 @@ Scans a sorted, indexed BAM and accumulates four per-position signals:
   substitutions: mismatches by type, e.g. T>C (PAR-CLIP), any sub (iCLIP)
 
 Key design decisions:
+  - Strand separation: all signal arrays accumulated independently per strand
   - One forward pass per chromosome — no random BAM access
   - CIGAR-tuple walk + numpy bincount/cumsum for coverage and deletions:
       * Collect M/D interval endpoints as Python lists (O(n_reads × avg_cigar_ops))
@@ -23,6 +25,13 @@ Key design decisions:
   - CIGAR D distinguishes deletion from intron (N) without a reference FASTA
   - Deletions count toward coverage (read spans the position, base is absent)
   - Intron-spanning positions (N) are not counted as coverage or deletions
+
+NPZ format (stranded):
+  {chrom}__fwd__positions     {chrom}__rev__positions
+  {chrom}__fwd__coverage      {chrom}__rev__coverage
+  {chrom}__fwd__truncations   {chrom}__rev__truncations
+  {chrom}__fwd__deletions     {chrom}__rev__deletions
+  {chrom}__fwd__sub__{XY}     {chrom}__rev__sub__{XY}
 
 Usage:
     python pileup.py sample.bam --out sample_pileup.npz
@@ -84,6 +93,10 @@ class ChromPileup:
     After the fast CIGAR path, _arrays is set directly so to_arrays()
     can skip re-conversion.  The raw dict fields are only populated when
     the legacy extract_signals() path is used (kept for compatibility).
+
+    _arrays format (stranded):
+        {'fwd': (positions, coverage, truncations, deletions, subs) or None,
+         'rev': (positions, coverage, truncations, deletions, subs) or None}
     """
     chrom: str
     coverage:    Dict[int, int] = field(default_factory=lambda: defaultdict(int))
@@ -106,13 +119,12 @@ def truncation_site(read: pysam.AlignedSegment) -> int:
     iCLIP library structure:
       - RT reads 3'→5' on RNA template, stops AT the crosslinked nucleotide
       - The cDNA 3' end = crosslink site; the read begins one position downstream
-      - Crosslink nucleotide is ONE POSITION UPSTREAM of the read's 5' end
 
     In reference coordinates (matching CTK/CITS convention):
       Forward (is_reverse=False): crosslink = reference_start - 1
       Reverse (is_reverse=True):  crosslink = reference_end
-        (reference_end is pysam's exclusive end; the 5' start of the read is
-         reference_end - 1, so one upstream = reference_end)
+        (reference_end is pysam's exclusive end; the 5' start of the reverse read
+         is at reference_end - 1 in reference coords; one upstream = reference_end)
     """
     return read.reference_end if read.is_reverse else read.reference_start - 1
 
@@ -149,10 +161,10 @@ def _extract_subs_from_pairs(read: pysam.AlignedSegment,
 # Per-chromosome scan (module-level — required for multiprocessing pickling)
 # ---------------------------------------------------------------------------
 
-# Maximum bp per chunk.  Each chunk allocates three int32 arrays of this size:
-#   3 arrays × CHUNK_SIZE × 4 bytes = 60 MB per worker at default 5 Mbp.
-# With 8 parallel workers the peak pileup footprint is ~480 MB regardless of
-# how widely reads are spread across the chromosome.
+# Maximum bp per chunk.  Each chunk allocates six int32 arrays of this size
+# (three per strand: cov_diff, trunc, del):
+#   6 arrays × CHUNK_SIZE × 4 bytes = 120 MB per worker at default 5 Mbp.
+# With 8 parallel workers the peak pileup footprint is ~960 MB.
 _CHUNK_SIZE = 5_000_000
 
 
@@ -227,134 +239,16 @@ def _process_chunk(M_starts: list, M_ends: list,
             del_arr[local_idx])
 
 
-def _scan_single_chrom(bam_path: str, chrom: str,
-                       min_mapq: int, max_nh: int) -> 'ChromPileup':
+def _build_strand_arrays(all_positions: list, all_coverage: list,
+                          all_truncations: list, all_deletions: list,
+                          subs_sparse: dict):
     """
-    Scan one chromosome in fixed-size chunks and return a ChromPileup.
-
-    Algorithm
-    ---------
-    The chromosome is split into windows of _CHUNK_SIZE bp.  For each window:
-
-    1. bam.fetch(chrom, start, end) returns only reads overlapping that window
-       (O(1) BAM index lookup for empty windows — fast skip).
-
-    2. CIGAR intervals (M/D blocks) are clipped to the window boundaries and
-       collected as Python lists.  No per-base work in Python.
-
-    3. np.bincount builds a difference array; np.cumsum converts it to
-       per-position counts.  Both are C-level — no Python inner loop for
-       coverage or deletion accumulation.
-
-    4. Read ownership: a read is "owned" by the chunk containing its
-       truncation site.  n_reads, subs, and truncation counts are only
-       incremented for owned reads, preventing double-counting across chunks.
-       Coverage intervals are always clipped to the current chunk window.
-
-    5. Peak RAM per worker = 3 arrays × _CHUNK_SIZE × 4 bytes = 60 MB at 5 Mbp.
-       With 8 parallel workers the total pileup footprint is ~480 MB regardless
-       of chromosome length or how widely reads spread.
+    Concatenate chunk accumulation lists into final numpy arrays for one strand.
+    Returns (positions, coverage, truncations, deletions, subs_out) or None.
     """
-    n_reads   = 0
-    n_skipped = 0
-
-    # Accumulate chunk results across the chromosome
-    all_positions:   list = []
-    all_coverage:    list = []
-    all_truncations: list = []
-    all_deletions:   list = []
-    subs_sparse: dict = defaultdict(Counter)  # global across chunks
-
-    with pysam.AlignmentFile(bam_path, 'rb') as bam:
-        chrom_len = bam.get_reference_length(chrom)
-
-        for chunk_start in range(0, chrom_len, _CHUNK_SIZE):
-            chunk_end = min(chunk_start + _CHUNK_SIZE, chrom_len)
-            size      = chunk_end - chunk_start
-
-            # Per-chunk interval lists (offset to [0, size))
-            M_starts: list = []
-            M_ends:   list = []
-            D_starts: list = []
-            D_ends:   list = []
-            T_off:    list = []   # owned truncation offsets
-            sub_reads: list = []  # owned reads with mismatches
-
-            for read in bam.fetch(chrom, chunk_start, chunk_end):
-                # ── Filters ──────────────────────────────────────────────
-                if (read.is_unmapped or read.is_secondary or
-                        read.is_supplementary or read.cigartuples is None):
-                    n_skipped += 1
-                    continue
-                if read.mapping_quality < min_mapq:
-                    n_skipped += 1
-                    continue
-                if min_mapq < 255:
-                    try:
-                        if read.get_tag('NH') > max_nh:
-                            n_skipped += 1
-                            continue
-                    except KeyError:
-                        pass
-
-                # ── Read ownership via truncation site ───────────────────
-                t = (read.reference_end if read.is_reverse
-                     else read.reference_start - 1)
-                owned = chunk_start <= t < chunk_end
-
-                if owned:
-                    n_reads += 1
-                    t_off = t - chunk_start
-                    if 0 <= t_off < size:
-                        T_off.append(t_off)
-                    # Substitutions counted once per read in owning chunk
-                    try:
-                        md = read.get_tag('MD')
-                        if _MD_HAS_MISMATCH.search(md):
-                            sub_reads.append(read)
-                    except KeyError:
-                        pass
-
-                # ── CIGAR walk — clip intervals to chunk window ───────────
-                ref = read.reference_start
-                for op, length in read.cigartuples:
-                    if op == _OP_M or op == _OP_EQ or op == _OP_X:
-                        s = max(ref,          chunk_start) - chunk_start
-                        e = min(ref + length, chunk_end)   - chunk_start
-                        if s < e:
-                            M_starts.append(s)
-                            M_ends.append(e)
-                        ref += length
-                    elif op == _OP_D:
-                        s = max(ref,          chunk_start) - chunk_start
-                        e = min(ref + length, chunk_end)   - chunk_start
-                        if s < e:
-                            D_starts.append(s)
-                            D_ends.append(e)
-                        ref += length
-                    elif op == _OP_N:
-                        ref += length
-                    # I, S, H, P: no reference advance
-
-            # ── Process chunk ─────────────────────────────────────────────
-            result = _process_chunk(M_starts, M_ends, D_starts, D_ends,
-                                    T_off, size, subs_sparse, sub_reads)
-            if result is not None:
-                local_idx, cov, trunc, dels = result
-                all_positions.append(local_idx + chunk_start)
-                all_coverage.append(cov)
-                all_truncations.append(trunc)
-                all_deletions.append(dels)
-
-    # ── Build ChromPileup ─────────────────────────────────────────────────────
-    p = ChromPileup(chrom=chrom)
-    p.n_reads   = n_reads
-    p.n_skipped = n_skipped
-
     if not all_positions:
-        return p
+        return None
 
-    # Concatenate chunk arrays
     global_pos  = np.concatenate(all_positions).astype(np.int32)
     coverage    = np.concatenate(all_coverage).astype(np.uint32)
     truncations = np.concatenate(all_truncations).astype(np.uint32)
@@ -376,7 +270,172 @@ def _scan_single_chrom(bam_path: str, chrom: str,
                     arr[idx] = min(counter[sub_type], 65535)
         subs_out[sub_type] = arr
 
-    p._arrays = (global_pos, coverage, truncations, deletions, subs_out)  # type: ignore[attr-defined]
+    return (global_pos, coverage, truncations, deletions, subs_out)
+
+
+def _scan_single_chrom(bam_path: str, chrom: str,
+                       min_mapq: int, max_nh: int) -> 'ChromPileup':
+    """
+    Scan one chromosome in fixed-size chunks and return a ChromPileup.
+
+    Reads are split by strand at the CIGAR-walk level so that fwd (+) and
+    rev (-) signals accumulate into independent arrays throughout.
+
+    Algorithm
+    ---------
+    The chromosome is split into windows of _CHUNK_SIZE bp.  For each window:
+
+    1. bam.fetch(chrom, start, end) returns only reads overlapping that window.
+
+    2. Reads are split by strand; CIGAR intervals (M/D blocks) are clipped to
+       the window boundaries and collected into fwd and rev Python lists.
+
+    3. np.bincount + np.cumsum (C-level) convert interval lists to per-position
+       coverage/deletion arrays for each strand.
+
+    4. Read ownership: a read is "owned" by the chunk containing its truncation
+       site.  n_reads, subs, and truncation counts are only incremented for owned
+       reads.  Coverage intervals are accumulated in every overlapping chunk.
+
+    5. Peak RAM per worker ≈ 6 arrays × _CHUNK_SIZE × 4 bytes = 120 MB at 5 Mbp.
+    """
+    n_reads   = 0
+    n_skipped = 0
+
+    # Accumulate chunk results separately per strand
+    all_positions_fwd:   list = []
+    all_coverage_fwd:    list = []
+    all_truncations_fwd: list = []
+    all_deletions_fwd:   list = []
+    subs_sparse_fwd: dict = defaultdict(Counter)
+
+    all_positions_rev:   list = []
+    all_coverage_rev:    list = []
+    all_truncations_rev: list = []
+    all_deletions_rev:   list = []
+    subs_sparse_rev: dict = defaultdict(Counter)
+
+    with pysam.AlignmentFile(bam_path, 'rb') as bam:
+        chrom_len = bam.get_reference_length(chrom)
+
+        for chunk_start in range(0, chrom_len, _CHUNK_SIZE):
+            chunk_end = min(chunk_start + _CHUNK_SIZE, chrom_len)
+            size      = chunk_end - chunk_start
+
+            # Per-chunk interval lists, split by strand
+            M_starts_fwd: list = []; M_ends_fwd: list = []
+            M_starts_rev: list = []; M_ends_rev: list = []
+            D_starts_fwd: list = []; D_ends_fwd: list = []
+            D_starts_rev: list = []; D_ends_rev: list = []
+            T_off_fwd:    list = []; T_off_rev:  list = []
+            sub_reads_fwd: list = []; sub_reads_rev: list = []
+
+            for read in bam.fetch(chrom, chunk_start, chunk_end):
+                # ── Filters ──────────────────────────────────────────────
+                if (read.is_unmapped or read.is_secondary or
+                        read.is_supplementary or read.cigartuples is None):
+                    n_skipped += 1
+                    continue
+                if read.mapping_quality < min_mapq:
+                    n_skipped += 1
+                    continue
+                if min_mapq < 255:
+                    try:
+                        if read.get_tag('NH') > max_nh:
+                            n_skipped += 1
+                            continue
+                    except KeyError:
+                        pass
+
+                is_rev = read.is_reverse
+
+                # ── Read ownership via truncation site ───────────────────
+                t = (read.reference_end if is_rev
+                     else read.reference_start - 1)
+                owned = chunk_start <= t < chunk_end
+
+                if owned:
+                    n_reads += 1
+                    t_off = t - chunk_start
+                    if 0 <= t_off < size:
+                        if is_rev:
+                            T_off_rev.append(t_off)
+                        else:
+                            T_off_fwd.append(t_off)
+                    # Substitutions counted once per read in owning chunk
+                    try:
+                        md = read.get_tag('MD')
+                        if _MD_HAS_MISMATCH.search(md):
+                            if is_rev:
+                                sub_reads_rev.append(read)
+                            else:
+                                sub_reads_fwd.append(read)
+                    except KeyError:
+                        pass
+
+                # ── CIGAR walk — clip intervals to chunk window ───────────
+                ref = read.reference_start
+                for op, length in read.cigartuples:
+                    if op == _OP_M or op == _OP_EQ or op == _OP_X:
+                        s = max(ref,          chunk_start) - chunk_start
+                        e = min(ref + length, chunk_end)   - chunk_start
+                        if s < e:
+                            if is_rev:
+                                M_starts_rev.append(s)
+                                M_ends_rev.append(e)
+                            else:
+                                M_starts_fwd.append(s)
+                                M_ends_fwd.append(e)
+                        ref += length
+                    elif op == _OP_D:
+                        s = max(ref,          chunk_start) - chunk_start
+                        e = min(ref + length, chunk_end)   - chunk_start
+                        if s < e:
+                            if is_rev:
+                                D_starts_rev.append(s)
+                                D_ends_rev.append(e)
+                            else:
+                                D_starts_fwd.append(s)
+                                D_ends_fwd.append(e)
+                        ref += length
+                    elif op == _OP_N:
+                        ref += length
+                    # I, S, H, P: no reference advance
+
+            # ── Process chunk — both strands independently ────────────────
+            result_fwd = _process_chunk(
+                M_starts_fwd, M_ends_fwd, D_starts_fwd, D_ends_fwd,
+                T_off_fwd, size, subs_sparse_fwd, sub_reads_fwd)
+            if result_fwd is not None:
+                local_idx, cov, trunc, dels = result_fwd
+                all_positions_fwd.append(local_idx + chunk_start)
+                all_coverage_fwd.append(cov)
+                all_truncations_fwd.append(trunc)
+                all_deletions_fwd.append(dels)
+
+            result_rev = _process_chunk(
+                M_starts_rev, M_ends_rev, D_starts_rev, D_ends_rev,
+                T_off_rev, size, subs_sparse_rev, sub_reads_rev)
+            if result_rev is not None:
+                local_idx, cov, trunc, dels = result_rev
+                all_positions_rev.append(local_idx + chunk_start)
+                all_coverage_rev.append(cov)
+                all_truncations_rev.append(trunc)
+                all_deletions_rev.append(dels)
+
+    # ── Build ChromPileup ─────────────────────────────────────────────────────
+    p = ChromPileup(chrom=chrom)
+    p.n_reads   = n_reads
+    p.n_skipped = n_skipped
+
+    fwd_arrays = _build_strand_arrays(
+        all_positions_fwd, all_coverage_fwd, all_truncations_fwd,
+        all_deletions_fwd, subs_sparse_fwd)
+    rev_arrays = _build_strand_arrays(
+        all_positions_rev, all_coverage_rev, all_truncations_rev,
+        all_deletions_rev, subs_sparse_rev)
+
+    p._arrays = {'fwd': fwd_arrays, 'rev': rev_arrays}  # type: ignore[attr-defined]
     return p
 
 
@@ -430,12 +489,19 @@ def scan_bam(
     def _log(p: ChromPileup, arrays) -> None:
         if not verbose or arrays is None:
             return
-        positions, coverage, truncations, deletions, subs = arrays
+        n_pos = n_trunc = n_del = 0
+        for strand_arr in (arrays.get('fwd'), arrays.get('rev')):
+            if strand_arr is None:
+                continue
+            positions, coverage, truncations, deletions, subs = strand_arr
+            n_pos   += len(positions)
+            n_trunc += int(truncations.sum())
+            n_del   += int(deletions.sum())
         print(
             f"  {p.chrom}: {p.n_reads:>10,} reads | "
-            f"{len(positions):>10,} covered positions | "
-            f"{int(truncations.sum()):>8,} truncation events | "
-            f"{int(deletions.sum()):>8,} deletion events | "
+            f"{n_pos:>10,} covered positions (fwd+rev) | "
+            f"{n_trunc:>8,} truncation events | "
+            f"{n_del:>8,} deletion events | "
             f"{p.n_skipped:>8,} skipped",
             file=sys.stderr,
         )
@@ -479,23 +545,25 @@ def to_arrays(pileup: ChromPileup):
     Return pileup arrays for one chromosome.
 
     Fast path: if _arrays was pre-computed by _scan_single_chrom (the CIGAR
-    path), return it immediately.  Slow path: convert legacy defaultdict fields
-    (only reached if extract_signals() was used directly).
+    path), return it immediately.
 
     Returns:
-        (positions, coverage, truncations, deletions, subs)
+        dict {'fwd': (positions, coverage, truncations, deletions, subs) or None,
+              'rev': (positions, coverage, truncations, deletions, subs) or None}
+        or None if both strands have no signal.
+
+        Each strand tuple:
           positions    : int32  [N]  — 0-based reference positions with signal
           coverage     : uint32 [N]
           truncations  : uint32 [N]
           deletions    : uint32 [N]
           subs         : dict {(ref, alt): uint16 [N]}
-        or None if the chromosome has no signal.
     """
     # Fast path
     if hasattr(pileup, '_arrays'):
         return pileup._arrays  # type: ignore[attr-defined]
 
-    # Legacy path (defaultdict → arrays)
+    # Legacy path (defaultdict → arrays) — wrap everything as fwd (unstranded)
     all_pos = (set(pileup.coverage) | set(pileup.truncations) |
                set(pileup.deletions) | set(pileup.subs))
     if not all_pos:
@@ -528,7 +596,8 @@ def to_arrays(pileup: ChromPileup):
                 arr[idx[pos]] = min(counter[sub_type], 65535)
         subs[sub_type] = arr
 
-    return positions, coverage, truncations, deletions, subs
+    legacy_arrays = (positions, coverage, truncations, deletions, subs)
+    return {'fwd': legacy_arrays, 'rev': None}
 
 
 # ---------------------------------------------------------------------------
@@ -537,23 +606,31 @@ def to_arrays(pileup: ChromPileup):
 
 def save_pileup(chrom_data: dict, path: str) -> None:
     """
-    Save pileup arrays for all chromosomes to a compressed .npz file.
+    Save stranded pileup arrays for all chromosomes to a compressed .npz file.
 
-    Key naming convention (double-underscore separator):
-        {chrom}__positions
-        {chrom}__coverage
-        {chrom}__truncations
-        {chrom}__deletions
-        {chrom}__sub__{ref}{alt}   e.g. chr1__sub__TC
+    chrom_data: {chrom: {'fwd': arrays_or_None, 'rev': arrays_or_None}}
+
+    Key naming convention (triple double-underscore segments):
+        {chrom}__fwd__positions       {chrom}__rev__positions
+        {chrom}__fwd__coverage        {chrom}__rev__coverage
+        {chrom}__fwd__truncations     {chrom}__rev__truncations
+        {chrom}__fwd__deletions       {chrom}__rev__deletions
+        {chrom}__fwd__sub__{XY}       {chrom}__rev__sub__{XY}
     """
     arrays = {}
-    for chrom, (positions, coverage, truncations, deletions, subs) in chrom_data.items():
-        arrays[f'{chrom}__positions']   = positions
-        arrays[f'{chrom}__coverage']    = coverage
-        arrays[f'{chrom}__truncations'] = truncations
-        arrays[f'{chrom}__deletions']   = deletions
-        for (ref, alt), arr in subs.items():
-            arrays[f'{chrom}__sub__{ref}{alt}'] = arr
+    for chrom, strands in chrom_data.items():
+        for strand_key in ('fwd', 'rev'):
+            strand_arr = strands.get(strand_key)
+            if strand_arr is None:
+                continue
+            positions, coverage, truncations, deletions, subs = strand_arr
+            pfx = f'{chrom}__{strand_key}'
+            arrays[f'{pfx}__positions']   = positions
+            arrays[f'{pfx}__coverage']    = coverage
+            arrays[f'{pfx}__truncations'] = truncations
+            arrays[f'{pfx}__deletions']   = deletions
+            for (ref, alt), arr in subs.items():
+                arrays[f'{pfx}__sub__{ref}{alt}'] = arr
 
     np.savez_compressed(path, **arrays)
     print(f"  Pileup saved → {path}  ({len(chrom_data)} chromosomes)", file=sys.stderr)
@@ -562,30 +639,73 @@ def save_pileup(chrom_data: dict, path: str) -> None:
 def load_pileup(path: str) -> dict:
     """
     Load pileup arrays from a .npz file written by save_pileup().
-    Returns: {chrom: (positions, coverage, truncations, deletions, subs)}
+
+    Returns: {chrom: {'fwd': arrays_or_None, 'rev': arrays_or_None}}
+
+    Backward compatible: if the file uses the old unstranded format
+    ({chrom}__positions etc.), wraps all data as fwd-only (rev=None) with
+    a warning.
     """
     data = np.load(path)
 
+    # Detect format: stranded files have '__fwd__' or '__rev__' in keys
+    is_stranded = any(('__fwd__' in k or '__rev__' in k) for k in data.files)
+
+    if not is_stranded:
+        # --- Backward-compatible: old unstranded format → wrap as fwd ---
+        print("  WARNING: pileup.npz is unstranded (old format). "
+              "Re-run pileup.py to get strand-aware results.", file=sys.stderr)
+        chroms = set(k.split('__')[0] for k in data.files)
+        chrom_data = {}
+        for chrom in sorted(chroms):
+            positions   = data[f'{chrom}__positions']
+            coverage    = data[f'{chrom}__coverage']
+            truncations = data[f'{chrom}__truncations']
+            deletions   = data[f'{chrom}__deletions']
+            subs = {}
+            sub_prefix = f'{chrom}__sub__'
+            for key in data.files:
+                if key.startswith(sub_prefix):
+                    code = key[len(sub_prefix):]
+                    ref, alt = code[0], code[1]
+                    subs[(ref, alt)] = data[key]
+            chrom_data[chrom] = {
+                'fwd': (positions, coverage, truncations, deletions, subs),
+                'rev': None,
+            }
+        print(f"  Pileup loaded (unstranded→fwd) ← {path}  "
+              f"({len(chrom_data)} chromosomes)", file=sys.stderr)
+        return chrom_data
+
+    # --- Stranded format ---
     chroms = set()
     for key in data.files:
-        chroms.add(key.split('__')[0])
+        parts = key.split('__')
+        if len(parts) >= 3 and parts[1] in ('fwd', 'rev'):
+            chroms.add(parts[0])
 
     chrom_data = {}
     for chrom in sorted(chroms):
-        positions   = data[f'{chrom}__positions']
-        coverage    = data[f'{chrom}__coverage']
-        truncations = data[f'{chrom}__truncations']
-        deletions   = data[f'{chrom}__deletions']
-
-        subs = {}
-        prefix = f'{chrom}__sub__'
-        for key in data.files:
-            if key.startswith(prefix):
-                code = key[len(prefix):]
-                ref, alt = code[0], code[1]
-                subs[(ref, alt)] = data[key]
-
-        chrom_data[chrom] = (positions, coverage, truncations, deletions, subs)
+        chrom_data[chrom] = {}
+        for strand_key in ('fwd', 'rev'):
+            pos_key = f'{chrom}__{strand_key}__positions'
+            if pos_key not in data.files:
+                chrom_data[chrom][strand_key] = None
+                continue
+            pfx = f'{chrom}__{strand_key}'
+            positions   = data[f'{pfx}__positions']
+            coverage    = data[f'{pfx}__coverage']
+            truncations = data[f'{pfx}__truncations']
+            deletions   = data[f'{pfx}__deletions']
+            subs = {}
+            sub_prefix = f'{pfx}__sub__'
+            for key in data.files:
+                if key.startswith(sub_prefix):
+                    code = key[len(sub_prefix):]
+                    ref, alt = code[0], code[1]
+                    subs[(ref, alt)] = data[key]
+            chrom_data[chrom][strand_key] = (
+                positions, coverage, truncations, deletions, subs)
 
     print(f"  Pileup loaded ← {path}  ({len(chrom_data)} chromosomes)", file=sys.stderr)
     return chrom_data
@@ -595,10 +715,10 @@ def load_pileup(path: str) -> dict:
 # Quick summary report
 # ---------------------------------------------------------------------------
 
-def print_summary(chrom: str, positions, coverage, truncations, deletions, subs,
-                  top_n: int = 10):
+def print_summary(chrom: str, strand: str, positions, coverage, truncations,
+                  deletions, subs, top_n: int = 10):
     print(f"\n{'='*60}")
-    print(f"  {chrom}  —  {len(positions):,} positions with signal")
+    print(f"  {chrom} [{strand}]  —  {len(positions):,} positions with signal")
     print(f"{'='*60}")
     print(f"  Max coverage:       {coverage.max():>10,}")
     print(f"  Total truncations:  {truncations.sum():>10,}")
@@ -636,7 +756,7 @@ def print_summary(chrom: str, positions, coverage, truncations, deletions, subs,
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
-        description='Clink pileup: scan BAM → per-position signal arrays (.npz)')
+        description='Clink pileup: scan BAM → per-position strand-aware signal arrays (.npz)')
     parser.add_argument('bam',
         help='Sorted, indexed BAM file (output of clink collapse)')
     parser.add_argument('--out', default=None,
@@ -677,10 +797,15 @@ if __name__ == '__main__':
         if result is None:
             print(f"  {chrom}: no signal", file=sys.stderr)
             continue
-        positions, coverage, truncations, deletions, subs = result
-        chrom_data[chrom] = (positions, coverage, truncations, deletions, subs)
+        chrom_data[chrom] = result
         if args.summary:
-            print_summary(chrom, positions, coverage, truncations, deletions, subs,
-                          top_n=args.top)
+            for strand_key in ('fwd', 'rev'):
+                strand_arr = result.get(strand_key)
+                if strand_arr is None:
+                    continue
+                positions, coverage, truncations, deletions, subs = strand_arr
+                strand_char = '+' if strand_key == 'fwd' else '-'
+                print_summary(chrom, strand_char, positions, coverage,
+                              truncations, deletions, subs, top_n=args.top)
 
     save_pileup(chrom_data, out_path)
