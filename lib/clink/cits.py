@@ -1,30 +1,30 @@
 #!/usr/bin/env python3
 """
-Clink cits.py — Crosslink-Induced Truncation Sites
+Clink cits.py — Crosslink-Induced Truncation Sites (strand-aware)
 
-Calls statistically significant RT truncation sites from a sorted,
-deduplicated BAM. Replaces CTK CITS.pl in the CLIPittyClip pipeline.
+Calls statistically significant RT truncation sites from a pileup.npz or BAM.
+Processes forward (+) and reverse (-) strand independently.
 
 Algorithm:
-  1. Scan BAM → per-position truncation counts and coverage (pileup.py)
-  2. Estimate genome-wide background truncation rate λ (excluding top 1% sites)
-  3. Binomial test at every position: P(X ≥ observed | Binomial(coverage, λ))
+  1. Load stranded pileup (pileup.py) — separate arrays per strand
+  2. Estimate genome-wide background truncation rate λ from both strands combined
+     (excluding top 1% signal positions to avoid inflating background)
+  3. Binomial test at every position per strand: P(X ≥ observed | Binomial(cov, λ))
   4. Benjamini-Hochberg FDR correction
-  5. Write BED6+ output
+  5. Write BED6+ output with correct strand column (+/-)
 
 Truncation site convention (matching CTK):
-  The crosslink nucleotide = last base synthesized by RT = one position
-  upstream of the read's 5' end:
-    Forward read: reference_start - 1
-    Reverse read: reference_end
+  Forward read: crosslink = reference_start - 1
+  Reverse read: crosslink = reference_end
 
 Output:
   {prefix}_truncations.bed
     #chrom  start  end  name  score  strand  signal  coverage  fraction  pvalue  qvalue
     score = min(-log10(qvalue) * 100, 1000)   BED-compatible 0-1000
+    strand = '+' (fwd reads) or '-' (rev reads)
 
 Usage:
-    python cits.py --bam sample_dedup.bam --prefix results/SAMPLE
+    python cits.py --pileup sample_pileup.npz --prefix results/SAMPLE
     python cits.py --bam sample_dedup.bam --prefix results/SAMPLE --chrom chr1
 """
 
@@ -46,13 +46,14 @@ def run_cits(pileup_path:  str   = None,
              max_nh:       int   = 1,
              min_coverage: int   = 5,
              min_fraction: float = 0.05,
+             min_signal:   int   = 1,
              fdr:          float = 0.05,
              verbose:      bool  = True):
     """
     End-to-end CITS: pileup (.npz) or BAM → significant truncation sites BED.
 
-    Prefer --pileup (pre-computed .npz from clink pileup) to avoid re-scanning
-    the BAM. Falls back to --bam for standalone use.
+    Strand-aware: fwd (+) and rev (-) strand signals are tested independently
+    using a shared genome-wide background rate (computed across both strands).
 
     Args:
         pileup_path  : .npz file from clink pileup (preferred)
@@ -63,6 +64,8 @@ def run_cits(pileup_path:  str   = None,
         max_nh       : max NH tag — only used with --bam
         min_coverage : minimum coverage to test a position
         min_fraction : minimum raw truncation fraction pre-filter
+        min_signal   : minimum raw truncation read count at a position
+                       (default 1 = no extra filter)
         fdr          : Benjamini-Hochberg FDR threshold
         verbose      : print progress to stderr
     """
@@ -76,7 +79,7 @@ def run_cits(pileup_path:  str   = None,
         prefix = stem.replace('_pileup', '')
 
     print(f"\nClink cits  |  {src_name}", file=sys.stderr)
-    print(f"  min_cov={min_coverage}  min_frac={min_fraction}  fdr={fdr}",
+    print(f"  min_cov={min_coverage}  min_frac={min_fraction}  min_signal={min_signal}  fdr={fdr}",
           file=sys.stderr)
 
     # --- Load pileup data ---
@@ -87,73 +90,88 @@ def run_cits(pileup_path:  str   = None,
         pileups = scan_bam(bam_path, chrom=chrom, min_mapq=min_mapq,
                            max_nh=max_nh, verbose=verbose)
         chrom_data_full = {}
-        for c, strand_pileups in pileups.items():
-            chrom_data_full[c] = {}
-            for s_label, pileup in strand_pileups.items():
-                result = to_arrays(pileup)
-                if result is None:
-                    continue
-                positions, coverage, truncations, deletions, subs = result
-                chrom_data_full[c][s_label] = (positions, coverage, truncations, deletions, subs)
-            if not chrom_data_full[c]:
-                del chrom_data_full[c]
+        for c, pileup in pileups.items():
+            result = to_arrays(pileup)
+            if result is None:
+                continue
+            chrom_data_full[c] = result
 
     # --- Filter to requested chrom if specified ---
     if chrom:
         chrom_data_full = {c: v for c, v in chrom_data_full.items() if c == chrom}
 
-    # --- Extract truncation signal, accumulate genome-wide (both strands) ---
-    # chrom_data: {chrom: {strand: (positions, coverage, truncations)}}
-    chrom_data = {}
-    g_cov, g_trunc = [], []
+    # --- Build strand-separated data, accumulate genome-wide for background ---
+    # chrom_fwd/chrom_rev: {chrom: (positions, coverage, truncations)}
+    chrom_fwd = {}
+    chrom_rev = {}
+    g_cov   = []   # combined both strands for background estimation
+    g_trunc = []
 
     for c, strands in chrom_data_full.items():
-        chrom_data[c] = {}
-        for s_label, arrays in strands.items():
-            positions, coverage, truncations = arrays[0], arrays[1], arrays[2]
-            chrom_data[c][s_label] = (positions, coverage, truncations)
+        fwd = strands.get('fwd')
+        rev = strands.get('rev')
+        if fwd is not None:
+            positions, coverage, truncations = fwd[0], fwd[1], fwd[2]
+            chrom_fwd[c] = (positions, coverage, truncations)
             g_cov.append(coverage)
             g_trunc.append(truncations)
-        if not chrom_data[c]:
-            del chrom_data[c]
+        if rev is not None:
+            positions, coverage, truncations = rev[0], rev[1], rev[2]
+            chrom_rev[c] = (positions, coverage, truncations)
+            g_cov.append(coverage)
+            g_trunc.append(truncations)
 
-    if not chrom_data:
+    if not chrom_fwd and not chrom_rev:
         print("  No signal found.", file=sys.stderr)
         return
 
-    # --- Genome-wide background rate ---
+    # --- Genome-wide background rate (both strands pooled) ---
     all_cov   = np.concatenate(g_cov)
     all_trunc = np.concatenate(g_trunc)
     lambda_trunc = estimate_background(all_trunc, all_cov, min_coverage)
 
-    print(f"\n  Background truncation rate (genome-wide):", file=sys.stderr)
+    print(f"\n  Background truncation rate (genome-wide, both strands):",
+          file=sys.stderr)
     print(f"    λ = {lambda_trunc:.6f}  "
           f"(1/{int(1/lambda_trunc) if lambda_trunc > 0 else '∞'} reads)",
           file=sys.stderr)
 
     if lambda_trunc <= 0:
-        print("  ERROR: background rate is zero — no testable positions.", file=sys.stderr)
+        print("  ERROR: background rate is zero — no testable positions.",
+              file=sys.stderr)
         return
 
-    # --- Open output file ---
+    # --- Test each strand per chromosome, write to single output BED ---
     out_path = f"{prefix}_truncations.bed"
-    total = 0
+    total_fwd = total_rev = 0
 
-    STRAND_CHAR = {'pos': '+', 'neg': '-'}
+    all_chroms = sorted(set(list(chrom_fwd.keys()) + list(chrom_rev.keys())))
+
     with open(out_path, 'w') as fh:
         fh.write(HEADER)
 
-        for c, strands in chrom_data.items():
-            for s_label, (positions, coverage, truncations) in strands.items():
-                strand_char = STRAND_CHAR.get(s_label, '.')
+        for c in all_chroms:
+            if c in chrom_fwd:
+                positions, coverage, truncations = chrom_fwd[c]
                 results = test_signal(
                     positions, truncations, coverage,
-                    lambda_trunc, min_coverage, min_fraction, fdr
-                )
-                write_bed(results, c, 'trunc', fh, strand=strand_char)
-                total += len(results)
+                    lambda_trunc, min_coverage, min_fraction, fdr,
+                    min_signal=min_signal)
+                write_bed(results, c, 'trunc', fh, strand='+')
+                total_fwd += len(results)
 
-    print(f"\n  Significant truncation sites (FDR < {fdr}): {total:,}", file=sys.stderr)
+            if c in chrom_rev:
+                positions, coverage, truncations = chrom_rev[c]
+                results = test_signal(
+                    positions, truncations, coverage,
+                    lambda_trunc, min_coverage, min_fraction, fdr,
+                    min_signal=min_signal)
+                write_bed(results, c, 'trunc', fh, strand='-')
+                total_rev += len(results)
+
+    total = total_fwd + total_rev
+    print(f"\n  Significant truncation sites (FDR < {fdr}): {total:,}  "
+          f"(+: {total_fwd:,}  -: {total_rev:,})", file=sys.stderr)
     print(f"  Output: {out_path}", file=sys.stderr)
     return out_path
 
@@ -164,7 +182,7 @@ def run_cits(pileup_path:  str   = None,
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
-        description='Clink cits: call RT truncation sites from a pileup or BAM')
+        description='Clink cits: call RT truncation sites (strand-aware) from a pileup or BAM')
 
     src = parser.add_mutually_exclusive_group(required=True)
     src.add_argument('--pileup',
@@ -184,6 +202,8 @@ if __name__ == '__main__':
         help='Minimum coverage to test a position (default: 5)')
     parser.add_argument('--min-frac', type=float, default=0.05,
         help='Minimum raw truncation fraction pre-filter (default: 0.05)')
+    parser.add_argument('--min-signal', type=int, default=1,
+        help='Minimum raw truncation read count at a position (default: 1 = no extra filter)')
     parser.add_argument('--fdr', type=float, default=0.05,
         help='BH FDR threshold (default: 0.05)')
 
@@ -198,5 +218,6 @@ if __name__ == '__main__':
         max_nh       = args.nh,
         min_coverage = args.min_cov,
         min_fraction = args.min_frac,
+        min_signal   = args.min_signal,
         fdr          = args.fdr,
     )

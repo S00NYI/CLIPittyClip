@@ -16,7 +16,7 @@ Algorithm:
 Output columns:
     chrom  start  end  name  score  strand  signal  coverage  fraction  pvalue  qvalue
     score = min(-log10(qvalue) * 100, 1000)   BED-compatible 0–1000 range
-    strand = '+' (forward) or '-' (reverse)
+    strand = '+' or '-'  (from read strand; '.' for legacy unstranded pileups)
 
 Usage:
     python stats.py sample.bam --chrom chr1
@@ -111,12 +111,14 @@ def test_signal(positions:        np.ndarray,
                 background_rate:  float,
                 min_coverage:     int   = 5,
                 min_fraction:     float = 0.05,
-                fdr_threshold:    float = 0.05) -> list:
+                fdr_threshold:    float = 0.05,
+                min_signal:       int   = 1) -> list:
     """
     Binomial test + BH correction for one signal type.
 
     Pre-filters:
       - coverage >= min_coverage          (too few reads → unreliable)
+      - signal >= min_signal              (minimum raw count of mutation/truncation reads)
       - signal / coverage >= min_fraction (must be above a raw fraction floor)
 
     Returns list of dicts for significant sites, sorted by q-value then
@@ -131,7 +133,7 @@ def test_signal(positions:        np.ndarray,
 
     testable = (
         (coverage >= min_coverage) &
-        (signal > 0) &
+        (signal >= max(1, min_signal)) &
         (fracs >= min_fraction)
     )
 
@@ -177,16 +179,17 @@ HEADER = (
     "signal\tcoverage\tfraction\tpvalue\tqvalue\n"
 )
 
-def write_bed(results: list, chrom: str, signal_label: str, fh, strand: str = '.'):
+def write_bed(results: list, chrom: str, signal_label: str, fh,
+              strand: str = '.'):
     """
     Write significant sites in BED6 + extra columns.
     score = min(-log10(qvalue) * 100, 1000)  — BED-compatible 0–1000 integer
-    strand: '+' or '-' (or '.' for legacy unstranded callers)
+    strand: '+', '-', or '.' (default '.' for legacy unstranded pileups)
     """
     for r in results:
         pos   = r['pos']
         score = min(int(-np.log10(max(r['qvalue'], 1e-300)) * 100), 1000)
-        name  = f"{signal_label}:{chrom}:{pos}"
+        name  = f"{signal_label}:{chrom}:{pos}:{strand}"
         fh.write(
             f"{chrom}\t{pos}\t{pos+1}\t{name}\t{score}\t{strand}\t"
             f"{r['signal']}\t{r['coverage']}\t{r['fraction']:.4f}\t"
@@ -226,29 +229,28 @@ def run_analysis(bam_path:     str,
     pileups = scan_bam(bam_path, chrom=chrom, min_mapq=min_mapq,
                        max_nh=max_nh, verbose=verbose)
 
-    # --- Convert to arrays, accumulate genome-wide per strand ---
-    # chrom_data: {chrom: {strand: (positions, coverage, truncations, deletions, subs)}}
+    # --- Convert to arrays, accumulate genome-wide (both strands) ---
     chrom_data = {}
     g_cov, g_trunc, g_del = [], [], []
     g_subs     = {}   # sub_type -> [signal arrays per (chrom, strand)]
-    g_subs_cov = {}   # sub_type -> [coverage arrays for same (chrom, strand)s
+    g_subs_cov = {}   # sub_type -> [coverage arrays for same (chrom, strand)s]
 
-    for c, strand_pileups in pileups.items():
+    for c, pileup in pileups.items():
+        result = to_arrays(pileup)
+        if result is None:
+            continue
         chrom_data[c] = {}
-        for s_label, pileup in strand_pileups.items():
-            result = to_arrays(pileup)
-            if result is None:
+        for strand_key, strand_arr in result.items():
+            if strand_arr is None:
                 continue
-            positions, coverage, truncations, deletions, subs = result
-            chrom_data[c][s_label] = (positions, coverage, truncations, deletions, subs)
-
+            positions, coverage, truncations, deletions, subs = strand_arr
+            chrom_data[c][strand_key] = (positions, coverage, truncations, deletions, subs)
             g_cov.append(coverage)
             g_trunc.append(truncations)
             g_del.append(deletions)
             for sub_type, arr in subs.items():
                 g_subs.setdefault(sub_type, []).append(arr)
                 g_subs_cov.setdefault(sub_type, []).append(coverage)
-        # Drop chrom entry if no strand had signal
         if not chrom_data[c]:
             del chrom_data[c]
 
@@ -301,10 +303,10 @@ def run_analysis(bam_path:     str,
     totals.update({st: 0 for st in λ_subs})
 
     # --- Per-chromosome, per-strand testing ---
-    STRAND_CHAR = {'pos': '+', 'neg': '-'}
+    STRAND_CHAR = {'fwd': '+', 'rev': '-'}
     for c, strands in chrom_data.items():
-        for s_label, (positions, coverage, truncations, deletions, subs) in strands.items():
-            strand_char = STRAND_CHAR.get(s_label, '.')
+        for strand_key, (positions, coverage, truncations, deletions, subs) in strands.items():
+            strand_char = STRAND_CHAR.get(strand_key, '.')
 
             # Truncation sites (CITS-equivalent)
             t_res = test_signal(positions, truncations, coverage,

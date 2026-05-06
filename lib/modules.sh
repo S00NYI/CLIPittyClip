@@ -2933,11 +2933,11 @@ run_clink_collapse() {
 run_clink_pileup() {
     local bam_in="$1"
     local npz_out="$2"
-    local threads="${3:-${THREADS:-1}}"
+    local threads="${3:-1}"
     local clink_dir
     clink_dir=$(_clink_dir)
 
-    log_info "Clink pileup: scanning BAM → $npz_out (threads: $threads)"
+    log_info "Clink pileup: scanning BAM → $npz_out (threads=$threads)"
 
     _clink_exec python3 "$clink_dir/pileup.py" \
         "$bam_in" \
