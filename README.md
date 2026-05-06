@@ -32,15 +32,49 @@ A comprehensive, single-command CLIP-seq analysis pipeline from raw FASTQ to pea
   <img src="flowchart.png" alt="CLIPittyClip Pipeline Flow" width="800">
 </p>
 
-CLIPittyClip runs the complete CLIP-seq stack in a single command:
+CLIPittyClip runs the complete CLIP-seq stack in a single command, from raw FASTQ to crosslink sites and peak matrices. The pipeline has three stages: shared preprocessing, two parallel crosslink analysis tracks (Clink and CTK), and shared downstream bedgraph and peak calling.
 
-- **Preprocessing** — exact-sequence deduplication, demultiplexing, adapter trimming (fastp)
-- **Alignment** — STAR (splice-aware, default) or Bowtie2
-- **Coverage** — RPM-normalized strand-specific bedgraphs; group-averaged tracks
-- **Peak calling** — HOMER (default) or CTK `tag2peak.pl`; per-sample and aggregated
-- **Crosslink sites** — CITS (truncation) and CIMS (deletion/substitution) via:
-  - **CTK** — `parseAlignment.pl` + `CITS.pl` / `CIMS.pl` (Perl, standard)
-  - **Clink** — `pileup.py` + `cits.py` / `cims.py` (Python, v3.3 new)
+### Stage 1 — Preprocessing (shared)
+
+| Step | Tool | Description |
+|------|------|-------------|
+| Global deduplication | `fastq_collapse_hash.py` | Exact-sequence PCR dedup before alignment — no genome required |
+| Adapter trim + QC | fastp | 3′ adapter removal, quality filtering, HTML/JSON QC report |
+| ncRNA pre-filter | Bowtie2 | Optional: remove rRNA/tRNA/snRNA reads before genome alignment |
+| Genome alignment | STAR / Bowtie2 | Splice-aware (STAR default) with crosslink-tuned mismatch and gap penalties |
+
+Input accepted as a single FASTQ (`-i`), a pooled library with barcodes (`-i` + `-b`), or a directory of pre-demultiplexed files (`-d`).
+
+### Stage 2 — Crosslink site analysis (two parallel tracks)
+
+Both tracks run from the same aligned BAM and can be enabled simultaneously for direct comparison (`--run-cims-cits --run-clink`).
+
+**Clink** (`--run-clink` — recommended, v3.3):
+
+| Step | Tool | Output |
+|------|------|--------|
+| PCR dedup | `umi_tools dedup` | Deduplicated BAM |
+| Pileup | `pileup.py` | Strand-separated per-position arrays (`.npz`) — single BAM scan shared by CITS and CIMS |
+| Truncation sites (CITS) | `cits.py` | Significant RT stop sites, binomial + BH FDR, `+`/`−` strand BED |
+| Mutation sites (CIMS) | `cims.py` | Deletion sites + all 12 substitution types, `+`/`−` strand BED |
+
+**CTK** (`--run-cims-cits` — standard Perl-based):
+
+| Step | Tool | Output |
+|------|------|--------|
+| PCR dedup | `tag2collapse.pl` | Collapsed BED |
+| Mutation extraction | `parseAlignment.pl` | Per-read mutation file |
+| Truncation sites (CITS) | `CITS.pl` | Cluster-based RT stop sites |
+| Mutation sites (CIMS) | `CIMS.pl` | Deletion and substitution sites (permutation FDR) |
+
+### Stage 3 — Bedgraph and peak calling (shared)
+
+| Step | Description |
+|------|-------------|
+| Bedgraph | RPM-normalized strand-specific bedgraphs per sample |
+| Peak calling | HOMER (default) or CTK `tag2peak.pl`; per-sample and group-aggregated |
+| Peak matrix | 54+ metrics per peak: raw counts, RPM, coverage sum/mean/max |
+| Group tracks | `-g groups.txt` averages bedgraphs and aggregates peaks across replicates |
 
 ---
 
