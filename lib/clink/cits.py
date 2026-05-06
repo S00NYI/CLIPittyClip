@@ -46,6 +46,7 @@ def run_cits(pileup_path:  str   = None,
              max_nh:       int   = 1,
              min_coverage: int   = 5,
              min_fraction: float = 0.05,
+             min_signal:   int   = 1,
              fdr:          float = 0.05,
              verbose:      bool  = True):
     """
@@ -63,6 +64,8 @@ def run_cits(pileup_path:  str   = None,
         max_nh       : max NH tag — only used with --bam
         min_coverage : minimum coverage to test a position
         min_fraction : minimum raw truncation fraction pre-filter
+        min_signal   : minimum raw truncation read count at a position
+                       (default 1 = no extra filter)
         fdr          : Benjamini-Hochberg FDR threshold
         verbose      : print progress to stderr
     """
@@ -76,7 +79,7 @@ def run_cits(pileup_path:  str   = None,
         prefix = stem.replace('_pileup', '')
 
     print(f"\nClink cits  |  {src_name}", file=sys.stderr)
-    print(f"  min_cov={min_coverage}  min_frac={min_fraction}  fdr={fdr}",
+    print(f"  min_cov={min_coverage}  min_frac={min_fraction}  min_signal={min_signal}  fdr={fdr}",
           file=sys.stderr)
 
     # --- Load pileup data ---
@@ -152,7 +155,8 @@ def run_cits(pileup_path:  str   = None,
                 positions, coverage, truncations = chrom_fwd[c]
                 results = test_signal(
                     positions, truncations, coverage,
-                    lambda_trunc, min_coverage, min_fraction, fdr)
+                    lambda_trunc, min_coverage, min_fraction, fdr,
+                    min_signal=min_signal)
                 write_bed(results, c, 'trunc', fh, strand='+')
                 total_fwd += len(results)
 
@@ -160,7 +164,8 @@ def run_cits(pileup_path:  str   = None,
                 positions, coverage, truncations = chrom_rev[c]
                 results = test_signal(
                     positions, truncations, coverage,
-                    lambda_trunc, min_coverage, min_fraction, fdr)
+                    lambda_trunc, min_coverage, min_fraction, fdr,
+                    min_signal=min_signal)
                 write_bed(results, c, 'trunc', fh, strand='-')
                 total_rev += len(results)
 
@@ -197,6 +202,8 @@ if __name__ == '__main__':
         help='Minimum coverage to test a position (default: 5)')
     parser.add_argument('--min-frac', type=float, default=0.05,
         help='Minimum raw truncation fraction pre-filter (default: 0.05)')
+    parser.add_argument('--min-signal', type=int, default=1,
+        help='Minimum raw truncation read count at a position (default: 1 = no extra filter)')
     parser.add_argument('--fdr', type=float, default=0.05,
         help='BH FDR threshold (default: 0.05)')
 
@@ -211,5 +218,6 @@ if __name__ == '__main__':
         max_nh       = args.nh,
         min_coverage = args.min_cov,
         min_fraction = args.min_frac,
+        min_signal   = args.min_signal,
         fdr          = args.fdr,
     )

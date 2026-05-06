@@ -84,6 +84,7 @@ def run_cims(pileup_path:  str   = None,
              max_nh:       int   = 1,
              min_coverage: int   = 5,
              min_fraction: float = 0.05,
+             min_signal:   int   = 1,
              fdr:          float = 0.05,
              no_subs:      bool  = False,
              sub_types:    set   = None,
@@ -103,6 +104,8 @@ def run_cims(pileup_path:  str   = None,
         max_nh       : max NH tag — only used with --bam
         min_coverage : minimum coverage to test a position
         min_fraction : minimum raw signal fraction pre-filter
+        min_signal   : minimum raw mutation/deletion read count at a position
+                       (equivalent to CTK CIMS.pl -m; default 1 = no extra filter)
         fdr          : Benjamini-Hochberg FDR threshold
         no_subs      : if True, skip substitution calling entirely
         sub_types    : set of (ref, alt) tuples to output; None = all observed
@@ -118,7 +121,7 @@ def run_cims(pileup_path:  str   = None,
         prefix = stem.replace('_pileup', '')
 
     print(f"\nClink cims  |  {src_name}", file=sys.stderr)
-    print(f"  min_cov={min_coverage}  min_frac={min_fraction}  fdr={fdr}",
+    print(f"  min_cov={min_coverage}  min_frac={min_fraction}  min_signal={min_signal}  fdr={fdr}",
           file=sys.stderr)
     if no_subs:
         print(f"  Mode: deletions only", file=sys.stderr)
@@ -227,7 +230,8 @@ def run_cims(pileup_path:  str   = None,
                 # Deletions
                 if lambda_del > 0:
                     d_res = test_signal(positions, deletions, coverage,
-                                        lambda_del, min_coverage, min_fraction, fdr)
+                                        lambda_del, min_coverage, min_fraction, fdr,
+                                        min_signal=min_signal)
                     write_bed(d_res, c, 'del', fh_del, strand=strand_char)
                     totals['del'] += len(d_res)
 
@@ -239,7 +243,8 @@ def run_cims(pileup_path:  str   = None,
                     if lam <= 0:
                         continue
                     s_res = test_signal(positions, subs[sub_type], coverage,
-                                        lam, min_coverage, min_fraction, fdr)
+                                        lam, min_coverage, min_fraction, fdr,
+                                        min_signal=min_signal)
                     write_bed(s_res, c, f"{sub_type[0]}to{sub_type[1]}",
                               fh_sub, strand=strand_char)
                     totals[sub_type] = totals.get(sub_type, 0) + len(s_res)
@@ -282,6 +287,9 @@ if __name__ == '__main__':
         help='Minimum coverage to test a position (default: 5)')
     parser.add_argument('--min-frac', type=float, default=0.05,
         help='Minimum raw signal fraction pre-filter (default: 0.05)')
+    parser.add_argument('--min-signal', type=int, default=1,
+        help='Minimum raw mutation/deletion read count at a position '
+             '(equivalent to CTK CIMS.pl -m; default: 1 = no extra filter)')
     parser.add_argument('--fdr', type=float, default=0.05,
         help='BH FDR threshold (default: 0.05)')
     parser.add_argument('--no-subs', action='store_true',
@@ -304,6 +312,7 @@ if __name__ == '__main__':
         max_nh       = args.nh,
         min_coverage = args.min_cov,
         min_fraction = args.min_frac,
+        min_signal   = args.min_signal,
         fdr          = args.fdr,
         no_subs      = args.no_subs,
         sub_types    = requested_subs,

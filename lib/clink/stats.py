@@ -111,12 +111,14 @@ def test_signal(positions:        np.ndarray,
                 background_rate:  float,
                 min_coverage:     int   = 5,
                 min_fraction:     float = 0.05,
-                fdr_threshold:    float = 0.05) -> list:
+                fdr_threshold:    float = 0.05,
+                min_signal:       int   = 1) -> list:
     """
     Binomial test + BH correction for one signal type.
 
     Pre-filters:
       - coverage >= min_coverage          (too few reads → unreliable)
+      - signal >= min_signal              (minimum raw count of mutation/truncation reads)
       - signal / coverage >= min_fraction (must be above a raw fraction floor)
 
     Returns list of dicts for significant sites, sorted by q-value then
@@ -131,7 +133,7 @@ def test_signal(positions:        np.ndarray,
 
     testable = (
         (coverage >= min_coverage) &
-        (signal > 0) &
+        (signal >= max(1, min_signal)) &
         (fracs >= min_fraction)
     )
 
