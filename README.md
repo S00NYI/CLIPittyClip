@@ -5,7 +5,7 @@
 # CLIPittyClip: Modern CLIP-seq Analysis Pipeline
 **Version 3.3.0**
 
-A comprehensive, single-command CLIP-seq analysis pipeline from raw FASTQ to peaks and crosslink sites. Supports iCLIP, eCLIP, and PAR-CLIP protocols.
+A comprehensive, single-command CLIP-seq analysis pipeline from raw FASTQ to peaks and crosslink sites. Supports iCLIP, irCLIP, eCLIP, and related variant protocols.
 
 ---
 
@@ -38,7 +38,7 @@ CLIPittyClip runs the complete CLIP-seq stack in a single command. All three sta
 2. **Crosslink sites** — two parallel tracks from the same BAM:
    - **Clink** (`--run-clink`, v3.3): `umi_tools` dedup → `pileup.py` → strand-aware CITS + CIMS (Python, BH FDR)
    - **CTK** (`--run-cims-cits`): `tag2collapse.pl` → `parseAlignment.pl` → `CITS.pl` + `CIMS.pl` (Perl, permutation FDR)
-3. **Peaks** — RPM bedgraphs, HOMER or CTK peak calling, peak matrix with 54+ metrics; group averaging with `-g`
+3. **Peaks** — RPM bedgraphs, HOMER or CTK peak calling, consolidated peak matrix, and grouped averaging for downstream analysis and visualization
 
 ---
 
