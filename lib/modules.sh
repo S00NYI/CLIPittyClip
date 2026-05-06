@@ -94,6 +94,7 @@ function run_demultiplexing {
     local input_fastq="$1"
     local barcode_file="$2"
     local run_sample_size="$3"
+    local demux_out="${4:-demux_fastq}"
     # Note: dedup_mode parameter ignored - dedup is now handled by caller
     local mismatches="${DEMUX_MISMATCHES:-1}" # Default to 1 if unset/passed global
 
@@ -138,17 +139,18 @@ function run_demultiplexing {
     log_info "Calculated cutadapt error rate: $error_rate ($mismatches errors in ${bc_len}bp)"
 
     # Create demux output directory
-    mkdir -p demux_fastq
+    mkdir -p "$demux_out"
     
     # Convert barcodes for cutadapt
-    local fasta_barcodes="barcodes.fasta"
+    local fasta_barcodes="${demux_out}/barcodes.fasta"
     awk '{print ">"$1"\n"$2}' "$barcode_file" > "$fasta_barcodes"
 
     local cmd="cutadapt \
         -e $error_rate --no-indels \
         -m 1 \
+        --action=none \
         -g file:$fasta_barcodes \
-        -o \"demux_fastq/{name}.fastq.gz\" \
+        -o \"$demux_out/{name}.fastq\" \
         $work_input \
         -j ${THREADS:-1}"
     
@@ -156,12 +158,15 @@ function run_demultiplexing {
     execute_cmd "$cmd"
 
     # Check outputs
-    count=$(ls demux_fastq/*.fastq.gz 2>/dev/null | wc -l)
+    count=$(ls "$demux_out"/*.fastq 2>/dev/null | wc -l)
     if [ "$count" -eq 0 ]; then
         log_error "Demultiplexing failed. No output files created."
         exit 1
     fi
-    log_info "Demultiplexing complete. Created $count sample files in 'demux_fastq/'."
+    log_info "Demultiplexing complete. Created $count sample files in '$demux_out/'."
+
+    # Cleanup barcodes FASTA (no longer needed after demux)
+    rm -f "$fasta_barcodes"
     
     # Cleanup Deduplicated Temp File if it exists
     if [[ "$work_input" != "$input_fastq" ]] && [[ -f "$work_input" ]]; then
@@ -170,7 +175,114 @@ function run_demultiplexing {
     fi
 }
 
-# Filter BAM to canonical chromosomes only (chr1-22, X, Y, M)
+# run_geo_demux — GEO mode: raw barcode-based splitting, no read modification
+# Splits pooled FASTQ by barcode (cutadapt --action=none) and writes gzipped
+# per-sample files. No dedup, no fastp. Reads written exactly as received.
+# Barcode is found by cutadapt's unanchored 5' search, which tolerates a UMI
+# prefix of UMI_LEN bases before the barcode (same behavior as standard demux).
+#
+# Args: $1 = input_fastq  (.fastq.gz or .fastq)
+#       $2 = barcode_file (name<TAB>sequence format)
+#       $3 = out_dir      (output directory for split files)
+#       $4 = umi_offset   (UMI length; informational only for logging; default: 0)
+#       $5 = allowed_mm   (mismatches; default: 1)
+run_geo_demux() {
+    local input_fastq="$1"
+    local barcode_file="$2"
+    local out_dir="$3"
+    local umi_offset="${4:-0}"
+    local allowed_mm="${5:-1}"
+
+    log_info "GEO demux: raw split (no read modification)"
+    log_info "UMI offset: ${umi_offset}bp | Mismatches: $allowed_mm"
+
+    # Barcode collision check
+    local checker_script="${SCRIPT_DIR}/check_barcodes.sh"
+    if [[ -x "$checker_script" ]]; then
+        "$checker_script" -f "$barcode_file" -m "$allowed_mm"
+        if [[ $? -ne 0 ]]; then
+            log_error "Barcode collisions detected. Aborting."
+            exit 1
+        fi
+        log_info "Barcode safety check PASSED."
+    fi
+
+    # Calculate cutadapt error rate
+    local first_seq
+    first_seq=$(awk '!/^#/{print $2; exit}' "$barcode_file")
+    local bc_len=${#first_seq}
+    local error_rate
+    error_rate=$(awk "BEGIN {print $allowed_mm / $bc_len}")
+    [[ "$allowed_mm" -eq 0 ]] && error_rate=0
+    log_info "Cutadapt error rate: $error_rate ($allowed_mm errors in ${bc_len}bp)"
+
+    mkdir -p "$out_dir"
+
+    # Convert barcodes to FASTA for cutadapt
+    local fasta_barcodes="${out_dir}/.barcodes_geo.fasta"
+    awk '!/^#/{print ">"$1"\n"$2}' "$barcode_file" > "$fasta_barcodes"
+
+    # Run cutadapt: --action=none preserves reads exactly as received
+    # Output is gzipped (.fastq.gz) since these are final GEO deposit files
+    local cmd="cutadapt \
+        -e $error_rate --no-indels \
+        -m 1 \
+        --action=none \
+        -g file:$fasta_barcodes \
+        -o \"${out_dir}/{name}.fastq.gz\" \
+        $input_fastq \
+        -j ${THREADS:-1}"
+
+    log_info "Running GEO demux..."
+    execute_cmd "$cmd"
+    local demux_exit=$?
+    rm -f "$fasta_barcodes"
+
+    local count
+    count=$(ls "${out_dir}"/*.fastq.gz 2>/dev/null | wc -l)
+    if [[ $demux_exit -ne 0 || "$count" -eq 0 ]]; then
+        log_error "GEO demux failed. No output files created."
+        exit 1
+    fi
+    log_info "GEO demux complete. Created $count files in ${out_dir}/"
+
+    log_info "Calculating MD5 checksums for GEO submission..."
+    if command -v md5sum >/dev/null 2>&1; then
+        (cd "${out_dir}" && md5sum *.fastq.gz > md5sums.txt)
+    elif command -v md5 >/dev/null 2>&1; then
+        (cd "${out_dir}" && md5 -r *.fastq.gz > md5sums.txt)
+    else
+        log_warning "Neither md5sum nor md5 found. Skipping MD5 calculation."
+    fi
+
+    # Print summary table
+    local total_reads=0
+    for f in "${out_dir}"/*.fastq.gz; do
+        [[ -f "$f" ]] || continue
+        local lines
+        lines=$(gzip -dc "$f" | wc -l)
+        total_reads=$((total_reads + lines / 4))
+    done
+
+    echo ""
+    printf "  %-25s %-12s %s\n" "Sample" "Reads" "% of Total"
+    echo "  -----------------------------------------------"
+    for f in "${out_dir}"/*.fastq.gz; do
+        [[ -f "$f" ]] || continue
+        local sname
+        sname=$(basename "$f" .fastq.gz)
+        local lines
+        lines=$(gzip -dc "$f" | wc -l)
+        local count=$((lines / 4))
+        local pct
+        pct=$(awk "BEGIN {printf \"%.1f\", ($total_reads > 0) ? ($count / $total_reads) * 100 : 0}")
+        printf "  %-25s %-12s %s%%\n" "$sname" "$count" "$pct"
+    done
+    echo "  -----------------------------------------------"
+    echo "  Total: $total_reads reads"
+}
+
+
 # Removes contigs like GL000220.1, KI270733.1, etc.
 # This reduces data size and improves downstream processing speed
 filter_canonical_chromosomes() {
@@ -202,292 +314,373 @@ filter_canonical_chromosomes() {
     fi
 }
 
-# Detect eCLIP UMI length from first read of FASTQ file
-# Returns the detected UMI length (e.g., 5 or 10)
-detect_eclip_umi_length() {
-    local input_fastq="$1"
-    local user_umi_len="${2:-0}"
-    
-    # Get first read header and extract UMI (before first colon)
+# ── Deduplication functions moved to lib/dedup.sh ───────────────────────────
+# run_dedup(), _fastq_collapse_core(), detect_eclip_umi_length(),
+# reformat_eclip_umi_to_sequence(), strip_eclip_barcode()
+# are defined in lib/dedup.sh, sourced by CLIPittyClip.sh directly.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── eCLIP Input Validation ────────────────────────────────────────────────────
+# validate_eclip_input — checks that the input FASTQ matches the expected eCLIP mode
+# Args: $1 = fastq_file (gzipped or plain)
+#       $2 = expected_mode ("pe" or "se")
+# Exits 1 with a clear error message on any mismatch.
+validate_eclip_input() {
+    local fastq_file="$1"
+    local expected_mode="$2"
+
+    log_info "Validating eCLIP input: $fastq_file (expected mode: $expected_mode)"
+
+    # --- Step 1: Read first 1000 headers ---
+    local headers
+    if [[ "$fastq_file" == *.gz ]]; then
+        headers=$(gzip -cd "$fastq_file" 2>/dev/null | awk 'NR%4==1' | head -1000)
+    else
+        headers=$(awk 'NR%4==1' "$fastq_file" | head -1000)
+    fi
+
+    if [[ -z "$headers" ]]; then
+        log_error "eCLIP input validation failed: could not read headers from $fastq_file"
+        exit 1
+    fi
+
+    # --- Step 2: Detect R1 vs R2 from Illumina comment field ---
+    local r1_count r2_count total_count
+    r1_count=$(echo "$headers" | awk '{n=split($0,a," "); if(n>1 && a[2]~/^1:N:/) count++} END{print count+0}')
+    r2_count=$(echo "$headers" | awk '{n=split($0,a," "); if(n>1 && a[2]~/^2:N:/) count++} END{print count+0}')
+    total_count=$(echo "$headers" | wc -l | tr -d ' ')
+
+    local detected_read_end=""
+    if [[ "$total_count" -gt 0 ]]; then
+        local r1_pct r2_pct
+        r1_pct=$(awk "BEGIN {printf \"%.0f\", ($r1_count / $total_count) * 100}")
+        r2_pct=$(awk "BEGIN {printf \"%.0f\", ($r2_count / $total_count) * 100}")
+        if [[ "$r1_pct" -ge 95 ]]; then
+            detected_read_end="1"
+        elif [[ "$r2_pct" -ge 95 ]]; then
+            detected_read_end="2"
+        fi
+    fi
+
+    if [[ -z "$detected_read_end" ]]; then
+        log_error "eCLIP input validation failed: could not determine R1 or R2 from read headers (checked $total_count headers; ${r1_count} matched 1:N:, ${r2_count} matched 2:N:). Headers must contain a standard Illumina comment field (e.g. 1:N:0:... or 2:N:0:...). Check your FASTQ source."
+        exit 1
+    fi
+    log_info "Detected read end: R${detected_read_end} (from ${total_count} headers)"
+
+    # --- Step 3: Detect UMI location from first header ---
     local first_header
-    if [[ "$input_fastq" == *.gz ]]; then
-        first_header=$(gunzip -c "$input_fastq" | head -1)
-    else
-        first_header=$(head -1 "$input_fastq")
-    fi
-    
-    # Parse: @UMI:REST_OF_ID -> extract UMI
-    local id_part="${first_header%% *}"  # Remove comment after space
-    local id_no_at="${id_part#@}"        # Remove leading @
-    local umi="${id_no_at%%:*}"          # Get part before first colon
-    local detected_len=${#umi}
-    
-    if [[ "$user_umi_len" -gt 0 && "$detected_len" -ne "$user_umi_len" ]]; then
-        log_warning "Detected UMI length ($detected_len) differs from specified ($user_umi_len). Using detected."
-    fi
-    
-    log_info "eCLIP UMI length detected: $detected_len nt"
-    echo "$detected_len"
-}
+    first_header=$(echo "$headers" | head -1)
+    local read_name="${first_header%% *}"   # everything before first space
+    local read_name_no_at="${read_name#@}"  # strip leading @
+    local token0="${read_name_no_at%%:*}"   # token before first colon
 
-# Reformat eCLIP: Move UMI from header to sequence (CTK documentation workflow)
-# This is required for correct fastq2collapse.pl behavior
-# Input:  @UMI:READ_ID
-#         SEQUENCE
-# Output: @READ_ID
-#         UMI+SEQUENCE (UMI prepended)
-#         +
-#         UMI_QUAL+QUAL (high quality prepended)
-reformat_eclip_umi_to_sequence() {
-    local input_fastq="$1"
-    local output_fastq="$2"
-    local umi_len="$3"
-    
-    log_info "Moving eCLIP UMI from header to sequence (CTK documentation workflow)..."
-    log_info "UMI length: $umi_len nt"
-    
-    # Generate quality string for UMI (I = Phred 40, high quality)
-    local umi_qual=$(printf 'I%.0s' $(seq 1 $umi_len))
-    
-    # Write to temp file first, then gzip (avoids macOS pipe buffering issues)
-    local temp_output="${output_fastq%.gz}"
-    
-    gunzip -c "$input_fastq" | awk -v umi_len="$umi_len" -v umi_qual="$umi_qual" '
-    BEGIN { OFS="" }
-    {
-        if (NR % 4 == 1) {
-            # Header line: @UMI:READ_ID COMMENT
-            n = split($0, parts, " ")
-            id_part = parts[1]
-            comment = ""
-            if (n > 1) { for (i=2; i<=n; i++) comment = comment " " parts[i] }
-            
-            id_no_at = substr(id_part, 2)
-            colon_pos = index(id_no_at, ":")
-            if (colon_pos > 0) {
-                umi = substr(id_no_at, 1, colon_pos-1)
-                rest = substr(id_no_at, colon_pos+1)
-                # Store UMI for sequence line, output clean header
-                saved_umi = umi
-                print "@" rest comment
-            } else {
-                saved_umi = ""
-                print $0
-            }
-        } else if (NR % 4 == 2) {
-            # Sequence line: prepend UMI
-            print saved_umi $0
-        } else if (NR % 4 == 0) {
-            # Quality line: prepend UMI quality scores
-            print umi_qual $0
-        } else {
-            # + line
-            print $0
-        }
-    }' > "$temp_output"
-    
-    # Explicitly gzip the temp file (creates .gz, removes original)
-    if [[ -s "$temp_output" ]]; then
-        gzip -f "$temp_output"
+    local umi_location="sequence"
+    local detected_umi_len=0
+    if [[ "${#token0}" -ge 5 && "${#token0}" -le 10 ]] && [[ "$token0" =~ ^[ACGTN]+$ ]]; then
+        umi_location="header_colon"
+        detected_umi_len="${#token0}"
+    elif [[ "$read_name_no_at" =~ _[ACGTN]{5,10}$ ]]; then
+        umi_location="header_underscore"
     fi
-    
-    if [[ -s "$output_fastq" ]]; then
-        log_info "UMI moved to sequence: $output_fastq"
-    else
-        log_error "UMI reformat failed - output is empty"
-        return 1
+    log_info "Detected UMI location: $umi_location"
+
+    # --- Step 4: Validate against expected mode ---
+    if [[ "$expected_mode" == "pe" ]]; then
+        if [[ "$detected_read_end" == "1" ]]; then
+            log_error "Input validation failed for --eclip pe: detected Read 1 input. PE eCLIP analysis requires Read 2, which contains the cross-link site at its 5' end. Please supply the corresponding R2 fastq file. See README section eCLIP-PE."
+            exit 1
+        fi
+        # detected_read_end == "2" from here
+        if [[ "$umi_location" == "sequence" ]]; then
+            log_error "Input validation failed for --eclip pe: detected R2 read with UMI in sequence (raw/pre-eclipdemux format). CLIPittyClip --eclip pe requires post-eclipdemux files where the UMI has been moved to the read header by eclipdemux. Please obtain the post-eclipdemux R2 fastq from ENCODE. See README section eCLIP-PE."
+            exit 1
+        elif [[ "$umi_location" == "header_underscore" ]]; then
+            log_error "Input validation failed for --eclip pe: detected umi_tools-style UMI in read header. CLIPittyClip --eclip pe expects post-eclipdemux format (UMI as colon-prefixed token, e.g. @NTACGTTGAT:...). Please use the post-eclipdemux file from ENCODE."
+            exit 1
+        fi
+        # PASS: R2, header_colon
+        log_info "Validation passed: PE eCLIP R2, post-eclipdemux format. UMI ${detected_umi_len}nt detected in read header."
+        return 0
+
+    elif [[ "$expected_mode" == "se" ]]; then
+        if [[ "$detected_read_end" == "2" ]]; then
+            log_error "Input validation failed for --eclip se: detected Read 2 input. --eclip se expects Read 1 from single-end eCLIP (seCLIP) sequencing. If you have paired-end eCLIP data, use --eclip pe with the R2 file instead."
+            exit 1
+        fi
+        # detected_read_end == "1" from here
+        if [[ "$umi_location" == "header_colon" ]]; then
+            log_error "Input validation failed for --eclip se: detected UMI in read header (eclipdemux-style). --eclip se expects raw seCLIP fastq where the UMI is still in the read sequence (first 10nt). Please supply the unprocessed fastq from ENCODE."
+            exit 1
+        elif [[ "$umi_location" == "header_underscore" ]]; then
+            log_error "Input validation failed for --eclip se: detected umi_tools-style UMI in read header. --eclip se expects raw seCLIP fastq where the UMI is still in the read sequence. Please supply the unprocessed fastq."
+            exit 1
+        fi
+        # PASS: R1, sequence
+        log_info "Validation passed: SE eCLIP R1, raw format. UMI assumed 10nt in sequence (seCLIP standard, Blue et al. 2022)."
+        return 0
     fi
 }
 
-# Strip UMI from sequence and attach to read ID after collapse
-# Uses CTK stripBarcode.pl to extract UMI from 5' end of sequence
-# Result: @READ_ID#count#UMI (CTK-compatible format)
-strip_eclip_barcode() {
-    local input_fastq="$1"
-    local output_fastq="$2"
-    local umi_len="$3"
-    
-    log_info "Stripping UMI from sequence with stripBarcode.pl (len=$umi_len)..."
-    
-    stripBarcode.pl -format fastq -len "$umi_len" "$input_fastq" - 2>> "${LOG_FILE}" | gzip > "$output_fastq"
-    
-    if [[ -s "$output_fastq" ]]; then
-        log_info "UMI stripped and attached to read ID: $output_fastq"
-    else
-        log_error "stripBarcode.pl failed - output is empty"
-        return 1
-    fi
-}
-
-# 1. Preprocessing with fastp
-run_preprocessing() {
+# ── eCLIP PE Preprocessing ───────────────────────────────────────────────────
+# run_eclip_pe_preprocessing — full PE eCLIP preprocessing chain
+# Expected input: post-eclipdemux R2 fastq (UMI in read header as colon-prefix token)
+# Flow: validate → UMI to seq → Deduplicate → Extract UMI → Adapter Trim
+# Args: $1 = input_file, $2 = output_prefix, $3 = threads, $4 = sample_size, $5 = umi_len (hint)
+run_eclip_pe_preprocessing() {
     local input_file="$1"
     local output_prefix="$2"
-    local umi_len="$3" 
-    local adapter3="$4"
-    local threads="$5"
-    local sample_size="$6"
-    local dedup_mode="$7"
-    local eclip_mode="${8:-false}"  # eCLIP mode: UMI in header, use adapter FASTA
-    
-    update_status_first "Preprocessing"
-    log_info "Starting preprocessing..."
-    
+    local threads="$3"
+    local sample_size="$4"
+    local umi_len="${5:-0}"
+
     # Get path to eCLIP adapter FASTA (same dir as this script)
     local script_dir="$(dirname "${BASH_SOURCE[0]}")"
     local eclip_adapters_fasta="${script_dir}/eclip_adapters.fa"
-    
-    #==========================================================================
-    # eCLIP MODE: CTK documentation workflow
-    # 1. UMI header → sequence
-    # 2. fastp (adapter trim, no --umi)
-    # 3. fastq2collapse.pl (collapse with UMI in sequence)
-    # 4. stripBarcode.pl (extract UMI to header after count)
-    #==========================================================================
-    if [[ "$eclip_mode" == "true" ]]; then
-        log_info "eCLIP mode: Preprocessing workflow (collapse before trim)"
-        
-        # Step 1: Detect and validate UMI length
-        local detected_umi_len=$(detect_eclip_umi_length "$input_file" "$umi_len")
-        umi_len="$detected_umi_len"
-        
-        # Step 2: Move UMI from header to sequence
-        update_status_first "eCLIP Preprocessing"
-        echo -ne "(UMI to Sequence"
-        local umi_seq_file="${output_prefix}_umi_in_seq.fastq.gz"
-        reformat_eclip_umi_to_sequence "$input_file" "$umi_seq_file" "$umi_len"
-        if [[ ! -s "$umi_seq_file" ]]; then
-            log_error "Failed to reformat eCLIP UMI to sequence"
-            exit 1
+
+    log_info "eCLIP PE mode: Expecting Read 2, post-eclipdemux format (UMI in read header)."
+    validate_eclip_input "$input_file" "pe"
+
+    log_info "eCLIP PE mode: Preprocessing workflow (validate → UMI to seq → Deduplicate → Extract UMI → Adapter Trim)"
+
+    # Step 1: Detect UMI length from header
+    local detected_umi_len
+    detected_umi_len=$(detect_eclip_umi_length "$input_file" "$umi_len")
+    umi_len="$detected_umi_len"
+
+    # Step 2: Move UMI from header to sequence (required before collapse)
+    update_status_first "eCLIP PE Preprocessing"
+    echo -ne "(UMI to Sequence"
+    local umi_seq_file="${output_prefix}_umi_in_seq.fastq.gz"
+    reformat_eclip_umi_to_sequence "$input_file" "$umi_seq_file" "$umi_len"
+    if [[ ! -s "$umi_seq_file" ]]; then
+        log_error "Failed to reformat eCLIP UMI to sequence"
+        exit 1
+    fi
+
+    # Step 3: Deduplicate (collapse exact duplicates with UMI in sequence)
+    echo -ne " → Deduplicating"
+    local collapsed_file="${output_prefix}_collapsed.fastq"
+    local collapsed_file_gz="${output_prefix}_collapsed.fastq.gz"
+    gzip -dc "$umi_seq_file" > "${output_prefix}_umi_temp.fastq"
+    _fastq_collapse_core "${output_prefix}_umi_temp.fastq" "$collapsed_file"
+    if [[ ! -s "$collapsed_file" ]]; then
+        log_error "Deduplication (eCLIP PE collapse) failed"
+        exit 1
+    fi
+    gzip -c "$collapsed_file" > "$collapsed_file_gz"
+    rm -f "${output_prefix}_umi_temp.fastq" "$collapsed_file" "$umi_seq_file"
+
+    # Step 4: Strip UMI from sequence, attach to header after count (CTK format: READ#count#UMI)
+    echo -ne " → Extract UMI"
+    local stripped_file="${output_prefix}_stripped.fastq.gz"
+    strip_eclip_barcode "$collapsed_file_gz" "$stripped_file" "$umi_len"
+    rm -f "$collapsed_file_gz"
+    if [[ ! -s "$stripped_file" ]]; then
+        log_error "stripBarcode.pl failed"
+        exit 1
+    fi
+
+    # Step 5: Adapter trimming with fastp (using all eCLIP inline-barcode + TruSeq R2 adapters)
+    echo -ne " → Adapter Trim) > "
+    local final_file="${output_prefix}_cleaned.fastq"
+    local fastp_cmd="fastp -i ${stripped_file} -o ${final_file} \
+        --thread ${threads} \
+        --adapter_fasta ${eclip_adapters_fasta} \
+        --length_required 20 \
+        --cut_tail --cut_tail_mean_quality 5 \
+        --overlap_len_require 1 \
+        --html ${output_prefix}_fastp.html \
+        --json ${output_prefix}_fastp.json"
+    if [ "$sample_size" -gt 0 ]; then fastp_cmd+=" --reads_to_process $sample_size"; fi
+    log_info "Running: $fastp_cmd"
+    execute_cmd "$fastp_cmd"
+    rm -f "$stripped_file"
+
+    if [[ ! -s "$final_file" ]]; then
+        log_error "fastp failed to create cleaned file"
+        exit 1
+    fi
+
+    log_info "eCLIP PE preprocessing complete: $final_file"
+    log_info "Read ID format: READ#count#UMI (CTK-compatible)"
+
+    # Export detected UMI length for downstream tag2collapse.pl
+    ECLIP_UMI_LEN="$umi_len"
+}
+
+# ── eCLIP SE Preprocessing ───────────────────────────────────────────────────
+# run_eclip_se_preprocessing — full SE eCLIP (seCLIP) preprocessing chain
+# Expected input: raw Read 1 fastq (UMI in first 10nt of sequence, Blue et al. 2022)
+# Flow: validate → Deduplicate → Extract UMI → Adapter Trim
+# Args: $1 = input_file, $2 = output_prefix, $3 = threads, $4 = sample_size
+run_eclip_se_preprocessing() {
+    local input_file="$1"
+    local output_prefix="$2"
+    local threads="$3"
+    local sample_size="$4"
+
+    # Hardcoded SE parameters (Blue et al. 2022 — not user-configurable)
+    local umi_len=10
+    local adapter_seq="AGATCGGAAGAGCACACGTCTGAACTCCAGTCAC"  # TruSeq Read 1 adapter
+
+    log_info "eCLIP SE mode: Expecting raw Read 1, seCLIP format (UMI in read sequence)."
+    log_info "SE eCLIP UMI length: ${umi_len}nt (seCLIP standard, Blue et al. 2022)"
+    log_info "SE eCLIP adapter: TruSeq R1 (${adapter_seq})"
+    validate_eclip_input "$input_file" "se"
+
+    log_info "eCLIP SE mode: Preprocessing workflow (validate → Deduplicate → Extract UMI → Adapter Trim)"
+
+    update_status_first "eCLIP SE Preprocessing"
+
+    # Step 1: Deduplicate (UMI is in sequence — collapse on full read including UMI prefix)
+    echo -ne "(Deduplicating"
+    local temp_fastq="${output_prefix}_se_temp.fastq"
+    local collapsed_plain="${output_prefix}_collapsed.fastq"
+    local collapsed_gz="${output_prefix}_collapsed.fastq.gz"
+    if [[ "$input_file" == *.gz ]]; then
+        gzip -dc "$input_file" > "$temp_fastq"
+    else
+        cp "$input_file" "$temp_fastq"
+    fi
+    _fastq_collapse_core "$temp_fastq" "$collapsed_plain"
+    if [[ ! -s "$collapsed_plain" ]]; then
+        log_error "Deduplication (eCLIP SE collapse) failed"
+        exit 1
+    fi
+    gzip -c "$collapsed_plain" > "$collapsed_gz"
+    rm -f "$temp_fastq" "$collapsed_plain"
+
+    # Step 2: Strip UMI from sequence, attach to header after count (CTK format: READ#count#UMI)
+    echo -ne " → Extract UMI"
+    local stripped_gz="${output_prefix}_stripped.fastq.gz"
+    strip_eclip_barcode "$collapsed_gz" "$stripped_gz" "$umi_len"
+    rm -f "$collapsed_gz"
+    if [[ ! -s "$stripped_gz" ]]; then
+        log_error "stripBarcode.pl failed"
+        exit 1
+    fi
+
+    # Step 3: Adapter trimming with fastp (TruSeq R1 adapter, passed as sequence string)
+    echo -ne " → Adapter Trim) > "
+    local final_file="${output_prefix}_cleaned.fastq"
+    local fastp_cmd="fastp -i ${stripped_gz} -o ${final_file} \
+        --thread ${threads} \
+        --adapter_sequence ${adapter_seq} \
+        --length_required 20 \
+        --cut_tail --cut_tail_mean_quality 5 \
+        --overlap_len_require 1 \
+        --html ${output_prefix}_fastp.html \
+        --json ${output_prefix}_fastp.json"
+    if [ "$sample_size" -gt 0 ]; then fastp_cmd+=" --reads_to_process $sample_size"; fi
+    log_info "Running: $fastp_cmd"
+    execute_cmd "$fastp_cmd"
+    rm -f "$stripped_gz"
+
+    if [[ ! -s "$final_file" ]]; then
+        log_error "fastp failed to create cleaned file"
+        exit 1
+    fi
+
+    log_info "eCLIP SE preprocessing complete: $final_file"
+    log_info "Read ID format: READ#count#UMI (CTK-compatible)"
+
+    # Export detected UMI length for downstream tag2collapse.pl
+    ECLIP_UMI_LEN="$umi_len"
+}
+
+# 1b. Adapter trimming and quality filtering with fastp (standard mode only)
+run_fastp() {
+    local input_file="$1"
+    local output_prefix="$2"
+    local umi_len="$3"
+    local adapter3="$4"
+    local threads="$5"
+    local sample_size="$6"
+    local bc_len="${7:-0}"
+    local spacer_len="${8:-0}"
+    local bc_first="${9:-false}"   # --bc-first: layout is [BC][UMI][sp][READ] not [UMI][BC][sp][READ]
+
+    local cleaned="${output_prefix}_cleaned.fastq"
+
+    update_status_first "Adapter Trimming"
+
+    # ── Common fastp quality / length flags ───────────────────────────────────
+    local qc_flags="--thread ${threads} --length_required 16 --average_qual 30"
+    local sample_flag=""
+    if [ "$sample_size" -gt 0 ]; then sample_flag="--reads_to_process $sample_size"; fi
+    local adapter_flag=""
+    if [ -n "$adapter3" ]; then adapter_flag="--adapter_sequence ${adapter3}"; fi
+
+    if [[ "$bc_first" == "true" ]]; then
+        # ── BC-first layout: [BC][UMI][spacer][READ] ─────────────────────────
+        # fastp --umi_loc=read1 always extracts from position 0, so if we ran
+        # UMI extraction on the raw read we would grab part of the barcode.
+        # Solution: two fastp passes.
+        #   Pass 1 — strip BC only  →  [UMI][spacer][READ]
+        #   Pass 2 — extract UMI, strip spacer, trim adapter  →  [READ]
+        log_info "BC-first mode: [BC($bc_len)][UMI($umi_len)][sp($spacer_len)][READ]"
+        log_info "  Pass 1: trim ${bc_len}nt barcode from 5' end"
+
+        local tmp="${output_prefix}_bcfirst_tmp.fastq"
+
+        local pass1="fastp -i ${input_file} -o ${tmp} \
+            ${qc_flags} \
+            --disable_adapter_trimming \
+            --html /dev/null --json /dev/null"
+        if [ "$bc_len" -gt 0 ]; then pass1+=" --trim_front1 ${bc_len}"; fi
+        if [ "$sample_size" -gt 0 ]; then pass1+=" $sample_flag"; fi
+
+        log_info "Running (pass 1): $pass1"
+        execute_cmd "$pass1"
+        if [ $? -ne 0 ] || [ ! -s "$tmp" ]; then
+            log_error "fastp BC-first pass 1 failed."
+            rm -f "$tmp"; exit 1
         fi
-        
-        # Step 3: Collapse exact duplicates FIRST (with UMI in sequence)
-        # This matches non-eCLIP flow where collapse happens before fastp
-        echo -ne " → Collapsing"
-        local collapsed_file="${output_prefix}_collapsed.fastq"
-        local collapsed_file_gz="${output_prefix}_collapsed.fastq.gz"
-        gzip -dc "$umi_seq_file" > "${output_prefix}_umi_temp.fastq"
-        fastq2collapse.pl "${output_prefix}_umi_temp.fastq" "$collapsed_file" 2>> "${LOG_FILE}"
-        if [[ ! -s "$collapsed_file" ]]; then
-            log_error "fastq2collapse.pl failed"
-            exit 1
-        fi
-        gzip -c "$collapsed_file" > "$collapsed_file_gz"
-        rm -f "${output_prefix}_umi_temp.fastq" "$collapsed_file" "$umi_seq_file"
-        
-        # Step 4: Strip UMI from sequence, attach to header after count
-        echo -ne " → Extract UMI"
-        local stripped_file="${output_prefix}_stripped.fastq.gz"
-        strip_eclip_barcode "$collapsed_file_gz" "$stripped_file" "$umi_len"
-        rm -f "$collapsed_file_gz"
-        if [[ ! -s "$stripped_file" ]]; then
-            log_error "stripBarcode.pl failed"
-            exit 1
-        fi
-        
-        # Step 5: Adapter trimming with fastp (AFTER collapse for efficiency)
-        echo -ne " → Adapter Trim) > "
-        local final_file="${output_prefix}_cleaned.fastq.gz"
-        local fastp_cmd="fastp -i ${stripped_file} -o ${final_file} \
-            --thread ${threads} \
-            --adapter_fasta ${eclip_adapters_fasta} \
-            --length_required 20 \
-            --cut_tail --cut_tail_mean_quality 5 \
-            --overlap_len_require 1 \
+
+        log_info "  Pass 2: extract UMI(${umi_len}nt), trim spacer(${spacer_len}nt), trim adapter"
+        local pass2="fastp -i ${tmp} -o ${cleaned} \
+            ${qc_flags} \
             --html ${output_prefix}_fastp.html \
-            --json ${output_prefix}_fastp.json"
-        if [ "$sample_size" -gt 0 ]; then fastp_cmd+=" --reads_to_process $sample_size"; fi
+            --json ${output_prefix}_fastp.json \
+            ${adapter_flag}"
+        if [ "$umi_len" -gt 0 ]; then pass2+=" --umi --umi_loc=read1 --umi_len=${umi_len} --umi_delim=#"; fi
+        if [ "$spacer_len" -gt 0 ]; then pass2+=" --trim_front1 ${spacer_len}"; fi
+
+        log_info "Running (pass 2): $pass2"
+        execute_cmd "$pass2"
+        local exit_code=$?
+        rm -f "$tmp"
+
+    else
+        # ── UMI-first layout (default): [UMI][BC][spacer][READ] ──────────────
+        log_info "Standard mode: fastp adapter trimming"
+
+        local fastp_cmd="fastp -i ${input_file} -o ${cleaned} \
+            ${qc_flags} \
+            --html ${output_prefix}_fastp.html \
+            --json ${output_prefix}_fastp.json \
+            ${adapter_flag}"
+        if [ "$umi_len" -gt 0 ]; then fastp_cmd+=" --umi --umi_loc=read1 --umi_len=${umi_len} --umi_delim=#"; fi
+        local front_trim=$(( bc_len + spacer_len ))
+        if [ "$front_trim" -gt 0 ]; then fastp_cmd+=" --trim_front1 ${front_trim}"; fi
+        if [ "$sample_size" -gt 0 ]; then fastp_cmd+=" $sample_flag"; fi
+
         log_info "Running: $fastp_cmd"
         execute_cmd "$fastp_cmd"
-        rm -f "$stripped_file"  # Cleanup intermediate
-        
-        # Check fastp succeeded
-        if [[ ! -s "$final_file" ]]; then
-            log_error "fastp failed to create cleaned file"
-            exit 1
-        fi
-        
-        log_info "eCLIP preprocessing complete: $final_file"
-        log_info "Read ID format: READ#count#UMI (CTK-compatible)"
-        return 0
-    fi
-    
-    #==========================================================================
-    # NON-eCLIP MODE: Standard workflow
-    # 1. Dedup with fastq2collapse.pl (if enabled)
-    # 2. fastp (with --umi for UMI extraction)
-    #==========================================================================
-    log_info "Standard mode: fastp with UMI extraction"
-    
-    # Define Fastp Command Function
-    run_fastp_cmd() {
-        local in_f="$1"
-        local cmd="fastp -i ${in_f} -o ${output_prefix}_cleaned.fastq.gz \
-            --thread ${threads} \
-            --length_required 16 \
-            --average_qual 30 \
-            --html ${output_prefix}_fastp.html \
-            --json ${output_prefix}_fastp.json"
-        # Standard mode: single adapter and UMI extraction
-        if [ -n "$adapter3" ]; then cmd+=" --adapter_sequence ${adapter3}"; fi
-        if [ "$umi_len" -gt 0 ]; then cmd+=" --umi --umi_loc=read1 --umi_len=${umi_len} --umi_delim=#"; fi
-        if [ "$sample_size" -gt 0 ]; then cmd+=" --reads_to_process $sample_size"; fi
-        
-        log_info "Running: $cmd"
-        execute_cmd "$cmd"
-    }
-
-    local final_input="$input_file"
-    local temp_dedup=""
-    
-    # 1. Deduplication (fastq2collapse.pl) - Tracks duplicate counts for CTK
-    if [ "$dedup_mode" == "true" ]; then
-        update_status "  Deduplicating (CTK)" 
-        log_info "Deduplication: Running fastq2collapse.pl (tracks duplicate counts for tag2collapse)..."
-        temp_dedup="${output_prefix}_dedup_temp.fastq"
-        local temp_dedup_gz="${output_prefix}_dedup_temp.fastq.gz"
-        
-        if [[ "$input_file" == *.gz ]]; then
-            local temp_input="${output_prefix}_input_temp.fastq"
-            gzip -dc "$input_file" > "$temp_input"
-            fastq2collapse.pl "$temp_input" "$temp_dedup" 2>> "${LOG_FILE}"
-            rm -f "$temp_input"
-        else
-            fastq2collapse.pl "$input_file" "$temp_dedup" 2>> "${LOG_FILE}"
-        fi
-        
-        if [[ $? -eq 0 && -s "$temp_dedup" ]]; then
-             gzip -c "$temp_dedup" > "$temp_dedup_gz"
-             rm -f "$temp_dedup"
-             final_input="$temp_dedup_gz"
-             temp_dedup="$temp_dedup_gz"
-             log_info "Deduplication complete."
-             update_status "  Preprocessing (Fastp)"
-        else
-             log_warning "fastq2collapse.pl failed. Reverting to original input."
-             rm -f "$temp_dedup" "$temp_dedup_gz"
-             temp_dedup=""
-        fi
-    fi
-
-    # 2. Run Fastp
-    run_fastp_cmd "$final_input"
-    local exit_code=$?
-    
-    # Cleanup temp dedup file
-    if [[ -n "$temp_dedup" && -f "$temp_dedup" ]]; then
-        rm "$temp_dedup"
+        local exit_code=$?
     fi
 
     if [ $exit_code -eq 0 ]; then
-        log_info "Preprocessing complete."
+        log_info "Adapter trimming complete."
     else
         log_error "fastp failed."
         exit 1
     fi
 }
 
-# 1b. ncRNA Pre-filtering with Bowtie2
+# 1c. ncRNA Pre-filtering with Bowtie2
+
 # Filters out rRNA, tRNA, and other ncRNA reads before genome alignment
 # Input: FASTQ from fastp
 # Output: Unmapped reads (for genome alignment), Mapped reads (QC)
@@ -508,11 +701,11 @@ run_ncrna_filter() {
     update_status "ncRNA Filter"
     
     # Run Bowtie2 mapping to ncRNA index
-    # --un-gz: write unmapped reads to file (these go to genome mapping)
+    # --un: write unmapped reads to plain .fastq (these go to genome mapping)
     # Mapped reads are saved to BAM for QC
     local bt2_cmd="bowtie2 -x \"${index_dir}/ncrna\" \
         -U \"$input_fastq\" \
-        --un-gz \"$output_unmapped\" \
+        --un \"$output_unmapped\" \
         -p $threads \
         2> \"$ncrna_stats\" \
         | samtools view -bS - > \"$ncrna_bam\""
@@ -548,12 +741,20 @@ run_mapping_star() {
     local threads="$4"
     local mismatch_max="$5"
 
+    # Resolve to absolute path — STAR's --readFilesCommand spawns cat/gzip in its
+    # own temp dir, so relative paths in --readFilesIn will not be found.
+    input_fastq="$(cd "$(dirname "$input_fastq")" && pwd)/$(basename "$input_fastq")"
+
     update_status "Mapping (STAR)"
     log_info "Starting mapping with STAR..."
 
-    local read_command="gzip -dc"
-    if [[ "$input_fastq" != *.gz ]]; then
-        read_command="cat"
+    # For .fastq.gz: use --readFilesCommand gzip -dc (STAR spawns a decompressor).
+    # For plain .fastq: omit --readFilesCommand entirely so STAR reads the file
+    # directly without spawning a subprocess. Using --readFilesCommand cat forces
+    # STAR into FIFO mode which fails on macOS even with absolute paths.
+    local reads_command_flag=""
+    if [[ "$input_fastq" == *.gz ]]; then
+        reads_command_flag="--readFilesCommand gzip -dc"
     fi
 
     # Create temp directory for STAR (prevents FIFO errors on exFAT/NTFS drives)
@@ -564,15 +765,30 @@ run_mapping_star() {
     local cmd="STAR --runThreadN ${threads} \
         --genomeDir ${genome_dir} \
         --readFilesIn ${input_fastq} \
-        --readFilesCommand ${read_command} \
+        ${reads_command_flag} \
         --outFileNamePrefix ${output_prefix}. \
         --outTmpDir ${star_tmp}/STARtmp \
         --outSAMtype BAM SortedByCoordinate \
         --outFilterMultimapNmax 10 \
-        --outFilterMismatchNmax ${mismatch_max} \
+        --outFilterMismatchNoverReadLmax 0.1 \
+        --outFilterMismatchNmax 5 \
         --outSAMattributes NH HI AS nM NM MD \
         --alignEndsType EndToEnd \
+        --scoreDelOpen -1 --scoreDelBase -1 \
+        --scoreInsOpen -1 --scoreInsBase -1 \
         $ADV_ALIGNER_ARGS"
+    # Mismatch filtering:
+    #   --outFilterMismatchNoverReadLmax 0.1: fractional filter (allows ~3 mismatches in 30bp,
+    #   ~2 in 20bp). Scales with post-trim read length like BWA's -n 0.06 philosophy.
+    #   This is the primary filter; replaces the old absolute --outFilterMismatchNmax 2 which
+    #   would discard reads carrying a genuine crosslink deletion + 2 sequencing errors (NM=3).
+    #   --outFilterMismatchNmax 5: hard backstop only — blocks extreme cases.
+    # Gap penalties:
+    #   --scoreDelOpen/Base -1: lower deletion penalty to match mismatch cost.
+    #   --scoreInsOpen/Base -1: lower insertion penalty symmetrically.
+    #   STAR's default gap penalties (-2 open, -2 base) make 1-nt indels score worse than
+    #   substitutions on short reads (~20-30bp post-trim iCLIP), causing CIMS-relevant
+    #   deletion-containing reads to be suppressed or realigned as mismatches.
 
     log_info "Running: $cmd"
     execute_cmd "$cmd"
@@ -620,18 +836,31 @@ run_parse_alignment() {
     fi
     
     local work_sam="$sam_file"
-    
+
     # Step 2: (Optional) Run samtools calmd for MD tag standardization
-    local ref_fasta=$(find "$genome_index" -name "*.fa" -o -name "*.fasta" 2>/dev/null | head -n 1)
-    
+    # calmd recalculates MD tags from the reference FASTA authoritatively.
+    # parseAlignment.pl uses both CIGAR and MD to classify mutations; inconsistent MD
+    # (especially at deletion boundaries in homopolymer runs) = missed/misclassified deletions.
+    # Priority: --genome-fasta flag > find in index dir (STAR index dirs never contain FASTA).
+    local ref_fasta=""
+    if [[ -n "${GENOME_FASTA:-}" ]] && [[ -f "$GENOME_FASTA" ]]; then
+        ref_fasta="$GENOME_FASTA"
+        log_info "Using provided genome FASTA for calmd: $ref_fasta"
+    else
+        # Fallback: search genome index directory (works for Bowtie2, not STAR)
+        ref_fasta=$(find "$genome_index" -maxdepth 2 -name "*.fa" -o -name "*.fasta" 2>/dev/null | grep -v '^\._' | head -n 1)
+        if [[ -n "$ref_fasta" ]]; then
+            log_info "Reference FASTA found in index dir: $ref_fasta"
+        fi
+    fi
+
     if [[ -n "$ref_fasta" ]]; then
-        log_info "Reference FASTA found: $ref_fasta"
         log_info "Running 'samtools calmd' to standardize MD tags..."
-        
+
         local calmd_sam="${sam_file%.sam}_calmd.sam"
-        # calmd can take BAM input and output SAM
-        samtools calmd "$bam_file" "$ref_fasta" > "$calmd_sam" 2>/dev/null
-        
+        # calmd can take BAM input and output SAM (-S flag forces SAM output)
+        samtools calmd -S "$bam_file" "$ref_fasta" > "$calmd_sam" 2>/dev/null
+
         if [[ -s "$calmd_sam" ]]; then
             work_sam="$calmd_sam"
             log_info "Using calmd-processed SAM: $calmd_sam"
@@ -640,7 +869,14 @@ run_parse_alignment() {
             rm -f "$calmd_sam" 2>/dev/null
         fi
     else
-        log_info "Reference FASTA not found. Relying on aligner's native MD tags."
+        if [[ "${RUN_CIMS:-false}" == "true" ]]; then
+            log_warning "CIMS WARNING: No reference FASTA available for samtools calmd."
+            log_warning "  MD tags from STAR may be inconsistent at deletion boundaries,"
+            log_warning "  which can cause parseAlignment.pl to miss or misclassify crosslink"
+            log_warning "  deletions. Provide --genome-fasta for optimal CIMS detection."
+        else
+            log_info "No reference FASTA found. Relying on aligner's native MD tags."
+        fi
     fi
 
     # Step 3: Run parseAlignment.pl
@@ -731,10 +967,35 @@ run_mapping_bowtie2() {
 
     local sam_file="${output_prefix}.sam"
     local bam_file="${output_prefix}.Aligned.sortedByCoord.out.bam" # Match STAR naming for compatibility
-    
-    local cmd="bowtie2 -p $threads --sam-opt-config 'md' -x '$idx_base' -U '$input_file' -S '$sam_file' $ADV_ALIGNER_ARGS"
-        
-    log_info "Running Bowtie2..."
+
+    # CIMS-optimized Bowtie2 parameters (BWA aln -n 0.06 equivalent):
+    #
+    #   --end-to-end          No soft clipping; BWA aln is also end-to-end
+    #   --mp 2,2              Uniform mismatch penalty (removes quality weighting);
+    #                         BWA counts edits, not quality-weighted costs
+    #   --rdg 1,1             Read gap open=1, extend=1 → 1-base deletion costs 2 pts
+    #   --rfg 1,1             Ref gap (insertion) same → equal to 1 mismatch at --mp 2,2
+    #                         This gives deletion/mismatch parity, matching BWA's edit budget
+    #   --score-min L,0,-0.12 Linear floor: 0.06 edits/bp × 2 pts/edit = 0.12 pts/bp
+    #                         Mirrors BWA -n 0.06 fractional edit distance, scaled by read length
+    #                         e.g. 36bp → -4.3 (≈2 edits), 50bp → -6.0 (≈3 edits)
+    #   -N 1                  Allow 1 mismatch in seed (BWA backtracking is natively more sensitive)
+    #   -L 16                 Short seed for CLIP read lengths (25-50bp); more anchor positions
+    #   -k 10                 Report up to 10 alignments (consistent with STAR multimapper cap)
+    #   --no-unal             Suppress unaligned reads from SAM output
+    local cmd="bowtie2 -p $threads \
+  --end-to-end \
+  --mp 2,2 \
+  --rdg 1,1 \
+  --rfg 1,1 \
+  --score-min L,0,-0.12 \
+  -N 1 \
+  -L 16 \
+  -k 10 \
+  --no-unal \
+  -x '$idx_base' -U '$input_file' -S '$sam_file' $ADV_ALIGNER_ARGS"
+
+    log_info "Running Bowtie2 (CIMS-tuned, BWA aln -n 0.06 equivalent)..."
     execute_cmd "$cmd"
     
     if [ $? -ne 0 ]; then
@@ -763,22 +1024,30 @@ run_collapse_pcr() {
     local input_bed="$1"
     local output_bed="$2"
     local umi_len="${3:-0}"  # Optional: UMI length, defaults to 0
+    local dedup_mode="${4:-true}"  # Was fastq2collapse.pl run? If not, no count in read names
 
     update_status "Collapsing"
     log_info "Collapsing PCR duplicates with CTK tag2collapse.pl..."
-    
+
     # Only use --random-barcode when UMI is present in read names
     local barcode_flag=""
     local weight_flags=""
     if [ "${umi_len:-0}" -gt 0 ]; then
         barcode_flag="--random-barcode"
-        # CTK weight flags: use pre-collapse counts from fastq2collapse.pl
-        # --weight: use tag count as weight
-        # --weight-in-name: read count from #count# in read ID
-        # -EM 30: EM iterations for barcode collapse
-        # --seq-error-model alignment: estimate error from alignment
-        weight_flags="--weight --weight-in-name -EM 30 --seq-error-model alignment"
-        log_info "UMI mode (length=$umi_len): using random barcode collapse with EM weighting"
+        if [[ "$dedup_mode" == "true" ]]; then
+            # fastq2collapse.pl ran first: read names are READ#count#UMI
+            # --weight: use tag count as weight
+            # --weight-in-name: read count from #count# in read ID
+            # -EM 30: EM iterations for barcode collapse
+            # --seq-error-model alignment: estimate error from alignment
+            weight_flags="--weight --weight-in-name -EM 30 --seq-error-model alignment"
+            log_info "UMI mode (length=$umi_len): using random barcode collapse with EM weighting"
+        else
+            # No fastq2collapse.pl: read names are READ#UMI only, no count embedded
+            # Use EM barcode collapse without weight-in-name
+            weight_flags="-EM 30 --seq-error-model alignment"
+            log_info "UMI mode (length=$umi_len): using random barcode collapse (no pre-collapse counts)"
+        fi
     else
         log_info "No UMI: using position-only collapse"
     fi
@@ -806,7 +1075,7 @@ run_collapse_pcr() {
 }
 
 # 4. Peak Calling (HOMER)
-run_peak_calling() {
+run_peak_calling_homer() {
     local input_bed="$1"
     local out_dir="$2"
     local peak_dist="$3"
@@ -814,19 +1083,62 @@ run_peak_calling() {
     local frag_len="$5"
     local log_file="${out_dir}_homer.log"
 
-    # Only called in aggregation or single sample (non-batch)
     update_status "Peaks"
     log_info "Calling peaks with HOMER..."
-    
-    # Capture output to specific log file for extraction later
+
     echo "Running HOMER makeTagDirectory..." > "$log_file"
     makeTagDirectory "${out_dir}" "${input_bed}" -single -format bed >> "$log_file" 2>&1
-    
+
     echo "Running HOMER findPeaks..." >> "$log_file"
     findPeaks "${out_dir}" -o auto -style factor -L 2 -localSize 10000 -strand separate \
-        -minDist "${peak_dist}" -size "${peak_size}" -fragLength "${frag_len}" $ADV_HOMER_ARGS >> "$log_file" 2>&1
-        
+        -minDist "${peak_dist}" -size "${peak_size}" -fragLength "${frag_len}" $ADV_PEAK_CALLER_ARGS >> "$log_file" 2>&1
+
+    if [[ -f "${out_dir}/peaks.txt" ]]; then
+        echo "Converting peaks.txt to BED format..." >> "$log_file"
+        sed '/^[[:blank:]]*#/d;s/#.*//' "${out_dir}/peaks.txt" > "${out_dir}/peaksTemp.bed"
+        awk 'OFS="\t" {print $2, $3, $4, $1, $6, $5}' "${out_dir}/peaksTemp.bed" > "${out_dir}/peaks.bed"
+        rm "${out_dir}/peaksTemp.bed"
+        sort -k1,1 -k2,2n "${out_dir}/peaks.bed" > "${out_dir}/peaks_Sorted.bed"
+    fi
+
     log_info "Peak calling complete. Log saved to $log_file"
+}
+
+# 4. Peak Calling (CTK tag2peak.pl)
+run_peak_calling_ctk() {
+    local input_bed="$1"
+    local out_dir="$2"
+    local peak_dist="$3"
+    local log_file="${out_dir}_ctk.log"
+
+    update_status "Peaks"
+    log_info "Calling peaks with CTK tag2peak.pl..."
+
+    local cache_dir=$(mktemp -u "${TMPDIR:-/tmp}/tag2peak_cache.XXXXXX")
+    local raw_peaks="${out_dir}_raw.bed"
+
+    echo "Running CTK tag2peak.pl..." > "$log_file"
+    $CONDA_PREFIX/bin/perl $(which tag2peak.pl) -big -ss --valley-seeking -minPH 2 -gap "${peak_dist}" \
+        ${ADV_PEAK_CALLER_ARGS} -c "${cache_dir}" "${input_bed}" "${raw_peaks}" >> "$log_file" 2>&1
+    local exit_code=$?
+    rm -rf "$cache_dir"
+
+    if [[ $exit_code -eq 0 && -s "$raw_peaks" ]]; then
+        log_info "Peak calling complete. Log saved to $log_file"
+    else
+        log_error "CTK tag2peak.pl failed."
+        rm -f "$raw_peaks"
+        exit 1
+    fi
+}
+
+# 4. Peak Calling - dispatcher
+run_peak_calling() {
+    if [[ "${PEAK_CALLER:-homer}" == "ctk" ]]; then
+        run_peak_calling_ctk "$@"
+    else
+        run_peak_calling_homer "$@"
+    fi
 }
 
 # 4b. Add Enhanced Columns to Peak Coverage Matrix
@@ -1034,9 +1346,9 @@ add_matrix_columns() {
                 continue
             fi
             
-            # Sort bedgraphs for bedtools compatibility (same as STEP 5)
-            sort -k1,1 -k2,2n "$bg_pos" > "${sample}_pos_sorted.bg.tmp"
-            sort -k1,1 -k2,2n "$bg_neg" > "${sample}_neg_sorted.bg.tmp"
+            # Sort bedgraphs for bedtools compatibility (strip track header if present)
+            grep -v "^track" "$bg_pos" | sort -k1,1 -k2,2n > "${sample}_pos_sorted.bg.tmp"
+            grep -v "^track" "$bg_neg" | sort -k1,1 -k2,2n > "${sample}_neg_sorted.bg.tmp"
             
             for stat in sum mean max; do
                 # Run bedtools map on sorted files (same as STEP 5)
@@ -1088,9 +1400,9 @@ add_matrix_columns() {
                     continue
                 fi
                 
-                # Sort group bedgraphs for bedtools compatibility (and ensure TABs)
-                tr ' ' '\t' < "$grp_bg_pos" | sort -k1,1 -k2,2n > "${group}_pos_sorted.bg.tmp"
-                tr ' ' '\t' < "$grp_bg_neg" | sort -k1,1 -k2,2n > "${group}_neg_sorted.bg.tmp"
+                # Sort group bedgraphs for bedtools compatibility (strip track header, ensure TABs)
+                grep -v "^track" "$grp_bg_pos" | tr ' ' '\t' | sort -k1,1 -k2,2n > "${group}_pos_sorted.bg.tmp"
+                grep -v "^track" "$grp_bg_neg" | tr ' ' '\t' | sort -k1,1 -k2,2n > "${group}_neg_sorted.bg.tmp"
                 
                 for stat in sum mean max; do
                     bedtools map -a peaks_pos.tmp.bed -b "${group}_pos_sorted.bg.tmp" -c 4 -o "$stat" -null 0 > "bg_pos_${stat}.tmp"
@@ -1555,21 +1867,25 @@ CIMS_SCRIPT
             parallel --memfree 4G -j "$parallel_jobs" \
             "$process_script" {} "$cims_iterations" "$chunk_dir"
         
-        # Merge results (skip empty files, keep header from first)
-        local first_file="true"
+        # Merge results: CIMS.pl writes its header last (starting with #), so we can't
+        # use tail -n +2 (that would strip data lines). Instead collect all data lines
+        # first, then prepend the header from whichever chunk had it.
+        local merged_header=""
         > "$output_file"
         for result in "$chunk_dir"/*.cims.txt; do
             if [[ -s "$result" ]]; then
-                if [[ "$first_file" == "true" ]]; then
-                    cat "$result" >> "$output_file"
-                    first_file="false"
-                else
-                    # Skip header line for subsequent files
-                    tail -n +2 "$result" >> "$output_file"
-                fi
+                [[ -z "$merged_header" ]] && merged_header=$(grep "^#" "$result")
+                grep -v "^#" "$result" >> "$output_file"
             fi
         done
-        
+        # Prepend header so it sits at the top of the merged file
+        if [[ -n "$merged_header" ]]; then
+            local tmp_header=$(mktemp)
+            echo "$merged_header" > "$tmp_header"
+            cat "$output_file" >> "$tmp_header"
+            mv "$tmp_header" "$output_file"
+        fi
+
         # Cleanup
         rm -rf "$chunk_dir"
     else
@@ -1581,29 +1897,46 @@ CIMS_SCRIPT
         fi
         # Use -big -c for memory efficiency in sequential mode
         local cache_dir=$(mktemp -u "${TMPDIR:-/tmp}/cims_cache.XXXXXX")
-        local cmd="CIMS.pl -big -c '$cache_dir' -v -n $cims_iterations '$input_collapsed_bed' '$mutation_bed' '$output_file'"
-        execute_cmd "$cmd"
+        # No -v: per-chromosome verbose output suppressed on console; captured in LOG_FILE
+        local cmd="CIMS.pl -big -c '$cache_dir' -n $cims_iterations '$input_collapsed_bed' '$mutation_bed' '$output_file'"
+        execute_cmd "$cmd" 2>>"${LOG_FILE:-/dev/null}"
         rm -rf "$cache_dir" 2>/dev/null
+
+        # Normalize: CIMS.pl writes header last; move it to top so downstream tools see it first
+        if [[ -s "$output_file" ]] && grep -q "^#" "$output_file"; then
+            local tmp_norm=$(mktemp)
+            grep "^#" "$output_file" > "$tmp_norm"
+            grep -v "^#" "$output_file" >> "$tmp_norm"
+            mv "$tmp_norm" "$output_file"
+        fi
     fi
-    
+
     # Process results
     if [[ -s "$output_file" ]]; then
         local raw_count=$(grep -v "^#" "$output_file" | wc -l)
         log_info "CIMS complete: $raw_count total sites in $output_file"
-        
+
         # Filter for significance only if FDR < 1
         if (( $(echo "$cims_fdr < 1" | bc -l) )); then
+            # Preserve raw output when -k is passed (for threshold exploration)
+            if [[ "${KEEP_INTERMEDIATE:-no}" == "yes" ]]; then
+                cp "$output_file" "${output_file%.txt}_raw.txt"
+                log_info "CIMS raw output preserved: ${output_file%.txt}_raw.txt"
+            fi
             log_info "Filtering CIMS results by FDR < $cims_fdr..."
             local temp_file="${output_file}.tmp"
-            awk -F'\t' -v fdr="$cims_fdr" 'NR==1 || $9 < fdr' "$output_file" | \
-                sort -k9,9n -k8,8nr -k7,7n > "$temp_file"
+            # Header is now at top (^#); sort only data lines, then reattach header
+            local cims_header=$(grep "^#" "$output_file")
+            {
+                [[ -n "$cims_header" ]] && echo "$cims_header"
+                grep -v "^#" "$output_file" | \
+                    awk -F'\t' -v fdr="$cims_fdr" '$9+0 < fdr' | \
+                    sort -k9,9n -k8,8nr -k7,7n
+            } > "$temp_file"
             mv "$temp_file" "$output_file"
-            
+
             local filtered_count=$(grep -v "^#" "$output_file" | wc -l)
             log_info "CIMS filtered: $filtered_count sites (FDR < $cims_fdr)"
-            
-            # Cleanup unwanted CIMS intermediates
-            rm -f mutations_matched.txt deletions.bed substitutions.bed 2>/dev/null
         fi
     else
         echo -e "[WARNING] CIMS produced empty output: $output_file" >> "${LOG_FILE}"
@@ -1652,7 +1985,7 @@ run_cits() {
         log_info "Using parallel processing ($chr_count chromosomes, $threads threads)"
     fi
     
-    local cits_raw="${output_file%.txt}_raw.bed"
+    local cits_raw="${output_file%.txt}_tmp.bed"
     
     if [[ "$use_parallel" == "true" ]]; then
         # Parallel mode: split BOTH collapsed.bed AND deletion file by chromosome
@@ -1681,14 +2014,16 @@ deletion_chunk="${output_dir}/${chunk_name}.del.bed"
 output_chunk="${output_dir}/${chunk_name}.cits.bed"
 cache_dir=$(mktemp -u "${TMPDIR:-/tmp}/cits_cache.XXXXXX")
 export PERL5LIB="${CONDA_PREFIX}/lib/czplib:$PERL5LIB"
-# Only run CITS if collapsed chunk exists (deletion chunk can be empty)
+# Only run CITS if collapsed chunk exists (deletion chunk may be absent/empty)
 if [[ -s "$chunk_file" ]]; then
-    if [[ -s "$deletion_chunk" ]]; then
-        CITS.pl -big -c "$cache_dir" -p "$pvalue" --gap "$gap" "$chunk_file" "$deletion_chunk" "$output_chunk" >/dev/null 2>&1
-    else
-        # No deletions for this chromosome - run without deletion filtering
-        touch "$output_chunk"
+    actual_del="$deletion_chunk"
+    if [[ ! -s "$deletion_chunk" ]]; then
+        # No deletions for this chromosome: pass an empty file so CITS.pl
+        # retains all reads as truncation candidates rather than skipping entirely
+        actual_del=$(mktemp "${TMPDIR:-/tmp}/empty_del.XXXXXX")
     fi
+    CITS.pl -big -c "$cache_dir" -p "$pvalue" --gap "$gap" "$chunk_file" "$actual_del" "$output_chunk" >/dev/null 2>&1
+    [[ "$actual_del" != "$deletion_chunk" ]] && rm -f "$actual_del"
 fi
 rm -rf "$cache_dir" 2>/dev/null
 CITS_SCRIPT
@@ -1723,7 +2058,8 @@ CITS_SCRIPT
         fi
         # Use -big -c for memory efficiency in sequential mode
         local cache_dir=$(mktemp -u "${TMPDIR:-/tmp}/cits_cache.XXXXXX")
-        local cmd="CITS.pl -big -c '$cache_dir' -p $cits_pvalue --gap $cits_gap -v '$input_collapsed_bed' '$deletion_bed' '$cits_raw'"
+        # No -v: per-chromosome verbose output suppressed on console; captured in LOG_FILE
+        local cmd="CITS.pl -big -c '$cache_dir' -p $cits_pvalue --gap $cits_gap '$input_collapsed_bed' '$deletion_bed' '$cits_raw'"
         execute_cmd "$cmd"
         rm -rf "$cache_dir" 2>/dev/null
     fi
@@ -1732,6 +2068,12 @@ CITS_SCRIPT
     if [[ -s "$cits_raw" ]]; then
         local raw_count=$(wc -l < "$cits_raw")
         log_info "CITS raw output: $raw_count sites"
+        
+        # Preserve raw output when -k is passed (for threshold exploration)
+        if [[ "${KEEP_INTERMEDIATE:-no}" == "yes" ]]; then
+            cp "$cits_raw" "${output_file%.txt}_raw.bed"
+            log_info "CITS raw output preserved: ${output_file%.txt}_raw.bed"
+        fi
         
         # Filter to single-nucleotide sites (singleton) - this is the main output
         # Add header for consistency with CIMS output
@@ -1743,7 +2085,6 @@ CITS_SCRIPT
         
         # Remove intermediate raw file
         rm -f "$cits_raw"
-        rm -f mutations_matched.txt deletions.bed substitutions.bed 2>/dev/null
     else
         echo -e "[WARNING] CITS produced empty output" >> "${LOG_FILE}"
         echo -ne "${YELLOW}[WARNING] Empty Output${NC} > "
@@ -1858,16 +2199,14 @@ run_ctk_full_analysis() {
     fi
     
     # Phase 3: CITS Analysis (only if enabled)
+    # run_cits handles missing/empty deletion file internally (runs without read-through filter).
+    # For standard iCLIP, deletions at crosslink sites are rare — CITS must still run.
+    # Do NOT gate CITS on [[ -s "$del_bed" ]]: that silently skips all iCLIP samples.
     if [[ "$run_cits" == "true" ]]; then
         log_info "Phase 3: CITS Analysis..."
-        
-        if [[ -s "$del_bed" ]]; then
-            run_cits "$collapsed_bed" "$del_bed" \
-                "${output_dir}/CITS/${sample_name}_CITS.bed" \
-                "$cits_pvalue" "$cits_gap"
-        else
-            log_warning "No deletion file for CITS. Skipping."
-        fi
+        run_cits "$collapsed_bed" "$del_bed" \
+            "${output_dir}/CITS/${sample_name}_CITS.bed" \
+            "$cits_pvalue" "$cits_gap"
     else
         log_info "Phase 3: CITS Analysis... SKIPPED (not enabled)"
     fi
@@ -1947,16 +2286,26 @@ run_ctk_analysis() {
         local cims_del_file="${output_dir}/CIMS/${sample_name}_CIMS_del.txt"
         local cims_sub_file="${output_dir}/CIMS/${sample_name}_CIMS_sub.txt"
         
+        # CIMS on deletions: the primary signal for standard/iCLIP crosslink-induced mutations.
+        # CTK is designed around deletion-based CIMS (BWA alignment produces deletions readily).
+        # STAR EndToEnd tends to realign deletion reads as substitutions due to gap penalties,
+        # so deletion counts may be very low with STAR. If del_bed is empty, CIMS is skipped.
         if [[ -s "$del_bed" ]]; then
             run_cims "$collapsed_bed" "$del_bed" "$cims_del_file" \
                 "$cims_iterations" "$cims_fdr"
+        else
+            log_warning "CIMS: No deletions found — CIMS deletion analysis skipped."
+            log_warning "  This is expected with STAR EndToEnd alignment on short reads."
+            log_warning "  Consider BWA (--mapper bowtie2 or external BWA) for richer deletion signal."
         fi
-        
+
+        # CIMS on substitutions: secondary signal; useful for C→T transitions (iCLIP crosslink signature).
+        # CIMS.pl is patched (tagNum==0 guard + count>0 q-value guard) so this is safe to run.
         if [[ -s "$sub_bed" ]]; then
             run_cims "$collapsed_bed" "$sub_bed" "$cims_sub_file" \
                 "$cims_iterations" "$cims_fdr"
         fi
-        
+
         # Generate flanked BED for CIMS results (for user's motif analysis)
         if [[ "$run_motif" == "yes" ]]; then
             [[ -s "$cims_del_file" ]] && generate_flanked_bed "$cims_del_file" "$motif_flank"
@@ -1967,19 +2316,17 @@ run_ctk_analysis() {
     # Step 3: CITS Analysis (only if enabled)
     if [[ "$run_cits" == "true" ]]; then
         update_status "CITS"
-        
+
         local cits_file="${output_dir}/CITS/${sample_name}_CITS.txt"
-        
-        if [[ -s "$del_bed" ]]; then
-            run_cits "$collapsed_bed" "$del_bed" "$cits_file" \
-                "$cits_pvalue" "$cits_gap"
-                
-            # Generate flanked BED for CITS results (for user's motif analysis)
-            if [[ "$run_motif" == "yes" ]]; then
-                [[ -s "$cits_file" ]] && generate_flanked_bed "$cits_file" "$motif_flank"
-            fi
-        else
-            log_warning "No deletion file for CITS. Skipping."
+
+        # run_cits handles missing/empty deletion file internally (runs without read-through filter).
+        # Do NOT gate CITS on [[ -s "$del_bed" ]]: that silently skips all standard iCLIP samples.
+        run_cits "$collapsed_bed" "$del_bed" "$cits_file" \
+            "$cits_pvalue" "$cits_gap"
+
+        # Generate flanked BED for CITS results (for user's motif analysis)
+        if [[ "$run_motif" == "yes" ]]; then
+            [[ -s "$cits_file" ]] && generate_flanked_bed "$cits_file" "$motif_flank"
         fi
     fi
     
@@ -2029,15 +2376,30 @@ run_coverage() {
     # Using 'cigar !~ "N"' to remove junction reads
     # Streaming samtools -> bedtools genomecov
     
-    # Positive Strand
+    # Extract sample name from output_prefix for track header
+    local sample_name
+    sample_name=$(basename "$output_prefix")
+
+    # Positive Strand: generate sorted bedgraph then prepend track header
+    local pos_bg="${output_prefix}_pos.bedgraph"
+    local pos_tmp="${output_prefix}_pos.bedgraph.tmp"
     samtools view -h -e 'cigar !~ "N"' "$bam_file" | \
-    bedtools genomecov -ibam stdin -bg -strand + -scale "$scale" > "${output_prefix}_pos.bedgraph"
-    
-    # Negative Strand
+    bedtools genomecov -ibam stdin -bg -strand + -scale "$scale" | \
+    sort -k1,1 -k2,2n > "$pos_tmp"
+    echo "track type=bedGraph name=\"${sample_name}\" description=\"Positive Strand\"" > "$pos_bg"
+    cat "$pos_tmp" >> "$pos_bg"
+    rm -f "$pos_tmp"
+
+    # Negative Strand: generate sorted bedgraph then prepend track header
+    local neg_bg="${output_prefix}_neg.bedgraph"
+    local neg_tmp="${output_prefix}_neg.bedgraph.tmp"
     samtools view -h -e 'cigar !~ "N"' "$bam_file" | \
-    bedtools genomecov -ibam stdin -bg -strand - -scale "$scale" > "${output_prefix}_neg.bedgraph"
-    
-    
+    bedtools genomecov -ibam stdin -bg -strand - -scale "$scale" | \
+    sort -k1,1 -k2,2n > "$neg_tmp"
+    echo "track type=bedGraph name=\"${sample_name}\" description=\"Negative Strand\"" > "$neg_bg"
+    cat "$neg_tmp" >> "$neg_bg"
+    rm -f "$neg_tmp"
+
     log_info "Bedgraphs generated: ${output_prefix}_pos.bedgraph, ${output_prefix}_neg.bedgraph"
 }
 
@@ -2084,19 +2446,49 @@ run_combined_bedgraph() {
                 fi
             done
             
-            if [[ $count -gt 0 ]]; then
+            if [[ $count -eq 1 ]]; then
+                # Single sample in group — copy directly (no union needed)
+                local output_file="$bedgraph_dir/COMBINED_BEDGRAPH/${group}_combined_${strand}.bedgraph"
+                local strand_desc
+                if [[ "$strand" == "pos" ]]; then strand_desc="Combined Positive Strand"; else strand_desc="Combined Negative Strand"; fi
+                echo "track type=bedGraph name=\"${group}\" description=\"${strand_desc}\"" > "$output_file"
+                grep -v "^track" $bg_files >> "$output_file"
+                log_info "  Generated: $(basename "$output_file") (1 sample, copied directly)"
+            elif [[ $count -gt 1 ]]; then
                 # Union and Average
                 # Unionbedg produces: chrom start end val1 val2 ... valN
                 # Column 1,2,3 are coords. Columns 4 to 3+N are values.
                 # Average = sum(col 4..NF) / (NF-3)
                 
                 local output_file="$bedgraph_dir/COMBINED_BEDGRAPH/${group}_combined_${strand}.bedgraph"
-                
-                bedtools unionbedg -i $bg_files | \
-                awk -v N="$count" 'BEGIN{OFS="\t"} {sum=0; for(i=4;i<=NF;i++) sum+=$i; print $1,$2,$3,sum/N}' \
-                > "$output_file"
-                
-                log_info "  Generatd: $(basename "$output_file") ($count replicates)"
+                local strand_desc
+                if [[ "$strand" == "pos" ]]; then
+                    strand_desc="Combined Positive Strand"
+                else
+                    strand_desc="Combined Negative Strand"
+                fi
+                local combined_tmp="${output_file}.tmp"
+
+                # unionbedg cannot read multiple files from stdin — strip track
+                # headers to individual temp files and pass as explicit args
+                local tmp_dir
+                tmp_dir=$(mktemp -d)
+                local tmp_files=()
+                for bg in $bg_files; do
+                    local tmp_bg="${tmp_dir}/$(basename "$bg")"
+                    grep -v "^track" "$bg" > "$tmp_bg"
+                    tmp_files+=("$tmp_bg")
+                done
+
+                bedtools unionbedg -i "${tmp_files[@]}" | \
+                awk -v N="$count" 'BEGIN{OFS="\t"} {sum=0; for(i=4;i<=NF;i++) sum+=$i; print $1,$2,$3,sum/N}' | \
+                sort -k1,1 -k2,2n > "$combined_tmp"
+                echo "track type=bedGraph name=\"${group}\" description=\"${strand_desc}\"" > "$output_file"
+                cat "$combined_tmp" >> "$output_file"
+                rm -f "$combined_tmp"
+                rm -rf "$tmp_dir"
+
+                log_info "  Generated: $(basename "$output_file") ($count replicates)"
             else
                 log_warning "  No bedgraph files found for group $group ($strand)"
             fi
@@ -2121,6 +2513,7 @@ run_group_ctk_analysis() {
     local run_motif="$9"
     local run_cims="${10}"
     local run_cits="${11}"
+    local work_dir="${12:-$(pwd)}"   # directory containing *_analysis subdirs
     
     console_msg "\n[GROUP CTK ANALYSIS]"
     
@@ -2131,11 +2524,11 @@ run_group_ctk_analysis() {
     # 2. Create temp file for group→samples mapping
     local group_samples_file=$(mktemp)
     
-    # 3. Find all sample analysis directories and assign to groups
-    for sample_dir in *_analysis; do
+    # 3. Find all sample analysis directories (in work_dir) and assign to groups
+    for sample_dir in "${work_dir}"/*_analysis; do
         [[ ! -d "$sample_dir" ]] && continue
         
-        local sample_name="${sample_dir%_analysis}"
+        local sample_name="$(basename "${sample_dir%_analysis}")"
         
         # Look up group for this sample using grep (bash 3.x compatible)
         local group=$(grep -w "^${sample_name}" "$groups_map" 2>/dev/null | cut -f2)
@@ -2183,8 +2576,7 @@ run_group_ctk_analysis() {
         local group_collapsed="$group_ctk_dir/${group}_collapsed.bed"
         > "$group_collapsed"  # Clear file
         for sample in $samples; do
-            # Use find to locate collapsed.bed in sample's analysis directory
-            local sample_dir="${sample}_analysis"
+            local sample_dir="${work_dir}/${sample}_analysis"
             if [[ -d "$sample_dir" ]]; then
                 local sample_collapsed=$(find "$sample_dir" -name "*_collapsed.bed" 2>/dev/null | head -n 1)
                 if [[ -s "$sample_collapsed" ]]; then
@@ -2202,7 +2594,7 @@ run_group_ctk_analysis() {
         local group_mutations="$group_ctk_dir/${group}_mutations.txt"
         > "$group_mutations"  # Clear file
         for sample in $samples; do
-            local sample_dir="${sample}_analysis"
+            local sample_dir="${work_dir}/${sample}_analysis"
             if [[ -d "$sample_dir" ]]; then
                 local sample_mutations=$(find "$sample_dir" -name "*_mutations.txt" 2>/dev/null | head -n 1)
                 if [[ -s "$sample_mutations" ]]; then
@@ -2237,4 +2629,438 @@ run_group_ctk_analysis() {
     rm -f "$groups_map" "$group_samples_file"
     
     console_msg "  > Group CTK analysis complete"
+}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# CLINK PIPELINE  (UMI-tools + Python pileup engine)
+# Replaces: tag2collapse.pl + parseAlignment.pl + CIMS.pl + CITS.pl
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Resolve the path to the Clink Python scripts bundled in lib/clink/
+_clink_dir() {
+    echo "$(dirname "${BASH_SOURCE[0]}")/clink"
+}
+
+# Execute a Clink Python command, respecting VERBOSE (mirrors execute_cmd behavior).
+# All Clink Python scripts print progress to stderr; with VERBOSE=true those lines
+# are teed to the console so the user can watch in real time.
+_clink_exec() {
+    local log="${LOG_FILE:-/dev/null}"
+    if [[ "${VERBOSE:-false}" == "true" ]]; then
+        eval "$*" 2>&1 | tee -a "$log"
+        return "${PIPESTATUS[0]}"
+    else
+        eval "$*" >> "$log" 2>&1
+        return $?
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# check_clink_deps — hard dependency check, called once before any Clink work
+# ---------------------------------------------------------------------------
+check_clink_deps() {
+    local ok=true
+
+    # Python packages: pysam, numpy, scipy
+    if ! python3 -c "import pysam, numpy, scipy" 2>/dev/null; then
+        log_error "Clink requires Python packages: pysam, numpy, scipy"
+        log_error "  Install with: conda install -n clipittyclip pysam umi_tools -c bioconda"
+        ok=false
+    fi
+
+    # umi_tools binary: check PATH first, then common conda env locations
+    local umi_bin
+    umi_bin=$(command -v umi_tools 2>/dev/null)
+    if [[ -z "$umi_bin" ]]; then
+        local candidates=(
+            "$CONDA_PREFIX/bin/umi_tools"
+            "$HOME/anaconda3/envs/umi_tools/bin/umi_tools"
+            "$HOME/miniconda3/envs/umi_tools/bin/umi_tools"
+            "/opt/anaconda3/envs/umi_tools/bin/umi_tools"
+            "/opt/miniconda3/envs/umi_tools/bin/umi_tools"
+        )
+        for p in "${candidates[@]}"; do
+            if [[ -x "$p" ]]; then umi_bin="$p"; break; fi
+        done
+    fi
+    if [[ -z "$umi_bin" ]]; then
+        log_error "Clink requires umi_tools. Not found in PATH or common conda locations."
+        log_error "  Install with: conda install -n clipittyclip umi_tools -c bioconda"
+        log_error "  Or in a separate env: conda create -n umi_tools -c bioconda umi_tools python=3.11"
+        ok=false
+    else
+        export CLINK_UMI_TOOLS="$umi_bin"
+        log_info "umi_tools found: $umi_bin"
+    fi
+
+    [[ "$ok" == "true" ]]
+}
+
+# ---------------------------------------------------------------------------
+# run_clink_collapse — BAM-level UMI deduplication via umi_tools dedup
+#
+# Args:
+#   $1  input sorted BAM
+#   $2  output deduplicated BAM path
+#   $3  UMI length (0 = position-only; -1 = auto-detect)
+#   $4  threads (default 4)
+# ---------------------------------------------------------------------------
+run_clink_collapse() {
+    local bam_in="$1"
+    local bam_out="$2"
+    local umi_len="${3:--1}"
+    local threads="${4:-4}"
+    local clink_dir
+    clink_dir=$(_clink_dir)
+
+    log_info "Clink collapse: UMI-aware deduplication (umi_tools directional)"
+    log_info "  Input:  $bam_in"
+    log_info "  Output: $bam_out"
+
+    local extra_args=""
+    if [[ -n "${CLINK_UMI_TOOLS:-}" ]]; then
+        extra_args="--umi-tools $CLINK_UMI_TOOLS"
+    fi
+    if [[ "$umi_len" -ge 0 ]] 2>/dev/null; then
+        extra_args="$extra_args --umi-len $umi_len"
+    fi
+
+    _clink_exec python3 "$clink_dir/collapse.py" \
+        --bam     "$bam_in" \
+        --out     "$bam_out" \
+        --threads "$threads" \
+        $extra_args
+
+    if [[ $? -ne 0 ]] || [[ ! -s "$bam_out" ]]; then
+        log_error "Clink collapse failed. Check log for details."
+        return 1
+    fi
+    log_info "Clink collapse complete: $bam_out"
+}
+
+# ---------------------------------------------------------------------------
+# run_clink_pileup — single BAM scan → compressed NPZ
+#
+# Args:
+#   $1  deduplicated BAM
+#   $2  output .npz path
+#   $3  threads (default 1; passed to pileup.py --threads for chromosome-level parallelism)
+# ---------------------------------------------------------------------------
+run_clink_pileup() {
+    local bam_in="$1"
+    local npz_out="$2"
+    local threads="${3:-1}"
+    local clink_dir
+    clink_dir=$(_clink_dir)
+
+    log_info "Clink pileup: scanning BAM → $npz_out (threads=$threads)"
+
+    _clink_exec python3 "$clink_dir/pileup.py" \
+        "$bam_in" \
+        --out "$npz_out" \
+        --threads "$threads"
+
+    if [[ $? -ne 0 ]] || [[ ! -s "$npz_out" ]]; then
+        log_error "Clink pileup failed. Check log for details."
+        return 1
+    fi
+    log_info "Clink pileup saved: $npz_out"
+}
+
+# ---------------------------------------------------------------------------
+# run_clink_cits — truncation site calling from NPZ
+#
+# Args:
+#   $1  pileup .npz
+#   $2  output prefix
+#   $3  min coverage (default 5)
+#   $4  min fraction (default 0.05)
+#   $5  FDR threshold (default 0.05)
+# ---------------------------------------------------------------------------
+run_clink_cits() {
+    local npz_in="$1"
+    local prefix="$2"
+    local min_cov="${3:-5}"
+    local min_frac="${4:-0.05}"
+    local fdr="${5:-0.05}"
+    local clink_dir
+    clink_dir=$(_clink_dir)
+
+    log_info "Clink CITS: truncation site calling"
+
+    _clink_exec python3 "$clink_dir/cits.py" \
+        --pileup  "$npz_in" \
+        --prefix  "$prefix" \
+        --min-cov "$min_cov" \
+        --min-frac "$min_frac" \
+        --fdr     "$fdr"
+
+    if [[ $? -ne 0 ]]; then
+        log_error "Clink CITS failed. Check log for details."
+        return 1
+    fi
+
+    local out_bed="${prefix}_truncations.bed"
+    local n=0
+    [[ -f "$out_bed" ]] && n=$(grep -c '' "$out_bed" 2>/dev/null || echo 0)
+    log_info "Clink CITS complete: $(( n > 0 ? n - 1 : 0 )) significant sites → $out_bed"
+}
+
+# ---------------------------------------------------------------------------
+# run_clink_cims — deletion + substitution site calling from NPZ
+#
+# Args:
+#   $1  pileup .npz
+#   $2  output prefix
+#   $3  min coverage (default 5)
+#   $4  min fraction (default 0.05)
+#   $5  FDR threshold (default 0.05)
+#   $6  sub-types to output (e.g. "TC" for PAR-CLIP; "" = all)
+#   $7  no-subs flag: "true" = deletions only
+# ---------------------------------------------------------------------------
+run_clink_cims() {
+    local npz_in="$1"
+    local prefix="$2"
+    local min_cov="${3:-5}"
+    local min_frac="${4:-0.05}"
+    local fdr="${5:-0.05}"
+    local sub_types="${6:-}"
+    local no_subs="${7:-false}"
+    local clink_dir
+    clink_dir=$(_clink_dir)
+
+    log_info "Clink CIMS: deletion + substitution site calling"
+
+    local extra_args=""
+    [[ "$no_subs" == "true" ]]   && extra_args="$extra_args --no-subs"
+    [[ -n "$sub_types" ]]        && extra_args="$extra_args --sub-types $sub_types"
+
+    _clink_exec python3 "$clink_dir/cims.py" \
+        --pileup   "$npz_in" \
+        --prefix   "$prefix" \
+        --min-cov  "$min_cov" \
+        --min-frac "$min_frac" \
+        --fdr      "$fdr" \
+        $extra_args
+
+    if [[ $? -ne 0 ]]; then
+        log_error "Clink CIMS failed. Check log for details."
+        return 1
+    fi
+    log_info "Clink CIMS complete → ${prefix}_deletions.bed + substitution beds"
+}
+
+# ---------------------------------------------------------------------------
+# run_clink_full — orchestrates the full Clink sub-pipeline for one sample
+#
+# Args:
+#   $1  input sorted BAM (from STAR/Bowtie2)
+#   $2  output directory  (e.g. 6_Clink/{sample}/)
+#   $3  sample name
+#   $4  UMI length (-1 = auto)
+#   $5  threads
+#   $6  run_cits  "true"|"false"
+#   $7  run_cims  "true"|"false"
+#   $8  min coverage
+#   $9  min fraction
+#   $10 FDR threshold
+# ---------------------------------------------------------------------------
+run_clink_full() {
+    local bam_in="$1"
+    local out_dir="$2"
+    local sample_name="$3"
+    local umi_len="${4:--1}"
+    local threads="${5:-4}"
+    local run_cits="${6:-true}"
+    local run_cims="${7:-true}"
+    local min_cov="${8:-5}"
+    local min_frac="${9:-0.05}"
+    local fdr="${10:-0.05}"
+    local prebuilt_dedup="${11:-}"  # optional: pre-existing dedup BAM from early Clink-only path
+
+    mkdir -p "$out_dir"
+
+    local dedup_bam="${out_dir}/${sample_name}_dedup.bam"
+    local npz="${out_dir}/${sample_name}_pileup.npz"
+    local prefix="${out_dir}/${sample_name}"
+
+    # Collapse step: skip if dedup BAM was already built in the early Clink-only path
+    if [[ -n "$prebuilt_dedup" ]] && [[ -f "$prebuilt_dedup" ]]; then
+        log_info "Clink collapse: reusing pre-built dedup BAM: $prebuilt_dedup"
+        dedup_bam="$prebuilt_dedup"
+    else
+        update_status "Clink collapse"
+        run_clink_collapse "$bam_in" "$dedup_bam" "$umi_len" "$threads" || return 1
+    fi
+
+    update_status "Clink pileup"
+    run_clink_pileup "$dedup_bam" "$npz" "$threads" || return 1
+
+    if [[ "$run_cits" == "true" ]]; then
+        update_status "Clink CITS"
+        run_clink_cits "$npz" "$prefix" "$min_cov" "$min_frac" "$fdr" || true
+    fi
+
+    if [[ "$run_cims" == "true" ]]; then
+        update_status "Clink CIMS"
+        run_clink_cims "$npz" "$prefix" "$min_cov" "$min_frac" "$fdr" || true
+    fi
+
+    # Generate collapsed BED for peak calling (bedtools bamtobed -split handles spliced reads)
+    update_status "Clink BED"
+    local collapsed_bed="${out_dir}/${sample_name}_collapsed.bed"
+    bedtools bamtobed -i "$dedup_bam" -split 2>/dev/null \
+        | sort -k1,1 -k2,2n > "$collapsed_bed"
+    if [[ -s "$collapsed_bed" ]]; then
+        log_info "Clink collapsed BED: $collapsed_bed"
+    else
+        log_warning "Clink: bedtools bamtobed produced empty BED — peak calling may be affected"
+    fi
+
+    update_status_done
+    log_info "Clink full pipeline complete for $sample_name"
+    echo "$collapsed_bed"   # Return path for caller to use in peak calling
+}
+
+# ---------------------------------------------------------------------------
+# run_group_clink_analysis — grouped Clink CITS/CIMS (--group-xlsite)
+#
+# Merges per-sample dedup BAMs by group, then runs pileup → CITS/CIMS on the
+# merged BAM.  Mirrors run_group_ctk_analysis but for the Clink sub-pipeline.
+#
+# Args:
+#   $1  groups_file         — same groups.txt used by CTK/bedgraph
+#   $2  clink_output_root   — e.g. OUTPUT_ROOT/5_Clink  or  OUTPUT_ROOT/6_Clink
+#                             (per-sample sub-dirs live here after aggregation)
+#   $3  threads             (default 4)
+#   $4  run_cits            "true"|"false"
+#   $5  run_cims            "true"|"false"
+#   $6  min_coverage        (default 5)
+#   $7  min_fraction        (default 0.05)
+#   $8  fdr                 (default 0.05)
+# ---------------------------------------------------------------------------
+run_group_clink_analysis() {
+    local groups_file="$1"
+    local clink_output_root="$2"
+    local threads="${3:-4}"
+    local run_cits="${4:-true}"
+    local run_cims="${5:-true}"
+    local min_cov="${6:-5}"
+    local min_frac="${7:-0.05}"
+    local fdr="${8:-0.05}"
+
+    console_msg "\n[GROUP CLINK ANALYSIS]"
+
+    # --- Parse groups file → sample→group map ---
+    local groups_map
+    groups_map=$(mktemp)
+    parse_groups_file "$groups_file" "$groups_map"
+
+    # --- Scan clink_output_root for per-sample dirs; skip GROUP_* dirs ---
+    local group_samples_file
+    group_samples_file=$(mktemp)
+
+    for sample_dir in "$clink_output_root"/*/; do
+        [[ ! -d "$sample_dir" ]] && continue
+        local sample_name
+        sample_name="$(basename "$sample_dir")"
+        # Skip group output dirs from this (or a previous) run
+        [[ "$sample_name" == GROUP_* ]] && continue   # unquoted RHS = glob pattern in [[ ]]
+
+        local group
+        group=$(grep -w "^${sample_name}" "$groups_map" 2>/dev/null | cut -f2)
+        if [[ -z "$group" ]]; then
+            group="$sample_name"
+            log_info "Clink group: '$sample_name' not in groups file → treated as individual"
+        fi
+        printf "%s\t%s\n" "$group" "$sample_name" >> "$group_samples_file"
+    done
+
+    if [[ ! -s "$group_samples_file" ]]; then
+        log_warning "Clink group analysis: no sample directories found in $clink_output_root"
+        rm -f "$groups_map" "$group_samples_file"
+        return 0
+    fi
+
+    local unique_groups
+    unique_groups=$(cut -f1 "$group_samples_file" | sort -u)
+
+    for group in $unique_groups; do
+        local samples
+        samples=$(grep -w "^${group}" "$group_samples_file" | cut -f2 | tr '\n' ' ')
+        local sample_count
+        sample_count=$(echo $samples | wc -w | tr -d ' ')
+
+        printf "  > %s (%d sample%s): " \
+            "$group" "$sample_count" "$([[ $sample_count -eq 1 ]] && echo '' || echo 's')"
+
+        local group_dir="$clink_output_root/GROUP_${group}"
+        mkdir -p "$group_dir"
+
+        # --- Collect per-sample dedup BAMs ---
+        local bam_inputs=()
+        for sample in $samples; do
+            local bam="$clink_output_root/${sample}/${sample}_dedup.bam"
+            if [[ -f "$bam" ]]; then
+                bam_inputs+=("$bam")
+                log_info "  Clink group $group: adding $bam"
+            else
+                log_warning "  Clink group $group: dedup BAM not found for $sample ($bam)"
+            fi
+        done
+
+        if [[ ${#bam_inputs[@]} -eq 0 ]]; then
+            log_warning "Clink group $group: no dedup BAMs found — skipping"
+            printf "SKIPPED (no BAMs)\n"
+            continue
+        fi
+
+        # --- Merge BAMs (or symlink if only one sample) ---
+        local merged_bam="$group_dir/${group}_merged_dedup.bam"
+        if [[ ${#bam_inputs[@]} -eq 1 ]]; then
+            cp "${bam_inputs[0]}" "$merged_bam"
+        else
+            update_status "Clink group $group merge"
+            samtools merge -f -@ "$threads" "$merged_bam" "${bam_inputs[@]}" \
+                2>>"${LOG_FILE:-/dev/null}"
+        fi
+
+        if [[ ! -s "$merged_bam" ]]; then
+            log_error "Clink group $group: BAM merge failed → $merged_bam"
+            printf "FAILED\n"
+            continue
+        fi
+
+        # Index merged BAM (required by pileup.py)
+        samtools index "$merged_bam" 2>>"${LOG_FILE:-/dev/null}"
+
+        # --- Pileup ---
+        local npz="$group_dir/${group}_pileup.npz"
+        update_status "Clink group $group pileup"
+        if ! run_clink_pileup "$merged_bam" "$npz" "$threads"; then
+            log_error "Clink group $group: pileup failed"
+            printf "FAILED\n"
+            continue
+        fi
+
+        local prefix="$group_dir/${group}"
+
+        # --- CITS ---
+        if [[ "$run_cits" == "true" ]]; then
+            update_status "Clink group $group CITS"
+            run_clink_cits "$npz" "$prefix" "$min_cov" "$min_frac" "$fdr" || true
+        fi
+
+        # --- CIMS ---
+        if [[ "$run_cims" == "true" ]]; then
+            update_status "Clink group $group CIMS"
+            run_clink_cims "$npz" "$prefix" "$min_cov" "$min_frac" "$fdr" || true
+        fi
+
+        update_status_done
+        log_info "Clink group $group complete → $group_dir"
+    done
+
+    rm -f "$groups_map" "$group_samples_file"
 }

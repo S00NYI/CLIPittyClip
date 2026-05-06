@@ -120,6 +120,12 @@ TOOLS_DIR="${TOOLS_DIR/#\~/$HOME}"
 #-------------------------------------------------------------------------------
 # Main Installation
 #-------------------------------------------------------------------------------
+# Check if running on Linux
+if [[ "$(uname)" != "Darwin" ]]; then
+    print_error "This script is for macOS. Please run ./install_linux.sh instead."
+    exit 1
+fi
+
 print_header
 
 echo -e "${BOLD}Configuration:${NC}"
@@ -190,6 +196,22 @@ if command -v brew &> /dev/null; then
     else
         print_success "openssl already installed"
     fi
+
+    # Check and install expat (needed for XML::Parser)
+    if ! brew list expat &> /dev/null; then
+        print_info "Installing expat via Homebrew..."
+        brew install expat || print_warning "Failed to install expat"
+    else
+        print_success "expat already installed"
+    fi
+
+    # Check and install berkeley-db (needed for DB_File)
+    if ! brew list berkeley-db &> /dev/null; then
+        print_info "Installing berkeley-db via Homebrew..."
+        brew install berkeley-db || print_warning "Failed to install berkeley-db"
+    else
+        print_success "berkeley-db already installed"
+    fi
 else
     print_warning "Homebrew not found. Some Perl modules may fail to compile."
     print_info "Install Homebrew from: https://brew.sh"
@@ -234,7 +256,7 @@ if [[ -z "$SKIP_CONDA" ]]; then
     $CONDA_CMD install -n "$ENV_NAME" -y \
         -c conda-forge -c bioconda \
         wget \
-        "python>=3.10" \
+        "python>=3.10,<3.13" \
         perl \
         perl-threaded \
         perl-yaml \
@@ -243,7 +265,7 @@ if [[ -z "$SKIP_CONDA" ]]; then
         htslib \
         bowtie2 \
         bwa \
-        star \
+        "star=2.7.10b" \   # 2.7.11b breaks subprocess spawning on macOS Tahoe via Rosetta
         cutadapt \
         fastp \
         seqkit \
@@ -253,6 +275,8 @@ if [[ -z "$SKIP_CONDA" ]]; then
         scipy \
         seaborn \
         matplotlib \
+        pysam \
+        umi_tools \
         ca-certificates \
         openssl \
         certifi \
@@ -322,17 +346,28 @@ chmod +x "$CONDA_BIN/x86_64-apple-darwin13.4.0-ranlib"
 chmod +x "$CONDA_BIN/x86_64-apple-darwin13.4.0-ld"
 print_success "Compiler wrappers created"
 
+# FIX: Create xlocale.h compatibility stub
+# Conda's perl 5.32 was built expecting xlocale.h, which was removed in
+# macOS Catalina (10.15) and later. This stub redirects to locale.h which
+# now contains the same definitions. The existence check prevents overwriting
+# on reinstall.
+if [[ ! -f "$CONDA_PREFIX/include/xlocale.h" ]]; then
+    print_info "Creating xlocale.h compatibility stub..."
+    echo '#include <locale.h>' > "$CONDA_PREFIX/include/xlocale.h"
+    print_success "xlocale.h stub created"
+fi
+
 # Set compiler flags for Homebrew libraries
 if [[ -d "/opt/homebrew/opt/openssl" ]]; then
     # Apple Silicon
-    export LDFLAGS="-L/opt/homebrew/opt/openssl/lib -L/opt/homebrew/opt/libxml2/lib"
-    export CPPFLAGS="-I/opt/homebrew/opt/openssl/include -I/opt/homebrew/opt/libxml2/include"
-    export PKG_CONFIG_PATH="/opt/homebrew/opt/openssl/lib/pkgconfig:/opt/homebrew/opt/libxml2/lib/pkgconfig"
+    export LDFLAGS="-L/opt/homebrew/opt/openssl/lib -L/opt/homebrew/opt/libxml2/lib -L/opt/homebrew/opt/expat/lib -L/opt/homebrew/opt/berkeley-db/lib"
+    export CPPFLAGS="-I/opt/homebrew/opt/openssl/include -I/opt/homebrew/opt/libxml2/include -I/opt/homebrew/opt/expat/include -I/opt/homebrew/opt/berkeley-db/include"
+    export PKG_CONFIG_PATH="/opt/homebrew/opt/openssl/lib/pkgconfig:/opt/homebrew/opt/libxml2/lib/pkgconfig:/opt/homebrew/opt/expat/lib/pkgconfig"
 elif [[ -d "/usr/local/opt/openssl" ]]; then
     # Intel Mac
-    export LDFLAGS="-L/usr/local/opt/openssl/lib -L/usr/local/opt/libxml2/lib"
-    export CPPFLAGS="-I/usr/local/opt/openssl/include -I/usr/local/opt/libxml2/include"
-    export PKG_CONFIG_PATH="/usr/local/opt/openssl/lib/pkgconfig:/usr/local/opt/libxml2/lib/pkgconfig"
+    export LDFLAGS="-L/usr/local/opt/openssl/lib -L/usr/local/opt/libxml2/lib -L/usr/local/opt/expat/lib -L/usr/local/opt/berkeley-db/lib"
+    export CPPFLAGS="-I/usr/local/opt/openssl/include -I/usr/local/opt/libxml2/include -I/usr/local/opt/expat/include -I/usr/local/opt/berkeley-db/include"
+    export PKG_CONFIG_PATH="/usr/local/opt/openssl/lib/pkgconfig:/usr/local/opt/libxml2/lib/pkgconfig:/usr/local/opt/expat/lib/pkgconfig"
 fi
 
 # Check if cpanm is available, if not install it
@@ -340,6 +375,13 @@ if ! command -v cpanm &> /dev/null; then
     print_info "Installing cpanminus..."
     curl -L https://cpanmin.us | perl - App::cpanminus 2>/dev/null || true
 fi
+
+# Install modules needed for BioPerl compatibility
+print_info "Installing XML::Parser (required for Bio::SeqIO)..."
+cpanm --notest XML::Parser 2>/dev/null || true
+
+print_info "Installing DB_File (required for Bio::SeqIO)..."
+cpanm --notest DB_File 2>/dev/null || true
 
 # Install only the modules CTK actually needs (not full BioPerl)
 print_info "Installing Math::CDF (required for CIMS/CITS)..."
@@ -441,36 +483,31 @@ if [[ ! -f "$SHELL_RC" ]]; then
     SHELL_RC="$HOME/.bash_profile"
 fi
 
+# FIX: Remove existing entries before re-adding to prevent duplicate PATH
+# entries accumulating across reinstalls.
+print_info "Removing any existing PATH entries from $SHELL_RC..."
+sed -i '' '/# CLIPittyClip$/,/^$/d' "$SHELL_RC" 2>/dev/null || true
+sed -i '' '/# CTK (CLIP Tool Kit)$/,/^$/d' "$SHELL_RC" 2>/dev/null || true
+sed -i '' '/# HOMER$/,/^$/d' "$SHELL_RC" 2>/dev/null || true
+
 # Add CLIPittyClip to PATH
-if grep -q "CLIPittyClip" "$SHELL_RC" 2>/dev/null; then
-    print_warning "CLIPittyClip already configured in $SHELL_RC"
-else
-    echo "" >> "$SHELL_RC"
-    echo "# CLIPittyClip" >> "$SHELL_RC"
-    echo "export PATH=\"\$PATH:${SCRIPT_DIR}\"" >> "$SHELL_RC"
-    print_success "Added CLIPittyClip to PATH"
-fi
+echo "" >> "$SHELL_RC"
+echo "# CLIPittyClip" >> "$SHELL_RC"
+echo "export PATH=\"\$PATH:${SCRIPT_DIR}\"" >> "$SHELL_RC"
+print_success "Added CLIPittyClip to PATH"
 
 # Add CTK to PATH and PERL5LIB
-if ! grep -q "ctk" "$SHELL_RC" 2>/dev/null; then
-    echo "" >> "$SHELL_RC"
-    echo "# CTK (CLIP Tool Kit)" >> "$SHELL_RC"
-    echo "export PATH=\"\$PATH:${CTK_DIR}\"" >> "$SHELL_RC"
-    echo "export PERL5LIB=\"\$PERL5LIB:${CTK_DIR}/czplib\"" >> "$SHELL_RC"
-    print_success "Added CTK to PATH and PERL5LIB"
-else
-    print_warning "CTK already in PATH"
-fi
+echo "" >> "$SHELL_RC"
+echo "# CTK (CLIP Tool Kit)" >> "$SHELL_RC"
+echo "export PATH=\"\$PATH:${CTK_DIR}\"" >> "$SHELL_RC"
+echo "export PERL5LIB=\"\$PERL5LIB:${CTK_DIR}/czplib\"" >> "$SHELL_RC"
+print_success "Added CTK to PATH and PERL5LIB"
 
 # Add HOMER to PATH
-if ! grep -q "homer" "$SHELL_RC" 2>/dev/null; then
-    echo "" >> "$SHELL_RC"
-    echo "# HOMER" >> "$SHELL_RC"
-    echo "export PATH=\"\$PATH:${HOMER_DIR}/bin\"" >> "$SHELL_RC"
-    print_success "Added HOMER to PATH"
-else
-    print_warning "HOMER already in PATH"
-fi
+echo "" >> "$SHELL_RC"
+echo "# HOMER" >> "$SHELL_RC"
+echo "export PATH=\"\$PATH:${HOMER_DIR}/bin\"" >> "$SHELL_RC"
+print_success "Added HOMER to PATH"
 
 # Set execute permissions on CLIPittyClip scripts
 chmod +x "$SCRIPT_DIR/CLIPittyClip.sh" 2>/dev/null || true
@@ -506,4 +543,6 @@ echo -e "  ${CYAN}which parseAlignment.pl${NC}"
 echo -e "  ${CYAN}which findPeaks${NC}"
 echo -e "  ${CYAN}perl -MBio::Seq -e 'print \"BioPerl OK\\n\"'${NC}"
 echo -e "  ${CYAN}perl -MMath::CDF -e 'print \"Math::CDF OK\\n\"'${NC}"
+echo -e "  ${CYAN}python3 -c \"import pysam; print('pysam OK')\"${NC}"
+echo -e "  ${CYAN}umi_tools --version${NC}"
 echo ""

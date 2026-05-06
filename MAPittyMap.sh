@@ -16,8 +16,9 @@ INPUT_FILE=""
 EXP_ID=""
 ALIGNER="star"
 MISMATCH_MAX=2
+GENOME_FASTA=""       # Path to reference FASTA (optional; strongly recommended for CIMS)
 WIZARD_MODE="false"
-SKIP_NCRNA="false"  # ncRNA filtering is ON by default
+FILTER_NCRNA="false"  # ncRNA filtering is OFF by default; enable with --filter-ncrna
 
 function show_usage {
     echo ""
@@ -30,14 +31,15 @@ function show_usage {
     echo "  -x <path>      Path to genome index directory"
     echo ""
     echo "OPTIONS:"
-    echo "  --aligner <str>  Aligner: 'star' (default) or 'bowtie2'"
-    echo "  -o <str>         Output ID (default: derived from filename)"
-    echo "  -t <int>         Number of threads (default: 1)"
-    echo "  -m <int>         Max mismatches (default: 2)"
-    echo "  --wizard         Launch interactive configuration wizard
-  --advanced       Alias for --wizard (backward compatibility)
-  --skip-ncrna     Disable ncRNA pre-filtering (on by default)
-  -h, --help       Show this help message"
+    echo "  --aligner <str>       Aligner: 'star' (default) or 'bowtie2'"
+    echo "  --genome-fasta <path> Reference FASTA (enables samtools calmd; recommended for CIMS)"
+    echo "  -o <str>              Output ID (default: derived from filename)"
+    echo "  -t <int>              Number of threads (default: 1)"
+    echo "  -m <int>              Max absolute mismatches backstop (default: 2; STAR uses fractional 0.1)"
+    echo "  --wizard              Launch interactive configuration wizard
+  --advanced            Alias for --wizard (backward compatibility)
+  --filter-ncrna        Enable ncRNA pre-filtering (off by default)
+  -h, --help            Show this help message"
     echo ""
     echo "OUTPUT:"
     echo "  Creates 1_BAM/ directory with sorted, indexed BAM file"
@@ -63,8 +65,9 @@ while [[ $# -gt 0 ]]; do
         -x) GENOME_INDEX="$2"; shift 2 ;;
         -o) EXP_ID="$2"; shift 2 ;;
         --aligner) ALIGNER=$(echo "$2" | tr '[:upper:]' '[:lower:]'); shift 2 ;;
+        --genome-fasta) GENOME_FASTA="$2"; shift 2 ;;
         --wizard|--advanced) WIZARD_MODE="true"; shift 1 ;;
-        --skip-ncrna) SKIP_NCRNA="true"; shift ;;
+        --filter-ncrna) FILTER_NCRNA="true"; shift ;;
         -t) THREADS="$2"; shift 2 ;;
         -m) MISMATCH_MAX="$2"; shift 2 ;;
         -h|--help) show_usage; exit 0 ;;
@@ -86,6 +89,7 @@ if [[ "$WIZARD_MODE" == "true" ]]; then
     THREADS="$WIZ_THREADS"
     MISMATCH_MAX="${WIZ_ALIGN_MISMATCHES:-2}"
     [[ -n "$WIZ_OUTPUT_NAME" ]] && EXP_ID="$WIZ_OUTPUT_NAME"
+    [[ -n "$WIZ_ALIGNER_ARGS" ]] && ADV_ALIGNER_ARGS="$WIZ_ALIGNER_ARGS"
 fi
 
 if [[ -z "$INPUT_FILE" ]] || [[ -z "$GENOME_INDEX" ]]; then
@@ -99,6 +103,17 @@ check_file "$INPUT_FILE" || exit 1
 # Resolve absolute paths
 INPUT_FILE="$(cd "$(dirname "$INPUT_FILE")" && pwd)/$(basename "$INPUT_FILE")"
 GENOME_INDEX="$(cd "$GENOME_INDEX" && pwd)"
+
+# Resolve and export GENOME_FASTA if provided (used by run_parse_alignment in modules.sh)
+if [[ -n "$GENOME_FASTA" ]]; then
+    if [[ ! -f "$GENOME_FASTA" ]]; then
+        log_error "Genome FASTA not found: $GENOME_FASTA"
+        exit 1
+    fi
+    GENOME_FASTA="$(cd "$(dirname "$GENOME_FASTA")" && pwd)/$(basename "$GENOME_FASTA")"
+    export GENOME_FASTA
+    log_info "Genome FASTA: $GENOME_FASTA"
+fi
 
 # Check Dependencies based on Aligner
 if [[ "$ALIGNER" == "bowtie2" ]]; then
@@ -128,7 +143,12 @@ if [[ "$BASENAME" == "$INPUT_FILE" ]]; then BASENAME=$(basename "$INPUT_FILE" .f
 if [[ -n "$EXP_ID" ]]; then BASENAME="$EXP_ID"; fi
 
 # Structure: Create 1_BAM inside a named folder
-OUT_DIR="${BASENAME}_mapping"
+if [[ "$BASENAME" == /* ]]; then
+    OUT_DIR="${BASENAME}_mapping"
+    BASENAME=$(basename "$BASENAME")
+else
+    OUT_DIR="${BASENAME}_mapping"
+fi
 mkdir -p "${OUT_DIR}/1_BAM"
 mkdir -p "${OUT_DIR}/REPORTS"
 
@@ -142,7 +162,7 @@ cd "${OUT_DIR}" || exit 1
 
 # Run ncRNA pre-filtering if enabled and index exists
 MAPPING_INPUT="$INPUT_FILE"
-if [[ "$SKIP_NCRNA" == "false" ]]; then
+if [[ "$FILTER_NCRNA" == "true" ]]; then
     NCRNA_INDEX_DIR=$(check_ncrna_index "$GENOME_INDEX")
     if [[ -n "$NCRNA_INDEX_DIR" ]]; then
         mkdir -p "OTHERS/ncRNA_Mapping"

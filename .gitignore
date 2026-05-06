@@ -1,6 +1,7 @@
 
 indices.tar.gz
 .DS_Store
+test
 
 bedgraph_normalization_1.sh
 bedgraph_normalization_2.R
@@ -10,7 +11,9 @@ install_*.txt
 install_log*.txt
 *.log
 
-# Editor/IDE
+# Editor/IDE/AI
 .vscode/
+.claude/
+.agents/
 *.swp
 *~

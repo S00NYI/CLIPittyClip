@@ -383,30 +383,47 @@ run_wizard_clipittyclip() {
         fi
         
         # Peak Calling Settings
-        print_section "PEAK CALLING SETTINGS (HOMER)"
+        print_section "PEAK CALLING SETTINGS"
         echo ""
-        echo -e "  ${WIZ_YELLOW}Current HOMER defaults:${WIZ_NC}"
-        echo "    -style factor"
-        echo "    -L 2"
-        echo "    -localSize 10000"
-        echo "    -minDist 50"
-        echo "    -size 20"
-        echo "    -fragLength 25"
+        echo "  [1] HOMER findPeaks (Default)"
+        echo "  [2] CTK tag2peak.pl"
         echo ""
-        prompt_value "  Enter min distance between peaks" "50" WIZ_PEAK_DIST "int"
-        prompt_value "  Enter peak size" "20" WIZ_PEAK_SIZE "int"
-        prompt_value "  Enter fragment length" "25" WIZ_FRAG_LEN "int"
-        echo ""
-        echo -e "  ${WIZ_GREEN}Common HOMER findPeaks options:${WIZ_NC}"
-        echo "    -style <str>           factor (TF), histone (broad), groseq, tss"
-        echo "    -F <float>             Fold enrichment over control (default: 4.0)"
-        echo "    -L <float>             Local filtering enrichment (default: 2.0)"
-        echo "    -localSize <int>       Region size for local background"
-        echo "    -strand <str>          separate or both"
-        echo ""
-        echo -e "  ${WIZ_YELLOW}Note:${WIZ_NC} These are examples. See HOMER documentation for full options."
-        echo "  Enter additional HOMER findPeaks arguments (optional):"
-        read -p "  > " WIZ_HOMER_ARGS
+        prompt_value "  Select peak caller [1-2]" "1" caller_sel "int"
+        
+        if [[ "$caller_sel" == "2" ]]; then
+            WIZ_PEAK_CALLER="ctk"
+            echo -e "  ${WIZ_YELLOW}Current CTK tag2peak defaults:${WIZ_NC}"
+            echo "    -big -ss --valley-seeking -minPH 2"
+            echo ""
+            prompt_value "  Enter gap (-gap)" "50" WIZ_PEAK_DIST "int"
+            echo ""
+            echo "  Enter additional CTK tag2peak arguments (optional):"
+            read -p "  > " WIZ_CTK_PEAK_ARGS
+        else
+            WIZ_PEAK_CALLER="homer"
+            echo -e "  ${WIZ_YELLOW}Current HOMER defaults:${WIZ_NC}"
+            echo "    -style factor"
+            echo "    -L 2"
+            echo "    -localSize 10000"
+            echo "    -minDist 50"
+            echo "    -size 20"
+            echo "    -fragLength 25"
+            echo ""
+            prompt_value "  Enter min distance between peaks" "50" WIZ_PEAK_DIST "int"
+            prompt_value "  Enter peak size" "20" WIZ_PEAK_SIZE "int"
+            prompt_value "  Enter fragment length" "25" WIZ_FRAG_LEN "int"
+            echo ""
+            echo -e "  ${WIZ_GREEN}Common HOMER findPeaks options:${WIZ_NC}"
+            echo "    -style <str>           factor (TF), histone (broad), groseq, tss"
+            echo "    -F <float>             Fold enrichment over control (default: 4.0)"
+            echo "    -L <float>             Local filtering enrichment (default: 2.0)"
+            echo "    -localSize <int>       Region size for local background"
+            echo "    -strand <str>          separate or both"
+            echo ""
+            echo -e "  ${WIZ_YELLOW}Note:${WIZ_NC} These are examples. See HOMER documentation for full options."
+            echo "  Enter additional HOMER findPeaks arguments (optional):"
+            read -p "  > " WIZ_HOMER_ARGS
+        fi
     fi
     
     # ─────────────────────────────────────────────────────────────────────────
@@ -445,11 +462,18 @@ run_wizard_clipittyclip() {
         printf "  │ %-20s %-38s │\n" "CTK Args:" "$WIZ_CTK_ARGS"
     fi
     echo "  ├─────────────────────────────────────────────────────────────┤"
-    printf "  │ %-20s %-38s │\n" "Peak Distance:" "$WIZ_PEAK_DIST"
-    printf "  │ %-20s %-38s │\n" "Peak Size:" "$WIZ_PEAK_SIZE"
-    printf "  │ %-20s %-38s │\n" "Fragment Length:" "$WIZ_FRAG_LEN"
-    if [[ -n "$WIZ_HOMER_ARGS" ]]; then
-        printf "  │ %-20s %-38s │\n" "HOMER Args:" "$WIZ_HOMER_ARGS"
+    printf "  │ %-20s %-38s │\n" "Peak Caller:" "$(echo "${WIZ_PEAK_CALLER:-homer}" | tr '[:lower:]' '[:upper:]')"
+    printf "  │ %-20s %-38s │\n" "Peak Distance/Gap:" "$WIZ_PEAK_DIST"
+    if [[ "${WIZ_PEAK_CALLER:-homer}" == "homer" ]]; then
+        printf "  │ %-20s %-38s │\n" "Peak Size:" "$WIZ_PEAK_SIZE"
+        printf "  │ %-20s %-38s │\n" "Fragment Length:" "$WIZ_FRAG_LEN"
+        if [[ -n "$WIZ_HOMER_ARGS" ]]; then
+            printf "  │ %-20s %-38s │\n" "HOMER Args:" "$WIZ_HOMER_ARGS"
+        fi
+    else
+        if [[ -n "$WIZ_CTK_PEAK_ARGS" ]]; then
+            printf "  │ %-20s %-38s │\n" "CTK Peak Args:" "$WIZ_CTK_PEAK_ARGS"
+        fi
     fi
     echo "  └─────────────────────────────────────────────────────────────┘"
     echo ""
@@ -466,7 +490,7 @@ run_wizard_clipittyclip() {
     export WIZ_ALIGNER WIZ_THREADS WIZ_UMI_LEN WIZ_ADAPTER
     export WIZ_ALIGNER_ARGS WIZ_FASTP_ARGS WIZ_CTK_ARGS WIZ_HOMER_ARGS
     export WIZ_CIMS WIZ_CITS
-    export WIZ_PEAK_DIST WIZ_PEAK_SIZE WIZ_FRAG_LEN
+    export WIZ_PEAK_CALLER WIZ_PEAK_DIST WIZ_PEAK_SIZE WIZ_FRAG_LEN WIZ_CTK_PEAK_ARGS
     
     echo -e "${WIZ_GREEN}Starting analysis...${WIZ_NC}"
     return 0
@@ -661,32 +685,50 @@ run_wizard_peakittypeak() {
             "HOMER findPeaks: http://homer.ucsd.edu/homer/ngs/peaks.html" \
             "HOMER Manual: http://homer.ucsd.edu/homer/"
         
-        print_section "PEAK PARAMETERS (HOMER)"
+        print_section "PEAK PARAMETERS"
         echo ""
-        echo -e "  ${WIZ_YELLOW}Current HOMER defaults:${WIZ_NC}"
-        echo "    -style factor"
-        echo "    -L 2"
-        echo "    -localSize 10000"
-        echo "    -minDist 50"
-        echo "    -size 20"
-        echo "    -fragLength 25"
+        echo "  [1] HOMER findPeaks (Default)"
+        echo "  [2] CTK tag2peak.pl"
         echo ""
-        prompt_value "  Enter min distance between peaks" "50" WIZ_PEAK_DIST "int"
-        prompt_value "  Enter peak size" "20" WIZ_PEAK_SIZE "int"
-        prompt_value "  Enter fragment length" "25" WIZ_FRAG_LEN "int"
-        prompt_value "  Enter output name" "Combined" WIZ_OUTPUT_NAME
+        prompt_value "  Select peak caller [1-2]" "1" caller_sel "int"
         
-        echo ""
-        echo -e "  ${WIZ_GREEN}Common HOMER findPeaks options:${WIZ_NC}"
-        echo "    -style <str>           factor (TF), histone (broad), groseq, tss"
-        echo "    -F <float>             Fold enrichment over control (default: 4.0)"
-        echo "    -L <float>             Local filtering enrichment (default: 2.0)"
-        echo "    -localSize <int>       Region size for local background"
-        echo "    -strand <str>          separate or both"
-        echo ""
-        echo -e "  ${WIZ_YELLOW}Note:${WIZ_NC} These are examples. See HOMER documentation for full options."
-        echo "  Enter additional HOMER findPeaks arguments (optional):"
-        read -p "  > " WIZ_HOMER_ARGS
+        if [[ "$caller_sel" == "2" ]]; then
+            WIZ_PEAK_CALLER="ctk"
+            echo -e "  ${WIZ_YELLOW}Current CTK tag2peak defaults:${WIZ_NC}"
+            echo "    -big -ss --valley-seeking -minPH 2"
+            echo ""
+            prompt_value "  Enter gap (-gap)" "50" WIZ_PEAK_DIST "int"
+            prompt_value "  Enter output name" "Combined" WIZ_OUTPUT_NAME
+            echo ""
+            echo "  Enter additional CTK tag2peak arguments (optional):"
+            read -p "  > " WIZ_CTK_PEAK_ARGS
+        else
+            WIZ_PEAK_CALLER="homer"
+            echo -e "  ${WIZ_YELLOW}Current HOMER defaults:${WIZ_NC}"
+            echo "    -style factor"
+            echo "    -L 2"
+            echo "    -localSize 10000"
+            echo "    -minDist 50"
+            echo "    -size 20"
+            echo "    -fragLength 25"
+            echo ""
+            prompt_value "  Enter min distance between peaks" "50" WIZ_PEAK_DIST "int"
+            prompt_value "  Enter peak size" "20" WIZ_PEAK_SIZE "int"
+            prompt_value "  Enter fragment length" "25" WIZ_FRAG_LEN "int"
+            prompt_value "  Enter output name" "Combined" WIZ_OUTPUT_NAME
+            
+            echo ""
+            echo -e "  ${WIZ_GREEN}Common HOMER findPeaks options:${WIZ_NC}"
+            echo "    -style <str>           factor (TF), histone (broad), groseq, tss"
+            echo "    -F <float>             Fold enrichment over control (default: 4.0)"
+            echo "    -L <float>             Local filtering enrichment (default: 2.0)"
+            echo "    -localSize <int>       Region size for local background"
+            echo "    -strand <str>          separate or both"
+            echo ""
+            echo -e "  ${WIZ_YELLOW}Note:${WIZ_NC} These are examples. See HOMER documentation for full options."
+            echo "  Enter additional HOMER findPeaks arguments (optional):"
+            read -p "  > " WIZ_HOMER_ARGS
+        fi
     fi
     
     # ─────────────────────────────────────────────────────────────────────────
@@ -698,13 +740,20 @@ run_wizard_peakittypeak() {
     printf "  │ %-20s %-38s │\n" "Working Dir:" "$WIZ_WORK_DIR"
     printf "  │ %-20s %-38s │\n" "BED Files:" "$WIZ_BED_COUNT files found"
     echo "  ├─────────────────────────────────────────────────────────────┤"
-    printf "  │ %-20s %-38s │\n" "Peak Distance:" "$WIZ_PEAK_DIST"
-    printf "  │ %-20s %-38s │\n" "Peak Size:" "$WIZ_PEAK_SIZE"
-    printf "  │ %-20s %-38s │\n" "Fragment Length:" "$WIZ_FRAG_LEN"
-    printf "  │ %-20s %-38s │\n" "Output Name:" "$WIZ_OUTPUT_NAME"
-    if [[ -n "$WIZ_HOMER_ARGS" ]]; then
-        printf "  │ %-20s %-38s │\n" "HOMER Args:" "$WIZ_HOMER_ARGS"
+    printf "  │ %-20s %-38s │\n" "Peak Caller:" "$(echo "${WIZ_PEAK_CALLER:-homer}" | tr '[:lower:]' '[:upper:]')"
+    printf "  │ %-20s %-38s │\n" "Peak Distance/Gap:" "$WIZ_PEAK_DIST"
+    if [[ "${WIZ_PEAK_CALLER:-homer}" == "homer" ]]; then
+        printf "  │ %-20s %-38s │\n" "Peak Size:" "$WIZ_PEAK_SIZE"
+        printf "  │ %-20s %-38s │\n" "Fragment Length:" "$WIZ_FRAG_LEN"
+        if [[ -n "$WIZ_HOMER_ARGS" ]]; then
+            printf "  │ %-20s %-38s │\n" "HOMER Args:" "$WIZ_HOMER_ARGS"
+        fi
+    else
+        if [[ -n "$WIZ_CTK_PEAK_ARGS" ]]; then
+            printf "  │ %-20s %-38s │\n" "CTK Peak Args:" "$WIZ_CTK_PEAK_ARGS"
+        fi
     fi
+    printf "  │ %-20s %-38s │\n" "Output Name:" "$WIZ_OUTPUT_NAME"
     echo "  └─────────────────────────────────────────────────────────────┘"
     echo ""
     
@@ -716,7 +765,7 @@ run_wizard_peakittypeak() {
     fi
     
     # Export variables for main script
-    export WIZ_WORK_DIR WIZ_BED_COUNT
+    export WIZ_WORK_DIR WIZ_BED_COUNT WIZ_PEAK_CALLER WIZ_CTK_PEAK_ARGS
     export WIZ_PEAK_DIST WIZ_PEAK_SIZE WIZ_FRAG_LEN WIZ_OUTPUT_NAME WIZ_HOMER_ARGS
     
     echo -e "${WIZ_GREEN}Starting peak calling...${WIZ_NC}"
