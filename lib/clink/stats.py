@@ -124,7 +124,11 @@ def test_signal(positions:        np.ndarray,
     Returns list of dicts for significant sites, sorted by q-value then
     fraction descending (best sites first).
     """
-    if background_rate <= 0:
+    # Accept either scalar or per-position array
+    scalar_rate = np.isscalar(background_rate)
+    if scalar_rate and background_rate <= 0:
+        return []
+    if not scalar_rate and not np.any(background_rate > 0):
         return []
 
     # Pre-filter: positions worth testing
@@ -144,7 +148,16 @@ def test_signal(positions:        np.ndarray,
     # Vectorized Binomial survival function: P(X >= k) = binom.sf(k-1, n, p)
     k = signal[testable].astype(int)
     n = coverage[testable].astype(int)
-    raw_pvals = binom.sf(k - 1, n, background_rate)
+    rate = background_rate if np.isscalar(background_rate) else background_rate[testable]
+    # Mask out zero-rate positions (no local cluster signal) — skip test
+    if not np.isscalar(rate):
+        valid = rate > 0
+        if not np.any(valid):
+            return []
+        raw_pvals      = np.ones(len(k))
+        raw_pvals[valid] = binom.sf(k[valid] - 1, n[valid], rate[valid])
+    else:
+        raw_pvals = binom.sf(k - 1, n, rate)
 
     # BH correction over all tested positions
     qvals = bh_fdr(raw_pvals)
@@ -239,8 +252,8 @@ def run_analysis(bam_path:     str,
         result = to_arrays(pileup)
         if result is None:
             continue
-        positions, coverage, truncations, deletions, subs = result
-        chrom_data[c] = (positions, coverage, truncations, deletions, subs)
+        positions, coverage, truncations, deletions, clean_truncations, subs = result
+        chrom_data[c] = (positions, coverage, truncations, deletions, clean_truncations, subs)
 
         g_cov.append(coverage)
         g_trunc.append(truncations)
@@ -298,7 +311,7 @@ def run_analysis(bam_path:     str,
     totals.update({st: 0 for st in λ_subs})
 
     # --- Per-chromosome testing ---
-    for c, (positions, coverage, truncations, deletions, subs) in chrom_data.items():
+    for c, (positions, coverage, truncations, deletions, clean_truncations, subs) in chrom_data.items():
 
         # Truncation sites (CITS-equivalent)
         t_res = test_signal(positions, truncations, coverage,

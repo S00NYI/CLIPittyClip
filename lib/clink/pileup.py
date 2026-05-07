@@ -170,7 +170,7 @@ _CHUNK_SIZE = 5_000_000
 
 def _process_chunk(M_starts: list, M_ends: list,
                    D_starts: list, D_ends: list,
-                   T_off: list, size: int,
+                   T_off: list, T_clean: list, size: int,
                    subs_sparse: dict, sub_reads: list) -> tuple:
     """
     Run bincount/cumsum on one chunk's interval lists and return sparse arrays.
@@ -180,14 +180,15 @@ def _process_chunk(M_starts: list, M_ends: list,
     M_starts, M_ends : M/=/X block endpoints, already offset to [0, size)
     D_starts, D_ends : D block endpoints, already offset to [0, size)
     T_off            : truncation positions offset to [0, size)
+    T_clean          : truncation positions for reads with no deletion in CIGAR
     size             : chunk size in bp
     subs_sparse      : accumulate substitutions here (modified in place)
     sub_reads        : reads with mismatches owned by this chunk
 
     Returns
     -------
-    (local_positions, coverage, truncations, deletions) as numpy arrays,
-    or None if the chunk has no signal.
+    (local_positions, coverage, truncations, deletions, clean_truncations)
+    as numpy arrays, or None if the chunk has no signal.
     """
     if not M_starts and not T_off:
         return None
@@ -210,6 +211,13 @@ def _process_chunk(M_starts: list, M_ends: list,
         trunc_arr = np.bincount(T, minlength=size).astype(np.uint32)
     else:
         trunc_arr = np.zeros(size, dtype=np.uint32)
+
+    # Clean truncations: reads without any deletion in their CIGAR
+    if T_clean:
+        Tc = np.array(T_clean, dtype=np.int64)
+        clean_trunc_arr = np.bincount(Tc, minlength=size).astype(np.uint32)
+    else:
+        clean_trunc_arr = np.zeros(size, dtype=np.uint32)
 
     # D block coverage + deletions
     del_arr = np.zeros(size, dtype=np.uint32)
@@ -236,23 +244,27 @@ def _process_chunk(M_starts: list, M_ends: list,
     return (local_idx,
             cov_arr[local_idx],
             trunc_arr[local_idx],
-            del_arr[local_idx])
+            del_arr[local_idx],
+            clean_trunc_arr[local_idx])
 
 
 def _build_strand_arrays(all_positions: list, all_coverage: list,
                           all_truncations: list, all_deletions: list,
+                          all_clean_truncations: list,
                           subs_sparse: dict):
     """
     Concatenate chunk accumulation lists into final numpy arrays for one strand.
-    Returns (positions, coverage, truncations, deletions, subs_out) or None.
+    Returns (positions, coverage, truncations, deletions, clean_truncations, subs_out)
+    or None.
     """
     if not all_positions:
         return None
 
-    global_pos  = np.concatenate(all_positions).astype(np.int32)
-    coverage    = np.concatenate(all_coverage).astype(np.uint32)
-    truncations = np.concatenate(all_truncations).astype(np.uint32)
-    deletions   = np.concatenate(all_deletions).astype(np.uint32)
+    global_pos        = np.concatenate(all_positions).astype(np.int32)
+    coverage          = np.concatenate(all_coverage).astype(np.uint32)
+    truncations       = np.concatenate(all_truncations).astype(np.uint32)
+    deletions         = np.concatenate(all_deletions).astype(np.uint32)
+    clean_truncations = np.concatenate(all_clean_truncations).astype(np.uint32)
 
     # Build substitution arrays
     all_sub_types = set()
@@ -270,7 +282,7 @@ def _build_strand_arrays(all_positions: list, all_coverage: list,
                     arr[idx] = min(counter[sub_type], 65535)
         subs_out[sub_type] = arr
 
-    return (global_pos, coverage, truncations, deletions, subs_out)
+    return (global_pos, coverage, truncations, deletions, clean_truncations, subs_out)
 
 
 def _scan_single_chrom(bam_path: str, chrom: str,
@@ -303,16 +315,18 @@ def _scan_single_chrom(bam_path: str, chrom: str,
     n_skipped = 0
 
     # Accumulate chunk results separately per strand
-    all_positions_fwd:   list = []
-    all_coverage_fwd:    list = []
-    all_truncations_fwd: list = []
-    all_deletions_fwd:   list = []
+    all_positions_fwd:         list = []
+    all_coverage_fwd:          list = []
+    all_truncations_fwd:       list = []
+    all_deletions_fwd:         list = []
+    all_clean_truncations_fwd: list = []
     subs_sparse_fwd: dict = defaultdict(Counter)
 
-    all_positions_rev:   list = []
-    all_coverage_rev:    list = []
-    all_truncations_rev: list = []
-    all_deletions_rev:   list = []
+    all_positions_rev:         list = []
+    all_coverage_rev:          list = []
+    all_truncations_rev:       list = []
+    all_deletions_rev:         list = []
+    all_clean_truncations_rev: list = []
     subs_sparse_rev: dict = defaultdict(Counter)
 
     with pysam.AlignmentFile(bam_path, 'rb') as bam:
@@ -327,7 +341,8 @@ def _scan_single_chrom(bam_path: str, chrom: str,
             M_starts_rev: list = []; M_ends_rev: list = []
             D_starts_fwd: list = []; D_ends_fwd: list = []
             D_starts_rev: list = []; D_ends_rev: list = []
-            T_off_fwd:    list = []; T_off_rev:  list = []
+            T_off_fwd:       list = []; T_off_rev:       list = []
+            T_off_fwd_clean: list = []; T_off_rev_clean: list = []
             sub_reads_fwd: list = []; sub_reads_rev: list = []
 
             for read in bam.fetch(chrom, chunk_start, chunk_end):
@@ -349,6 +364,12 @@ def _scan_single_chrom(bam_path: str, chrom: str,
 
                 is_rev = read.is_reverse
 
+                # ── Pre-check: does this read have any deletion in CIGAR? ─
+                # Used to populate clean_truncations (CITS signal excluding
+                # reads that also carry a deletion event, matching CTK's
+                # removeRow step before CITS calling).
+                has_del = any(op == _OP_D for op, _ in read.cigartuples)
+
                 # ── Read ownership via truncation site ───────────────────
                 t = (read.reference_end if is_rev
                      else read.reference_start - 1)
@@ -360,8 +381,12 @@ def _scan_single_chrom(bam_path: str, chrom: str,
                     if 0 <= t_off < size:
                         if is_rev:
                             T_off_rev.append(t_off)
+                            if not has_del:
+                                T_off_rev_clean.append(t_off)
                         else:
                             T_off_fwd.append(t_off)
+                            if not has_del:
+                                T_off_fwd_clean.append(t_off)
                     # Substitutions counted once per read in owning chunk
                     try:
                         md = read.get_tag('MD')
@@ -405,23 +430,25 @@ def _scan_single_chrom(bam_path: str, chrom: str,
             # ── Process chunk — both strands independently ────────────────
             result_fwd = _process_chunk(
                 M_starts_fwd, M_ends_fwd, D_starts_fwd, D_ends_fwd,
-                T_off_fwd, size, subs_sparse_fwd, sub_reads_fwd)
+                T_off_fwd, T_off_fwd_clean, size, subs_sparse_fwd, sub_reads_fwd)
             if result_fwd is not None:
-                local_idx, cov, trunc, dels = result_fwd
+                local_idx, cov, trunc, dels, clean_trunc = result_fwd
                 all_positions_fwd.append(local_idx + chunk_start)
                 all_coverage_fwd.append(cov)
                 all_truncations_fwd.append(trunc)
                 all_deletions_fwd.append(dels)
+                all_clean_truncations_fwd.append(clean_trunc)
 
             result_rev = _process_chunk(
                 M_starts_rev, M_ends_rev, D_starts_rev, D_ends_rev,
-                T_off_rev, size, subs_sparse_rev, sub_reads_rev)
+                T_off_rev, T_off_rev_clean, size, subs_sparse_rev, sub_reads_rev)
             if result_rev is not None:
-                local_idx, cov, trunc, dels = result_rev
+                local_idx, cov, trunc, dels, clean_trunc = result_rev
                 all_positions_rev.append(local_idx + chunk_start)
                 all_coverage_rev.append(cov)
                 all_truncations_rev.append(trunc)
                 all_deletions_rev.append(dels)
+                all_clean_truncations_rev.append(clean_trunc)
 
     # ── Build ChromPileup ─────────────────────────────────────────────────────
     p = ChromPileup(chrom=chrom)
@@ -430,10 +457,10 @@ def _scan_single_chrom(bam_path: str, chrom: str,
 
     fwd_arrays = _build_strand_arrays(
         all_positions_fwd, all_coverage_fwd, all_truncations_fwd,
-        all_deletions_fwd, subs_sparse_fwd)
+        all_deletions_fwd, all_clean_truncations_fwd, subs_sparse_fwd)
     rev_arrays = _build_strand_arrays(
         all_positions_rev, all_coverage_rev, all_truncations_rev,
-        all_deletions_rev, subs_sparse_rev)
+        all_deletions_rev, all_clean_truncations_rev, subs_sparse_rev)
 
     p._arrays = {'fwd': fwd_arrays, 'rev': rev_arrays}  # type: ignore[attr-defined]
     return p
@@ -493,7 +520,7 @@ def scan_bam(
         for strand_arr in (arrays.get('fwd'), arrays.get('rev')):
             if strand_arr is None:
                 continue
-            positions, coverage, truncations, deletions, subs = strand_arr
+            positions, coverage, truncations, deletions, clean_truncations, subs = strand_arr
             n_pos   += len(positions)
             n_trunc += int(truncations.sum())
             n_del   += int(deletions.sum())
@@ -573,9 +600,10 @@ def to_arrays(pileup: ChromPileup):
     n = len(positions)
     idx = {p: i for i, p in enumerate(positions)}
 
-    coverage    = np.zeros(n, dtype=np.uint32)
-    truncations = np.zeros(n, dtype=np.uint32)
-    deletions   = np.zeros(n, dtype=np.uint32)
+    coverage          = np.zeros(n, dtype=np.uint32)
+    truncations       = np.zeros(n, dtype=np.uint32)
+    deletions         = np.zeros(n, dtype=np.uint32)
+    clean_truncations = np.zeros(n, dtype=np.uint32)  # legacy: assume all clean
 
     for pos, v in pileup.coverage.items():
         coverage[idx[pos]] = v
@@ -596,7 +624,7 @@ def to_arrays(pileup: ChromPileup):
                 arr[idx[pos]] = min(counter[sub_type], 65535)
         subs[sub_type] = arr
 
-    legacy_arrays = (positions, coverage, truncations, deletions, subs)
+    legacy_arrays = (positions, coverage, truncations, deletions, clean_truncations, subs)
     return {'fwd': legacy_arrays, 'rev': None}
 
 
@@ -623,12 +651,13 @@ def save_pileup(chrom_data: dict, path: str) -> None:
             strand_arr = strands.get(strand_key)
             if strand_arr is None:
                 continue
-            positions, coverage, truncations, deletions, subs = strand_arr
+            positions, coverage, truncations, deletions, clean_truncations, subs = strand_arr
             pfx = f'{chrom}__{strand_key}'
-            arrays[f'{pfx}__positions']   = positions
-            arrays[f'{pfx}__coverage']    = coverage
-            arrays[f'{pfx}__truncations'] = truncations
-            arrays[f'{pfx}__deletions']   = deletions
+            arrays[f'{pfx}__positions']         = positions
+            arrays[f'{pfx}__coverage']          = coverage
+            arrays[f'{pfx}__truncations']       = truncations
+            arrays[f'{pfx}__deletions']         = deletions
+            arrays[f'{pfx}__clean_truncations'] = clean_truncations
             for (ref, alt), arr in subs.items():
                 arrays[f'{pfx}__sub__{ref}{alt}'] = arr
 
@@ -662,6 +691,9 @@ def load_pileup(path: str) -> dict:
             coverage    = data[f'{chrom}__coverage']
             truncations = data[f'{chrom}__truncations']
             deletions   = data[f'{chrom}__deletions']
+            # Backward compat: old npz has no clean_truncations → assume all clean
+            ct_key = f'{chrom}__clean_truncations'
+            clean_truncations = data[ct_key] if ct_key in data.files else truncations.copy()
             subs = {}
             sub_prefix = f'{chrom}__sub__'
             for key in data.files:
@@ -670,7 +702,7 @@ def load_pileup(path: str) -> dict:
                     ref, alt = code[0], code[1]
                     subs[(ref, alt)] = data[key]
             chrom_data[chrom] = {
-                'fwd': (positions, coverage, truncations, deletions, subs),
+                'fwd': (positions, coverage, truncations, deletions, clean_truncations, subs),
                 'rev': None,
             }
         print(f"  Pileup loaded (unstranded→fwd) ← {path}  "
@@ -697,6 +729,9 @@ def load_pileup(path: str) -> dict:
             coverage    = data[f'{pfx}__coverage']
             truncations = data[f'{pfx}__truncations']
             deletions   = data[f'{pfx}__deletions']
+            # Backward compat: old npz has no clean_truncations → assume all clean
+            ct_key = f'{pfx}__clean_truncations'
+            clean_truncations = data[ct_key] if ct_key in data.files else truncations.copy()
             subs = {}
             sub_prefix = f'{pfx}__sub__'
             for key in data.files:
@@ -705,7 +740,7 @@ def load_pileup(path: str) -> dict:
                     ref, alt = code[0], code[1]
                     subs[(ref, alt)] = data[key]
             chrom_data[chrom][strand_key] = (
-                positions, coverage, truncations, deletions, subs)
+                positions, coverage, truncations, deletions, clean_truncations, subs)
 
     print(f"  Pileup loaded ← {path}  ({len(chrom_data)} chromosomes)", file=sys.stderr)
     return chrom_data
@@ -716,13 +751,14 @@ def load_pileup(path: str) -> dict:
 # ---------------------------------------------------------------------------
 
 def print_summary(chrom: str, strand: str, positions, coverage, truncations,
-                  deletions, subs, top_n: int = 10):
+                  deletions, clean_truncations, subs, top_n: int = 10):
     print(f"\n{'='*60}")
     print(f"  {chrom} [{strand}]  —  {len(positions):,} positions with signal")
     print(f"{'='*60}")
-    print(f"  Max coverage:       {coverage.max():>10,}")
-    print(f"  Total truncations:  {truncations.sum():>10,}")
-    print(f"  Total deletions:    {deletions.sum():>10,}")
+    print(f"  Max coverage:            {coverage.max():>10,}")
+    print(f"  Total truncations:       {truncations.sum():>10,}")
+    print(f"  Clean truncations (no D):{clean_truncations.sum():>10,}")
+    print(f"  Total deletions:         {deletions.sum():>10,}")
     print(f"  Substitution types: {[f'{r}>{a}' for r,a in sorted(subs.keys())]}")
     for (ref, alt), arr in sorted(subs.items()):
         print(f"    {ref}>{alt}: {arr.sum():,} total events")
@@ -803,9 +839,9 @@ if __name__ == '__main__':
                 strand_arr = result.get(strand_key)
                 if strand_arr is None:
                     continue
-                positions, coverage, truncations, deletions, subs = strand_arr
+                positions, coverage, truncations, deletions, clean_truncations, subs = strand_arr
                 strand_char = '+' if strand_key == 'fwd' else '-'
                 print_summary(chrom, strand_char, positions, coverage,
-                              truncations, deletions, subs, top_n=args.top)
+                              truncations, deletions, clean_truncations, subs, top_n=args.top)
 
     save_pileup(chrom_data, out_path)

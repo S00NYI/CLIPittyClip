@@ -163,7 +163,7 @@ def run_cims(pileup_path:  str   = None,
             strand_arr = strands.get(strand_key)
             if strand_arr is None:
                 continue
-            positions, coverage, truncations, deletions, subs = strand_arr
+            positions, coverage, truncations, deletions, clean_truncations, subs = strand_arr
 
             store = chrom_fwd if strand_key == 'fwd' else chrom_rev
             store[c] = (positions, coverage, deletions, subs)
