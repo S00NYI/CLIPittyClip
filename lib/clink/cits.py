@@ -38,6 +38,53 @@ from stats import estimate_background, test_signal, write_bed, HEADER
 import numpy as np
 
 
+def build_local_rates(positions: np.ndarray,
+                      clean_truncations: np.ndarray,
+                      coverage: np.ndarray,
+                      max_gap: int = 25) -> np.ndarray:
+    """
+    Compute a per-position local truncation rate from read clusters.
+
+    A cluster is a maximal run of positions where consecutive entries in
+    `positions` are ≤ max_gap bp apart.  Within each cluster:
+
+        local_rate = Σ(clean_truncations) / Σ(coverage)
+
+    This mirrors CTK's approach: truncation enrichment is tested relative to
+    the local read density (cluster background) rather than a genome-wide rate.
+    Positions in clusters with no truncations get rate=0 and are skipped by
+    test_signal's pre-filter.
+
+    Args:
+        positions         : 0-based reference positions (sorted, sparse)
+        clean_truncations : truncation counts from reads with no deletion in CIGAR
+        coverage          : read coverage at each position
+        max_gap           : maximum bp gap between positions in same cluster
+
+    Returns:
+        Array of per-position local rates, same length as positions.
+    """
+    n = len(positions)
+    if n == 0:
+        return np.array([], dtype=np.float64)
+
+    local_rates = np.zeros(n, dtype=np.float64)
+
+    cluster_start = 0
+    for i in range(1, n + 1):
+        # Cluster ends at gap or end of array
+        if i == n or (positions[i] - positions[i - 1]) > max_gap:
+            sl = slice(cluster_start, i)
+            total_cov   = float(coverage[sl].sum())
+            total_trunc = float(clean_truncations[sl].sum())
+            if total_cov > 0 and total_trunc > 0:
+                local_rates[sl] = total_trunc / total_cov
+            # else leave as 0.0 — no signal in cluster, skip in test_signal
+            cluster_start = i
+
+    return local_rates
+
+
 def run_cits(pileup_path:  str   = None,
              bam_path:     str   = None,
              prefix:       str   = None,
@@ -48,12 +95,13 @@ def run_cits(pileup_path:  str   = None,
              min_fraction: float = 0.05,
              min_signal:   int   = 1,
              fdr:          float = 0.05,
+             cluster_gap:  int   = 25,
              verbose:      bool  = True):
     """
     End-to-end CITS: pileup (.npz) or BAM → significant truncation sites BED.
 
     Strand-aware: fwd (+) and rev (-) strand signals are tested independently
-    using a shared genome-wide background rate (computed across both strands).
+    using per-position local cluster background rates (matching CTK).
 
     Args:
         pileup_path  : .npz file from clink pileup (preferred)
@@ -67,6 +115,8 @@ def run_cits(pileup_path:  str   = None,
         min_signal   : minimum raw truncation read count at a position
                        (default 1 = no extra filter)
         fdr          : Benjamini-Hochberg FDR threshold
+        cluster_gap  : max bp gap between positions in the same read cluster
+                       (used for local background rate; default 25, matching CTK)
         verbose      : print progress to stderr
     """
     if pileup_path is None and bam_path is None:
@@ -79,7 +129,8 @@ def run_cits(pileup_path:  str   = None,
         prefix = stem.replace('_pileup', '')
 
     print(f"\nClink cits  |  {src_name}", file=sys.stderr)
-    print(f"  min_cov={min_coverage}  min_frac={min_fraction}  min_signal={min_signal}  fdr={fdr}",
+    print(f"  min_cov={min_coverage}  min_frac={min_fraction}  min_signal={min_signal}"
+          f"  fdr={fdr}  cluster_gap={cluster_gap}bp",
           file=sys.stderr)
 
     # --- Load pileup data ---
@@ -111,32 +162,36 @@ def run_cits(pileup_path:  str   = None,
         fwd = strands.get('fwd')
         rev = strands.get('rev')
         if fwd is not None:
-            positions, coverage, truncations = fwd[0], fwd[1], fwd[2]
-            chrom_fwd[c] = (positions, coverage, truncations)
+            positions, coverage, truncations, deletions, clean_truncations, subs = fwd
+            chrom_fwd[c] = (positions, coverage, clean_truncations)
             g_cov.append(coverage)
-            g_trunc.append(truncations)
+            g_trunc.append(clean_truncations)
         if rev is not None:
-            positions, coverage, truncations = rev[0], rev[1], rev[2]
-            chrom_rev[c] = (positions, coverage, truncations)
+            positions, coverage, truncations, deletions, clean_truncations, subs = rev
+            chrom_rev[c] = (positions, coverage, clean_truncations)
             g_cov.append(coverage)
-            g_trunc.append(truncations)
+            g_trunc.append(clean_truncations)
 
     if not chrom_fwd and not chrom_rev:
         print("  No signal found.", file=sys.stderr)
         return
 
-    # --- Genome-wide background rate (both strands pooled) ---
+    # --- Genome-wide background rate (reference only — local rates used for testing) ---
     all_cov   = np.concatenate(g_cov)
     all_trunc = np.concatenate(g_trunc)
-    lambda_trunc = estimate_background(all_trunc, all_cov, min_coverage)
+    lambda_global = estimate_background(all_trunc, all_cov, min_coverage)
 
-    print(f"\n  Background truncation rate (genome-wide, both strands):",
+    print(f"\n  Global truncation rate (both strands, reference only):",
           file=sys.stderr)
-    print(f"    λ = {lambda_trunc:.6f}  "
-          f"(1/{int(1/lambda_trunc) if lambda_trunc > 0 else '∞'} reads)",
+    print(f"    λ_global = {lambda_global:.6f}  "
+          f"(1/{int(1/lambda_global) if lambda_global > 0 else '∞'} reads)",
+          file=sys.stderr)
+    print(f"  Local cluster background enabled  (gap≤{cluster_gap}bp)",
+          file=sys.stderr)
+    print(f"  Signal: clean truncations (reads without deletion in CIGAR)",
           file=sys.stderr)
 
-    if lambda_trunc <= 0:
+    if lambda_global <= 0:
         print("  ERROR: background rate is zero — no testable positions.",
               file=sys.stderr)
         return
@@ -152,19 +207,23 @@ def run_cits(pileup_path:  str   = None,
 
         for c in all_chroms:
             if c in chrom_fwd:
-                positions, coverage, truncations = chrom_fwd[c]
+                positions, coverage, clean_truncations = chrom_fwd[c]
+                local_rates = build_local_rates(
+                    positions, clean_truncations, coverage, max_gap=cluster_gap)
                 results = test_signal(
-                    positions, truncations, coverage,
-                    lambda_trunc, min_coverage, min_fraction, fdr,
+                    positions, clean_truncations, coverage,
+                    local_rates, min_coverage, min_fraction, fdr,
                     min_signal=min_signal)
                 write_bed(results, c, 'trunc', fh, strand='+')
                 total_fwd += len(results)
 
             if c in chrom_rev:
-                positions, coverage, truncations = chrom_rev[c]
+                positions, coverage, clean_truncations = chrom_rev[c]
+                local_rates = build_local_rates(
+                    positions, clean_truncations, coverage, max_gap=cluster_gap)
                 results = test_signal(
-                    positions, truncations, coverage,
-                    lambda_trunc, min_coverage, min_fraction, fdr,
+                    positions, clean_truncations, coverage,
+                    local_rates, min_coverage, min_fraction, fdr,
                     min_signal=min_signal)
                 write_bed(results, c, 'trunc', fh, strand='-')
                 total_rev += len(results)
@@ -206,6 +265,9 @@ if __name__ == '__main__':
         help='Minimum raw truncation read count at a position (default: 1 = no extra filter)')
     parser.add_argument('--fdr', type=float, default=0.05,
         help='BH FDR threshold (default: 0.05)')
+    parser.add_argument('--cluster-gap', type=int, default=25,
+        help='Max bp gap between positions in same read cluster for local '
+             'background estimation (default: 25, matching CTK)')
 
     args = parser.parse_args()
 
@@ -220,4 +282,5 @@ if __name__ == '__main__':
         min_fraction = args.min_frac,
         min_signal   = args.min_signal,
         fdr          = args.fdr,
+        cluster_gap  = args.cluster_gap,
     )
