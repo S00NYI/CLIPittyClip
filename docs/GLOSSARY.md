@@ -2,7 +2,7 @@
 
 > Authoritative vocabulary for CLIPittyClip v3.3.
 > Written following Domain-Driven Design (DDD) principles.
-> All terms are defined as they are used in this codebase — not as generic bioinformatics jargon.
+> All terms are defined as they are used in this codebase. 
 > When a term diverges from how an external tool uses it, that divergence is noted.
 
 ---
