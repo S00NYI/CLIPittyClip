@@ -1881,7 +1881,7 @@ if [[ "$RUN_CIMS" == "true" ]] || [[ "$RUN_CITS" == "true" ]] || [[ "$CTK_PREPRO
 fi
 
 # 4. Coverage Analysis (Bedgraph)
-run_coverage "${COLLAPSED_BED}" "${BASENAME}" "$GENOME_INDEX/chrom.sizes" "${BAM_FILE}"
+run_coverage "${COLLAPSED_BED}" "${BASENAME}" "$GENOME_INDEX/chrom.sizes" "${CLINK_DEDUP_BAM}"
 
 # 5. Peak Calling (Per-Sample)
 PEAK_DIR="${BASENAME}_peaks"
