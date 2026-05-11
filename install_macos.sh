@@ -256,7 +256,7 @@ if [[ -z "$SKIP_CONDA" ]]; then
     $CONDA_CMD install -n "$ENV_NAME" -y \
         -c conda-forge -c bioconda \
         wget \
-        "python>=3.10,<3.13" \
+        "python>=3.10,<3.12" \
         perl \
         perl-threaded \
         perl-yaml \
@@ -273,6 +273,7 @@ if [[ -z "$SKIP_CONDA" ]]; then
         pandas \
         numpy \
         scipy \
+        setuptools \
         seaborn \
         matplotlib \
         pysam \

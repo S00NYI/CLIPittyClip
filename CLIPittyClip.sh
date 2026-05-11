@@ -30,6 +30,7 @@ UMI_LEN=0
 BC_LEN=""
 SPACER_LEN="0"
 BC_FIRST="false"   # --bc-first: read starts with BC then UMI (e.g. BrdU-CLIP, irCLIP2)
+FASTP_MIN_QUAL=30  # --min-qual: fastp average quality threshold (default: 30)
 ADAPTER_3="GTGTCAGTCACTTCCAGCGG" # L32 default
 PEAK_DIST=50
 PEAK_SIZE=20
@@ -69,6 +70,7 @@ function show_usage {
     echo "  --spacer-len <int>       Spacer length to trim after barcode (default: 0)"
     echo "  --bc-first               Barcode precedes UMI: layout [BC][UMI][spacer][READ]"
     echo "                             e.g. BrdU-CLIP, irCLIP2 (default: [UMI][BC][spacer][READ])"
+    echo "  --min-qual <int>         fastp average quality threshold (default: 30)"
     echo "  -a, --adapter <str>      3' adapter sequence (default: L32)"
     echo "  --no-dedup               Disable FASTQ deduplication (default: ON)"
     echo "  --eclip <pe|se>          eCLIP mode: 'pe' for paired-end (post-eclipdemux R2, UMI in header),
@@ -195,6 +197,7 @@ while [[ $# -gt 0 ]]; do
         --bc-len) BC_LEN="$2"; shift 2 ;;
         --spacer-len) SPACER_LEN="$2"; shift 2 ;;
         --bc-first) BC_FIRST="true"; shift ;;
+        --min-qual) FASTP_MIN_QUAL="$2"; shift 2 ;;
         -a|--adapter) ADAPTER_3="$2"; shift 2 ;;
         -k|--keep) KEEP_INTERMEDIATE="yes"; shift ;;
         --peak-caller) PEAK_CALLER=$(echo "$2" | tr '[:upper:]' '[:lower:]'); shift 2 ;;
@@ -760,6 +763,7 @@ if [[ -n "$INPUT_DIR" ]]; then
     if [[ -n "$BC_LEN" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --bc-len $BC_LEN"; fi
     if [[ -n "$SPACER_LEN" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --spacer-len $SPACER_LEN"; fi
     if [[ "$BC_FIRST" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --bc-first"; fi
+    if [[ "$FASTP_MIN_QUAL" -ne 30 ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --min-qual $FASTP_MIN_QUAL"; fi
     EXTRA_FLAGS="$EXTRA_FLAGS --child"
 
     console_msg "\n[BATCH ANALYSIS]"
@@ -812,7 +816,7 @@ if [[ -n "$INPUT_DIR" ]]; then
     DIR_BG="3_BEDGRAPH"
     DIR_PEAKS="4_PEAKS"
     # Folder numbering: 5=CTK (if on), next=Clink (if on), OTHERS bumps accordingly
-    local _ctk_on=false; local _clink_on=false
+    _ctk_on=false; _clink_on=false
     { [[ "$RUN_CIMS" == "true" ]] || [[ "$RUN_CITS" == "true" ]]; } && _ctk_on=true
     [[ "$RUN_CLINK" == "true" ]] && _clink_on=true
     if [[ "$_ctk_on" == "true" ]] && [[ "$_clink_on" == "true" ]]; then
@@ -1245,6 +1249,7 @@ if [[ "$DEMUX" == "yes" ]]; then
     if [[ -n "$BC_LEN" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --bc-len $BC_LEN"; fi
     if [[ -n "$SPACER_LEN" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --spacer-len $SPACER_LEN"; fi
     if [[ "$BC_FIRST" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --bc-first"; fi
+    if [[ "$FASTP_MIN_QUAL" -ne 30 ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --min-qual $FASTP_MIN_QUAL"; fi
 
     # Pass --child to suppress header in sub-calls
     EXTRA_FLAGS="$EXTRA_FLAGS --child"
@@ -1308,7 +1313,7 @@ if [[ "$DEMUX" == "yes" ]]; then
     DIR_BG="3_BEDGRAPH"
     DIR_PEAKS="4_PEAKS"
     # Folder numbering: 5=CTK (if on), next=Clink (if on), OTHERS bumps accordingly
-    local _ctk_on=false; local _clink_on=false
+    _ctk_on=false; _clink_on=false
     { [[ "$RUN_CIMS" == "true" ]] || [[ "$RUN_CITS" == "true" ]]; } && _ctk_on=true
     [[ "$RUN_CLINK" == "true" ]] && _clink_on=true
     if [[ "$_ctk_on" == "true" ]] && [[ "$_clink_on" == "true" ]]; then
@@ -1785,7 +1790,7 @@ if   [[ "$ECLIP_MODE" == "pe" ]]; then
 elif [[ "$ECLIP_MODE" == "se" ]]; then
     run_eclip_se_preprocessing "$INPUT_FILE" "$BASENAME" "$THREADS" "$SAMPLE_SIZE"
 else
-    run_fastp "$INPUT_FILE" "$BASENAME" "$UMI_LEN" "$ADAPTER_3" "$THREADS" "$SAMPLE_SIZE" "$BC_LEN" "$SPACER_LEN" "$BC_FIRST"
+    run_fastp "$INPUT_FILE" "$BASENAME" "$UMI_LEN" "$ADAPTER_3" "$THREADS" "$SAMPLE_SIZE" "$BC_LEN" "$SPACER_LEN" "$BC_FIRST" "$FASTP_MIN_QUAL"
 fi
 
 # Propagate eCLIP-detected UMI length for downstream tag2collapse.pl
@@ -1930,7 +1935,7 @@ if [[ "$RUN_CLINK" == "true" ]]; then
     CLINK_OUTPUT="Clink_Analysis"
     mkdir -p "$CLINK_OUTPUT"
 
-    clink_bed=$(run_clink_full \
+    run_clink_full \
         "$BAM_FILE" \
         "$CLINK_OUTPUT" \
         "$BASENAME" \
@@ -1941,7 +1946,7 @@ if [[ "$RUN_CLINK" == "true" ]]; then
         "$CLINK_MIN_COV" \
         "$CLINK_MIN_FRAC" \
         "$CLINK_FDR" \
-        "$CLINK_DEDUP_BAM")
+        "$CLINK_DEDUP_BAM"
     # Peak calling already ran on the Clink COLLAPSED_BED in step 5 above.
     # run_clink_full receives the pre-built dedup BAM so it skips deduplication.
 

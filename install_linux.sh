@@ -190,6 +190,9 @@ fi
 if ! dpkg -l libdb-dev &> /dev/null 2>&1; then
     MISSING_PKGS+=("libdb-dev")
 fi
+if ! dpkg -l bioperl &> /dev/null 2>&1; then
+    MISSING_PKGS+=("bioperl")
+fi
 if [[ ${#MISSING_PKGS[@]} -gt 0 ]]; then
     print_info "Installing missing system libraries: ${MISSING_PKGS[*]}"
     sudo apt-get install -y "${MISSING_PKGS[@]}" || {
@@ -268,10 +271,11 @@ dependencies:
   - seqkit
 
   # Python packages
-  - "python>=3.10,<3.13"
+  - python>=3.10,<3.12   # umi_tools 1.1.6 requires distutils (removed in Python 3.12+)
   - pandas
   - numpy
   - scipy
+  - setuptools
   - seaborn
   - matplotlib
   - pysam
@@ -349,7 +353,7 @@ fi
 # path. The db.h header is found via the explicit INC path.
 print_info "Installing DB_File (required for Bio::SeqIO)..."
 cpanm --notest --configure-args="LIBS=-L${SYS_LIB_DIR} -ldb INC=-I${SYS_INC_DIR}" DB_File 2>/dev/null || true
-if perl -MDB_File -e '1' 2>/dev/null; then
+if LD_LIBRARY_PATH="${SYS_LIB_DIR}:${LD_LIBRARY_PATH:-}" perl -MDB_File -e '1' 2>/dev/null; then
     print_success "DB_File installed successfully"
 else
     print_warning "DB_File installation failed - some BioPerl features may not work"

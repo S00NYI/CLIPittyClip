@@ -90,7 +90,7 @@ while [[ $# -gt 0 ]]; do
         --peak-caller-args) ADV_PEAK_CALLER_ARGS="$2"; shift 2 ;;
         --peak-caller) PEAK_CALLER="$2"; shift 2 ;;
         --ctk-dir) CTK_DIR="$2"; shift 2 ;;
-        -g|--groups|--ctk-group) GROUPS_FILE="$2"; shift 2 ;;
+        -g|--groups|--group-xlsite) GROUPS_FILE="$2"; shift 2 ;;
         --cims-fdr) CIMS_FDR="$2"; shift 2 ;;
         --cits-pval) CITS_PVALUE="$2"; shift 2 ;;
         --wizard|--advanced) WIZARD_MODE="true"; shift ;;
@@ -234,9 +234,11 @@ call_peaks() {
     mv temp_final.txt "$coverage_file"
     rm colnames.txt
 
-    if [[ -n "$CTK_DIR" ]]; then
+    if [[ -n "$CTK_DIR" ]] && [[ "${MATRIX_CTK_COLS:-true}" == "true" ]]; then
         log_info "Adding CTK columns..."
         add_ctk_columns_to_peak_matrix "$coverage_file" "${out_dir}/peaks_Sorted.bed" "$CTK_DIR" "$CIMS_FDR" "$CITS_PVALUE" "$GROUPS_FILE"
+    elif [[ -n "$CTK_DIR" ]]; then
+        log_info "Skipping CTK columns (MATRIX_CTK_COLS=false)"
     fi
 
     log_info "Peak calling for $output_name complete: $out_dir/"

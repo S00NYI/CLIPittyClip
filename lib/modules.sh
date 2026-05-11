@@ -68,11 +68,21 @@ parse_groups_file() {
     > "$output_map"  # Clear output file
     
     while IFS=$'\t' read -r sample group || [[ -n "$sample" ]]; do
+        # Normalize CRLF (Windows line endings)
+        sample="${sample%$'\r'}"
+        group="${group%$'\r'}"
+
         # Skip comments and empty lines
         [[ "$sample" =~ ^#.*$ ]] && continue
         [[ -z "$sample" ]] && continue
-        
-        # Strip common extensions
+
+        # Validate tab delimiter — if group is empty the line has no tab
+        if [[ -z "$group" ]]; then
+            log_error "Groups file parse error: line '${sample}' has no tab separator. Groups file must be tab-delimited (sample<TAB>group). Spaces in names are allowed but the delimiter must be a tab."
+            return 1
+        fi
+
+        # Strip common extensions from sample name only
         sample="${sample%.fastq.gz}"
         sample="${sample%.fq.gz}"
         sample="${sample%.fastq}"
@@ -125,7 +135,7 @@ function run_demultiplexing {
     # cutadapt -e is a rate (0.1 = 10%). 
     # rate = mismatches / length
     # We grep the first barcode to estimate length (assuming uniform)
-    local first_seq=$(awk '{print $2; exit}' "$barcode_file")
+    local first_seq=$(awk -F'\t' '!/^#/{print $2; exit}' "$barcode_file")
     local bc_len=${#first_seq}
     
     # Calculate rate using awk for floating point
@@ -143,7 +153,7 @@ function run_demultiplexing {
     
     # Convert barcodes for cutadapt
     local fasta_barcodes="${demux_out}/barcodes.fasta"
-    awk '{print ">"$1"\n"$2}' "$barcode_file" > "$fasta_barcodes"
+    awk -F'\t' '!/^#/{print ">"$1"\n"$2}' "$barcode_file" > "$fasta_barcodes"
 
     local cmd="cutadapt \
         -e $error_rate --no-indels \
@@ -209,7 +219,7 @@ run_geo_demux() {
 
     # Calculate cutadapt error rate
     local first_seq
-    first_seq=$(awk '!/^#/{print $2; exit}' "$barcode_file")
+    first_seq=$(awk -F'\t' '!/^#/{print $2; exit}' "$barcode_file")
     local bc_len=${#first_seq}
     local error_rate
     error_rate=$(awk "BEGIN {print $allowed_mm / $bc_len}")
@@ -220,7 +230,7 @@ run_geo_demux() {
 
     # Convert barcodes to FASTA for cutadapt
     local fasta_barcodes="${out_dir}/.barcodes_geo.fasta"
-    awk '!/^#/{print ">"$1"\n"$2}' "$barcode_file" > "$fasta_barcodes"
+    awk -F'\t' '!/^#/{print ">"$1"\n"$2}' "$barcode_file" > "$fasta_barcodes"
 
     # Run cutadapt: --action=none preserves reads exactly as received
     # Output is gzipped (.fastq.gz) since these are final GEO deposit files
@@ -600,13 +610,32 @@ run_fastp() {
     local bc_len="${7:-0}"
     local spacer_len="${8:-0}"
     local bc_first="${9:-false}"   # --bc-first: layout is [BC][UMI][sp][READ] not [UMI][BC][sp][READ]
+    local fastp_min_qual="${10:-30}"
 
     local cleaned="${output_prefix}_cleaned.fastq"
 
     update_status_first "Adapter Trimming"
 
+    # Detect SRA /1 /2 pair suffixes (produced by old fastq-dump, not fasterq-dump).
+    # STAR truncates read names at '/', which strips the fastp-appended #count#UMI
+    # field and crashes tag2collapse.pl in the CTK/CIMS path.
+    # Detection reads one line from the input — effectively free even for large gz files.
+    local first_header
+    if [[ "$input_file" == *.gz ]]; then
+        first_header=$(gzip -dc "$input_file" 2>/dev/null | head -1)
+    else
+        first_header=$(head -1 "$input_file")
+    fi
+    local has_slash_suffix=false
+    if [[ "$first_header" =~ ^@[^[:space:]]+/[12]([[:space:]]|$) ]]; then
+        has_slash_suffix=true
+        log_warning "SRA /1 /2 pair suffixes detected in read names (old fastq-dump format)."
+        log_warning "  Will strip after adapter trimming — STAR truncates read names at '/', which"
+        log_warning "  drops the fastp-appended #count#UMI field and crashes tag2collapse.pl."
+    fi
+
     # ── Common fastp quality / length flags ───────────────────────────────────
-    local qc_flags="--thread ${threads} --length_required 16 --average_qual 30"
+    local qc_flags="--thread ${threads} --length_required 16 --average_qual ${fastp_min_qual}"
     local sample_flag=""
     if [ "$sample_size" -gt 0 ]; then sample_flag="--reads_to_process $sample_size"; fi
     local adapter_flag=""
@@ -673,6 +702,15 @@ run_fastp() {
 
     if [ $exit_code -eq 0 ]; then
         log_info "Adapter trimming complete."
+        # Strip /1 /2 suffixes only when detected — no-op cost on clean files.
+        # Pattern: /1 or /2 followed by space, #, or EOL.
+        # Avoids touching any other '/' that may appear legitimately mid-name.
+        if [[ "$has_slash_suffix" == true ]]; then
+            log_info "Stripping /1 /2 suffixes from read names in cleaned output..."
+            sed -i '/^@/s|/\([12]\)\([[:space:]#]\)|\2|; /^@/s|/[12]$||' \
+                "${output_prefix}_cleaned.fastq"
+            log_info "Read name normalization complete."
+        fi
     else
         log_error "fastp failed."
         exit 1
@@ -1142,14 +1180,29 @@ run_peak_calling() {
 }
 
 # 4b. Add Enhanced Columns to Peak Coverage Matrix
-# Adds: BC (groups), Raw Group Counts, Normalized Counts, BedGraph Stats
-# Column Order: BC -> Raw Counts -> Normalized Counts -> BG Stats
+# Adds: BC (groups), Normalized Counts, optionally Raw Group Counts and BedGraph Stats
+# Column Order: BC -> TC_ -> NormedTC_ -> BG Stats
+#
+# Parameters:
+#   $1  peak_matrix        Path to peakCoverage.txt
+#   $2  peaks_bed          Path to peaks_Sorted.bed
+#   $3  bg_dir             BedGraph directory
+#   $4  scale_file         Scale factors TSV
+#   $5  groups_file        Optional groups file
+#   $6  enable_raw_tc_group   "true"/"false" — add raw TC_<group> sum columns  (default: false)
+#   $7  enable_bg_sample      "true"/"false" — add per-sample BedGraph stats   (default: false)
+#   $8  enable_bg_group       "true"/"false" — add per-group BedGraph stats    (default: false)
+#   $9  enable_raw_tc_sample  "true"/"false" — include TC_<sample> raw counts in output (default: false)
 add_matrix_columns() {
     local peak_matrix="$1"      # Path to peakCoverage.txt
     local peaks_bed="$2"        # Path to peaks_Sorted.bed
     local bg_dir="$3"           # BedGraph directory
     local scale_file="$4"       # Scale factors TSV
     local groups_file="$5"      # Optional groups file
+    local enable_raw_tc_group="${6:-false}"   # Toggle TC_<group> raw sum columns
+    local enable_bg_sample="${7:-false}"      # Toggle per-sample BedGraph stats
+    local enable_bg_group="${8:-false}"       # Toggle per-group BedGraph stats
+    local enable_raw_tc_sample="${9:-false}" # Toggle TC_<sample> raw count columns in output
     
     log_info "Adding enhanced columns to peak matrix..."
     
@@ -1269,31 +1322,32 @@ add_matrix_columns() {
         for group in $unique_groups; do
             local group_samples=$(awk -v g="$group" '{gsub(/^[ \t]+|[ \t]+$/, "", $1); gsub(/^[ \t]+|[ \t]+$/, "", $2)} $2==g {print $1}' "$groups_file" | tr '\n' ' ')
             
-            # Sum raw counts for group
-            awk -F'\t' -v samples="$group_samples" -v allsamples="${samples[*]}" '
-            BEGIN {
-                split(samples, gs, " ")
-                split(allsamples, as, " ")
-                for(i=1; i<=length(as); i++) col_map[as[i]] = i + 6
-            }
-            NR==1 { print "TC_'"$group"'"; next }
-            {
-                sum=0
-                for(i in gs) {
-                    s = gs[i]
-                    if(s in col_map) sum += $col_map[s]
+            # Sum raw counts for group (optional)
+            if [[ "$enable_raw_tc_group" == "true" ]]; then
+                awk -F'\t' -v samples="$group_samples" -v allsamples="${samples[*]}" '
+                BEGIN {
+                    split(samples, gs, " ")
+                    split(allsamples, as, " ")
+                    for(i=1; i<=length(as); i++) col_map[as[i]] = i + 6
                 }
-                print sum
-            }
-            ' "$peak_matrix" > "grp_raw_${group}.col"
-            
-            paste "$new_cols_file" "grp_raw_${group}.col" > "${new_cols_file}.tmp"
-            mv "${new_cols_file}.tmp" "$new_cols_file"
-            rm -f "grp_raw_${group}.col"
+                NR==1 { print "TC_'"$group"'"; next }
+                {
+                    sum=0
+                    for(i in gs) {
+                        s = gs[i]
+                        if(s in col_map) sum += $col_map[s]
+                    }
+                    print sum
+                }
+                ' "$peak_matrix" > "grp_raw_${group}.col"
+                
+                paste "$new_cols_file" "grp_raw_${group}.col" > "${new_cols_file}.tmp"
+                mv "${new_cols_file}.tmp" "$new_cols_file"
+                rm -f "grp_raw_${group}.col"
+            fi
             
             # Sum normalized counts for group
-            # This needs to reference the normalized columns we just added
-            # For simplicity, recalculate using scale factors
+            # Recalculate using scale factors (avoids referencing column indices of not-yet-final matrix)
             awk -F'\t' -v samples="$group_samples" -v allsamples="${samples[*]}" -v sf_file="$scale_file" '
             BEGIN {
                 split(samples, gs, " ")
@@ -1330,7 +1384,7 @@ add_matrix_columns() {
     # -------------------------------------------
     # STEP 4: BedGraph Stats (Sum/Avg/Max) Per Sample
     # -------------------------------------------
-    if [[ -d "$bg_dir" ]] && [[ ${#samples[@]} -gt 0 ]]; then
+    if [[ "$enable_bg_sample" == "true" ]] && [[ -d "$bg_dir" ]] && [[ ${#samples[@]} -gt 0 ]]; then
         log_info "  Adding BedGraph statistics..."
         
         # Split peaks by strand and sort for bedtools compatibility (same as STEP 5)
@@ -1382,7 +1436,7 @@ add_matrix_columns() {
         # -------------------------------------------
         # STEP 5: Group BedGraph Stats (from combined bedgraph) - Groups Only
         # -------------------------------------------
-        if [[ -n "$groups_file" && -f "$groups_file" ]]; then
+        if [[ "$enable_bg_group" == "true" ]] && [[ -n "$groups_file" && -f "$groups_file" ]]; then
             log_info "  Adding group BedGraph statistics..."
             local combined_bg_dir="${bg_dir}/COMBINED_BEDGRAPH"
             local unique_groups=$(awk '{gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2}' "$groups_file" | sort -u)
@@ -1444,10 +1498,11 @@ add_matrix_columns() {
     
     # -------------------------------------------
     # REORDER: Group columns by type (prefix)
-    # Order: base -> TC_ -> NormedTC_ -> BC_ -> DEL_ -> SUB_ -> TRUNC_ -> BG*
+    # Order: base -> [TC_ if enhanced] -> NormedTC_ -> BC_ -> DEL_ -> SUB_ -> TRUNC_ -> BG*
+    # TC_<sample> raw count columns are suppressed unless enable_raw_tc_sample=true
     # -------------------------------------------
     log_info "Reordering columns by type..."
-    awk -F'\t' '
+    awk -F'\t' -v skip_raw_tc="$enable_raw_tc_sample" '
     BEGIN { OFS="\t" }
     NR==1 {
         # Parse header and categorize columns by prefix
@@ -1464,11 +1519,11 @@ add_matrix_columns() {
             else                     { order[i] = 9; other[i] = h }
             headers[i] = h
         }
-        # Build column order
+        # Build column order; skip TC_ bucket (order=2) when raw sample counts suppressed
         n = 0
         for(o=1; o<=9; o++) {
             for(i=1; i<=NF; i++) {
-                if(order[i] == o) { col_order[++n] = i }
+                if(order[i] == o && (o != 2 || skip_raw_tc == "true")) { col_order[++n] = i }
             }
         }
         total_cols = n
@@ -2109,7 +2164,7 @@ generate_flanked_bed() {
     # Create flanked file alongside input: sample_CIMS_sub.txt → sample_CIMS_sub_flanked.bed
     local flanked_bed="${input_bed%.txt}_flanked.bed"
     
-    awk -v n="$flank_nt" 'BEGIN{OFS="\t"} {
+    awk -v n="$flank_nt" 'BEGIN{OFS="\t"} /^#/{next} {
         start = $2 - n
         if (start < 0) start = 0
         print $1, start, $3 + n, $4, $5, $6
@@ -2223,8 +2278,8 @@ run_ctk_full_analysis() {
         fi
         
         if [[ "$run_cits" == "true" ]]; then
-            local cits_singleton="${output_dir}/CITS/${sample_name}_CITS_singleton.bed"
-            [[ -s "$cits_singleton" ]] && generate_flanked_bed "$cits_singleton" "$motif_flank"
+            local cits_file="${output_dir}/CITS/${sample_name}_CITS.bed"
+            [[ -s "$cits_file" ]] && generate_flanked_bed "$cits_file" "$motif_flank"
         fi
     fi
     
