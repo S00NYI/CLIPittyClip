@@ -1090,7 +1090,7 @@ run_peak_calling_homer() {
     makeTagDirectory "${out_dir}" "${input_bed}" -single -format bed >> "$log_file" 2>&1
 
     echo "Running HOMER findPeaks..." >> "$log_file"
-    findPeaks "${out_dir}" -o auto -style factor -L 2 -localSize 10000 -strand separate \
+    findPeaks "${out_dir}" -o auto -style factor -L 2 -localSize 1000 -strand separate \
         -minDist "${peak_dist}" -size "${peak_size}" -fragLength "${frag_len}" $ADV_PEAK_CALLER_ARGS >> "$log_file" 2>&1
 
     if [[ -f "${out_dir}/peaks.txt" ]]; then

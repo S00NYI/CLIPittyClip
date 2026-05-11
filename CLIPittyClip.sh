@@ -540,7 +540,7 @@ log_info "------------------------------------------------------------------"
 DEF_FASTP="--length_required 16 --average_qual 30"
 DEF_STAR="--outFilterMultimapNmax 10 --outFilterMismatchNoverReadLmax 0.1 --outFilterMismatchNmax 5 --alignEndsType EndToEnd --scoreDelOpen/Base -1 --scoreInsOpen/Base -1 --outSAMattributes ... MD"
 DEF_BT2="--md --end-to-end (Standard Sensitivity)"
-DEF_HOMER="-style factor -L 2 -localSize 10000 -minDist ${PEAK_DIST:-50}"
+DEF_HOMER="-style factor -L 2 -localSize 1000 -minDist ${PEAK_DIST:-50}"
 DEF_CTK="-big -ss --valley-seeking -minPH 2 -gap ${PEAK_DIST:-50}"
 
 if [[ "$ADVANCED_MODE" == "true" ]]; then
