@@ -136,6 +136,8 @@ VERBOSE=false
 SAMPLE_SIZE=0 
 CHILD_MODE="false"
 DEDUP_MODE="true" # Always on by default per user request
+CTK_PREPROCESS="false"  # Internal: run parseAlignment.pl without CIMS/CITS (set by parent in group mode)
+CLINK_DEDUP_ONLY="false"  # Internal: produce dedup BAMs only, skip pileup/CITS/CIMS (set by parent in group mode)
 NOTIFY_MODE="false"
 WIZARD_MODE="false"
 FILTER_NCRNA="false"  # ncRNA filtering is OFF by default; enable with --filter-ncrna
@@ -233,6 +235,8 @@ while [[ $# -gt 0 ]]; do
         --no-chr-filter) FILTER_CHR="false"; shift ;;
         --notification) NOTIFY_MODE="true"; shift ;;
         --child) CHILD_MODE="true"; shift ;;
+        --ctk-preprocess) CTK_PREPROCESS="true"; shift ;;
+        --clink-dedup-only) CLINK_DEDUP_ONLY="true"; shift ;;
         -w|--wizard|--advanced) WIZARD_MODE="true"; shift ;;
         -v|--verbose) VERBOSE="true"; shift ;;
         -h|--help) show_usage; exit 0 ;;
@@ -738,16 +742,25 @@ if [[ -n "$INPUT_DIR" ]]; then
     
     # Build extra flags for child processes
     EXTRA_FLAGS=""
-    # Always pass CIMS/CITS to children so parseAlignment.pl generates mutation
-    # files needed by group CTK aggregation.  Per-sample CIMS/CITS analysis still
-    # runs (individual results alongside group results).
-    if [[ "$RUN_CIMS" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --run-cims"; fi
-    if [[ "$RUN_CITS" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --run-cits"; fi
+    # In group mode, pass --ctk-preprocess so children run parseAlignment.pl
+    # (generating mutation files) without running full per-sample CIMS/CITS.
+    if [[ -n "$CTK_GROUPS_FILE" ]]; then
+        EXTRA_FLAGS="$EXTRA_FLAGS --ctk-preprocess"
+    else
+        if [[ "$RUN_CIMS" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --run-cims"; fi
+        if [[ "$RUN_CITS" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --run-cits"; fi
+    fi
     if [[ "$RUN_CLINK" == "true" ]]; then
-        EXTRA_FLAGS="$EXTRA_FLAGS --run-clink"
-        EXTRA_FLAGS="$EXTRA_FLAGS --clink-umi-len $CLINK_UMI_LEN"
-        EXTRA_FLAGS="$EXTRA_FLAGS --clink-fdr $CLINK_FDR"
-        EXTRA_FLAGS="$EXTRA_FLAGS --clink-min-cov $CLINK_MIN_COV"
+        if [[ "$GROUP_XLSITE" == "true" ]]; then
+            # --group-xlsite: children produce dedup BAMs only, group analysis runs post-batch
+            EXTRA_FLAGS="$EXTRA_FLAGS --clink-dedup-only"
+            EXTRA_FLAGS="$EXTRA_FLAGS --clink-umi-len $CLINK_UMI_LEN"
+        else
+            EXTRA_FLAGS="$EXTRA_FLAGS --run-clink"
+            EXTRA_FLAGS="$EXTRA_FLAGS --clink-umi-len $CLINK_UMI_LEN"
+            EXTRA_FLAGS="$EXTRA_FLAGS --clink-fdr $CLINK_FDR"
+            EXTRA_FLAGS="$EXTRA_FLAGS --clink-min-cov $CLINK_MIN_COV"
+        fi
     fi
     if [[ "$VERBOSE" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --verbose"; fi
     if [[ "$KEEP_INTERMEDIATE" == "yes" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS -k"; fi
@@ -818,7 +831,7 @@ if [[ -n "$INPUT_DIR" ]]; then
     # Folder numbering: 5=CTK (if on), next=Clink (if on), OTHERS bumps accordingly
     _ctk_on=false; _clink_on=false
     { [[ "$RUN_CIMS" == "true" ]] || [[ "$RUN_CITS" == "true" ]]; } && _ctk_on=true
-    [[ "$RUN_CLINK" == "true" ]] && _clink_on=true
+    { [[ "$RUN_CLINK" == "true" ]] || [[ "$CLINK_DEDUP_ONLY" == "true" ]]; } && _clink_on=true
     if [[ "$_ctk_on" == "true" ]] && [[ "$_clink_on" == "true" ]]; then
         if [[ "$RUN_CIMS" == "true" ]] && [[ "$RUN_CITS" == "true" ]]; then DIR_CTK="5_CTK_Analysis"
         elif [[ "$RUN_CIMS" == "true" ]]; then DIR_CTK="5_CIMS_Analysis"
@@ -1215,18 +1228,24 @@ if [[ "$DEMUX" == "yes" ]]; then
     # 2. Iterate and Recurse
     console_msg "\n[BATCH ANALYSIS]"
     
-    # Check if we need to pass CIMS/CITS flags
-    EXTRA_FLAGS=""
-    # Always pass CIMS/CITS to children so parseAlignment.pl generates mutation
-    # files needed by group CTK aggregation.  Per-sample CIMS/CITS analysis still
-    # runs (individual results alongside group results).
-    if [[ "$RUN_CIMS" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --run-cims"; fi
-    if [[ "$RUN_CITS" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --run-cits"; fi
+    # In group mode, pass --ctk-preprocess so children run parseAlignment.pl
+    # (generating mutation files) without running full per-sample CIMS/CITS.
+    if [[ "$CTK_GROUP_MODE" == "true" ]]; then
+        EXTRA_FLAGS="$EXTRA_FLAGS --ctk-preprocess"
+    else
+        if [[ "$RUN_CIMS" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --run-cims"; fi
+        if [[ "$RUN_CITS" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --run-cits"; fi
+    fi
     if [[ "$RUN_CLINK" == "true" ]]; then
-        EXTRA_FLAGS="$EXTRA_FLAGS --run-clink"
-        EXTRA_FLAGS="$EXTRA_FLAGS --clink-umi-len $CLINK_UMI_LEN"
-        EXTRA_FLAGS="$EXTRA_FLAGS --clink-fdr $CLINK_FDR"
-        EXTRA_FLAGS="$EXTRA_FLAGS --clink-min-cov $CLINK_MIN_COV"
+        if [[ "$GROUP_XLSITE" == "true" ]]; then
+            EXTRA_FLAGS="$EXTRA_FLAGS --clink-dedup-only"
+            EXTRA_FLAGS="$EXTRA_FLAGS --clink-umi-len $CLINK_UMI_LEN"
+        else
+            EXTRA_FLAGS="$EXTRA_FLAGS --run-clink"
+            EXTRA_FLAGS="$EXTRA_FLAGS --clink-umi-len $CLINK_UMI_LEN"
+            EXTRA_FLAGS="$EXTRA_FLAGS --clink-fdr $CLINK_FDR"
+            EXTRA_FLAGS="$EXTRA_FLAGS --clink-min-cov $CLINK_MIN_COV"
+        fi
     fi
     if [[ "$VERBOSE" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --verbose"; fi
     if [[ "$SAMPLE_SIZE" -gt 0 ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --sample $SAMPLE_SIZE"; fi
@@ -1312,7 +1331,7 @@ if [[ "$DEMUX" == "yes" ]]; then
     # Folder numbering: 5=CTK (if on), next=Clink (if on), OTHERS bumps accordingly
     _ctk_on=false; _clink_on=false
     { [[ "$RUN_CIMS" == "true" ]] || [[ "$RUN_CITS" == "true" ]]; } && _ctk_on=true
-    [[ "$RUN_CLINK" == "true" ]] && _clink_on=true
+    { [[ "$RUN_CLINK" == "true" ]] || [[ "$CLINK_DEDUP_ONLY" == "true" ]]; } && _clink_on=true
     if [[ "$_ctk_on" == "true" ]] && [[ "$_clink_on" == "true" ]]; then
         if [[ "$RUN_CIMS" == "true" ]] && [[ "$RUN_CITS" == "true" ]]; then DIR_CTK="5_CTK_Analysis"
         elif [[ "$RUN_CIMS" == "true" ]]; then DIR_CTK="5_CIMS_Analysis"
@@ -1853,7 +1872,7 @@ log_info "Collapsed BED (Clink): $COLLAPSED_BED ($(wc -l < "$COLLAPSED_BED") rea
 #     parseAlignment.pl + tag2collapse.pl produce a separate CTK_COLLAPSED_BED
 #     and mutation file required by CITS.pl / CIMS.pl.
 CTK_COLLAPSED_BED=""
-if [[ "$RUN_CIMS" == "true" ]] || [[ "$RUN_CITS" == "true" ]]; then
+if [[ "$RUN_CIMS" == "true" ]] || [[ "$RUN_CITS" == "true" ]] || [[ "$CTK_PREPROCESS" == "true" ]]; then
     log_info "CTK preprocessing: samtools calmd → parseAlignment.pl → tag2collapse.pl"
     check_dependency parseAlignment.pl
     CTK_COLLAPSED_BED="${BASENAME}_ctk_collapsed.bed"
@@ -1927,27 +1946,34 @@ if [[ "$RUN_CIMS" == "true" ]] || [[ "$RUN_CITS" == "true" ]]; then
 fi
 
 # 7. Clink pipeline (parallel to CTK, independent dedup + pileup + cits/cims)
-if [[ "$RUN_CLINK" == "true" ]]; then
-    log_info "Running Clink pipeline..."
+if [[ "$RUN_CLINK" == "true" ]] || [[ "$CLINK_DEDUP_ONLY" == "true" ]]; then
     CLINK_OUTPUT="Clink_Analysis"
     mkdir -p "$CLINK_OUTPUT"
 
-    run_clink_full \
-        "$BAM_FILE" \
-        "$CLINK_OUTPUT" \
-        "$BASENAME" \
-        "$CLINK_UMI_LEN" \
-        "$THREADS" \
-        "$CLINK_RUN_CITS" \
-        "$CLINK_RUN_CIMS" \
-        "$CLINK_MIN_COV" \
-        "$CLINK_MIN_FRAC" \
-        "$CLINK_FDR" \
-        "$CLINK_DEDUP_BAM"
-    # Peak calling already ran on the Clink COLLAPSED_BED in step 5 above.
-    # run_clink_full receives the pre-built dedup BAM so it skips deduplication.
-
-    log_info "Clink pipeline complete. Output: $CLINK_OUTPUT"
+    if [[ "$CLINK_DEDUP_ONLY" == "true" ]]; then
+        # --group-xlsite: place dedup BAM for aggregation, skip pileup/CITS/CIMS
+        mkdir -p "$CLINK_OUTPUT/$BASENAME"
+        cp "$CLINK_DEDUP_BAM" "$CLINK_OUTPUT/$BASENAME/${BASENAME}_dedup.bam"
+        samtools index "$CLINK_OUTPUT/$BASENAME/${BASENAME}_dedup.bam" 2>/dev/null || true
+        log_info "Clink dedup-only: placed dedup BAM for group analysis"
+    else
+        log_info "Running Clink pipeline..."
+        run_clink_full \
+            "$BAM_FILE" \
+            "$CLINK_OUTPUT" \
+            "$BASENAME" \
+            "$CLINK_UMI_LEN" \
+            "$THREADS" \
+            "$CLINK_RUN_CITS" \
+            "$CLINK_RUN_CIMS" \
+            "$CLINK_MIN_COV" \
+            "$CLINK_MIN_FRAC" \
+            "$CLINK_FDR" \
+            "$CLINK_DEDUP_BAM"
+        # Peak calling already ran on the Clink COLLAPSED_BED in step 5 above.
+        # run_clink_full receives the pre-built dedup BAM so it skips deduplication.
+        log_info "Clink pipeline complete. Output: $CLINK_OUTPUT"
+    fi
 fi
 
 # Finalize status line (prints "Done!" to end the Preprocessing > ... > Peaks > chain)
