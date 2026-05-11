@@ -2145,7 +2145,7 @@ generate_flanked_bed() {
     # Create flanked file alongside input: sample_CIMS_sub.txt → sample_CIMS_sub_flanked.bed
     local flanked_bed="${input_bed%.txt}_flanked.bed"
     
-    awk -v n="$flank_nt" 'BEGIN{OFS="\t"} {
+    awk -v n="$flank_nt" 'BEGIN{OFS="\t"} /^#/{next} {
         start = $2 - n
         if (start < 0) start = 0
         print $1, start, $3 + n, $4, $5, $6
@@ -2259,8 +2259,8 @@ run_ctk_full_analysis() {
         fi
         
         if [[ "$run_cits" == "true" ]]; then
-            local cits_singleton="${output_dir}/CITS/${sample_name}_CITS_singleton.bed"
-            [[ -s "$cits_singleton" ]] && generate_flanked_bed "$cits_singleton" "$motif_flank"
+            local cits_file="${output_dir}/CITS/${sample_name}_CITS.bed"
+            [[ -s "$cits_file" ]] && generate_flanked_bed "$cits_file" "$motif_flank"
         fi
     fi
     
