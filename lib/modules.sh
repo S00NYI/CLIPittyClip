@@ -609,11 +609,12 @@ run_fastp() {
     local sample_size="$6"
     local bc_len="${7:-0}"
     local spacer_len="${8:-0}"
-    local bc_first="${9:-false}"
+    local bc_first="${9:-false}"   # --bc-first: layout is [BC][UMI][sp][READ] not [UMI][BC][sp][READ]
     local fastp_min_qual="${10:-30}"
 
+    local cleaned="${output_prefix}_cleaned.fastq"
+
     update_status_first "Adapter Trimming"
-    log_info "Standard mode: fastp adapter trimming"
 
     # Detect SRA /1 /2 pair suffixes (produced by old fastq-dump, not fasterq-dump).
     # STAR truncates read names at '/', which strips the fastp-appended #count#UMI
@@ -633,49 +634,67 @@ run_fastp() {
         log_warning "  drops the fastp-appended #count#UMI field and crashes tag2collapse.pl."
     fi
 
-    if [[ "$bc_first" == "true" && "$bc_len" -gt 0 ]]; then
-        # Pass 1: strip BC so UMI lands at position 0
-        local pass1_out="${output_prefix}_bc_stripped.fastq"
-        local pass1_cmd="fastp -i ${input_file} -o ${pass1_out} \
-            --thread ${threads} \
-            --trim_front1 ${bc_len} \
-            --disable_quality_filtering \
-            --disable_length_filtering \
-            --html ${output_prefix}_fastp_pass1.html \
-            --json ${output_prefix}_fastp_pass1.json"
-        if [ "$sample_size" -gt 0 ]; then pass1_cmd+=" --reads_to_process $sample_size"; fi
-        log_info "bc-first pass 1 (strip BC): $pass1_cmd"
-        execute_cmd "$pass1_cmd" || { log_error "fastp pass 1 failed."; exit 1; }
+    # ── Common fastp quality / length flags ───────────────────────────────────
+    local qc_flags="--thread ${threads} --length_required 16 --average_qual ${fastp_min_qual}"
+    local sample_flag=""
+    if [ "$sample_size" -gt 0 ]; then sample_flag="--reads_to_process $sample_size"; fi
+    local adapter_flag=""
+    if [ -n "$adapter3" ]; then adapter_flag="--adapter_sequence ${adapter3}"; fi
 
-        # Pass 2: extract UMI, trim spacer, QC, adapter trim
-        # fastp extracts UMI before applying trim_front1 — spacer trim is safe in same call
-        local fastp_cmd="fastp -i ${pass1_out} -o ${output_prefix}_cleaned.fastq \
-            --thread ${threads} \
-            --length_required 16 \
-            --average_qual ${fastp_min_qual} \
+    if [[ "$bc_first" == "true" ]]; then
+        # ── BC-first layout: [BC][UMI][spacer][READ] ─────────────────────────
+        # fastp --umi_loc=read1 always extracts from position 0, so if we ran
+        # UMI extraction on the raw read we would grab part of the barcode.
+        # Solution: two fastp passes.
+        #   Pass 1 — strip BC only  →  [UMI][spacer][READ]
+        #   Pass 2 — extract UMI, strip spacer, trim adapter  →  [READ]
+        log_info "BC-first mode: [BC($bc_len)][UMI($umi_len)][sp($spacer_len)][READ]"
+        log_info "  Pass 1: trim ${bc_len}nt barcode from 5' end"
+
+        local tmp="${output_prefix}_bcfirst_tmp.fastq"
+
+        local pass1="fastp -i ${input_file} -o ${tmp} \
+            ${qc_flags} \
+            --disable_adapter_trimming \
+            --html /dev/null --json /dev/null"
+        if [ "$bc_len" -gt 0 ]; then pass1+=" --trim_front1 ${bc_len}"; fi
+        if [ "$sample_size" -gt 0 ]; then pass1+=" $sample_flag"; fi
+
+        log_info "Running (pass 1): $pass1"
+        execute_cmd "$pass1"
+        if [ $? -ne 0 ] || [ ! -s "$tmp" ]; then
+            log_error "fastp BC-first pass 1 failed."
+            rm -f "$tmp"; exit 1
+        fi
+
+        log_info "  Pass 2: extract UMI(${umi_len}nt), trim spacer(${spacer_len}nt), trim adapter"
+        local pass2="fastp -i ${tmp} -o ${cleaned} \
+            ${qc_flags} \
             --html ${output_prefix}_fastp.html \
-            --json ${output_prefix}_fastp.json"
-        if [ -n "$adapter3" ]; then fastp_cmd+=" --adapter_sequence ${adapter3}"; fi
-        if [ "$umi_len" -gt 0 ]; then fastp_cmd+=" --umi --umi_loc=read1 --umi_len=${umi_len} --umi_delim=#"; fi
-        if [ "$spacer_len" -gt 0 ]; then fastp_cmd+=" --trim_front1 ${spacer_len}"; fi
-        log_info "bc-first pass 2 (UMI + QC): $fastp_cmd"
-        execute_cmd "$fastp_cmd"
+            --json ${output_prefix}_fastp.json \
+            ${adapter_flag}"
+        if [ "$umi_len" -gt 0 ]; then pass2+=" --umi --umi_loc=read1 --umi_len=${umi_len} --umi_delim=#"; fi
+        if [ "$spacer_len" -gt 0 ]; then pass2+=" --trim_front1 ${spacer_len}"; fi
+
+        log_info "Running (pass 2): $pass2"
+        execute_cmd "$pass2"
         local exit_code=$?
-        rm -f "$pass1_out"
+        rm -f "$tmp"
 
     else
-        # Standard single-pass
-        local fastp_cmd="fastp -i ${input_file} -o ${output_prefix}_cleaned.fastq \
-            --thread ${threads} \
-            --length_required 16 \
-            --average_qual ${fastp_min_qual} \
+        # ── UMI-first layout (default): [UMI][BC][spacer][READ] ──────────────
+        log_info "Standard mode: fastp adapter trimming"
+
+        local fastp_cmd="fastp -i ${input_file} -o ${cleaned} \
+            ${qc_flags} \
             --html ${output_prefix}_fastp.html \
-            --json ${output_prefix}_fastp.json"
-        if [ -n "$adapter3" ]; then fastp_cmd+=" --adapter_sequence ${adapter3}"; fi
+            --json ${output_prefix}_fastp.json \
+            ${adapter_flag}"
         if [ "$umi_len" -gt 0 ]; then fastp_cmd+=" --umi --umi_loc=read1 --umi_len=${umi_len} --umi_delim=#"; fi
         local front_trim=$(( bc_len + spacer_len ))
         if [ "$front_trim" -gt 0 ]; then fastp_cmd+=" --trim_front1 ${front_trim}"; fi
-        if [ "$sample_size" -gt 0 ]; then fastp_cmd+=" --reads_to_process $sample_size"; fi
+        if [ "$sample_size" -gt 0 ]; then fastp_cmd+=" $sample_flag"; fi
+
         log_info "Running: $fastp_cmd"
         execute_cmd "$fastp_cmd"
         local exit_code=$?
@@ -1109,7 +1128,7 @@ run_peak_calling_homer() {
     makeTagDirectory "${out_dir}" "${input_bed}" -single -format bed >> "$log_file" 2>&1
 
     echo "Running HOMER findPeaks..." >> "$log_file"
-    findPeaks "${out_dir}" -o auto -style factor -L 2 -localSize 10000 -strand separate \
+    findPeaks "${out_dir}" -o auto -style factor -L 2 -localSize 1000 -strand separate \
         -minDist "${peak_dist}" -size "${peak_size}" -fragLength "${frag_len}" $ADV_PEAK_CALLER_ARGS >> "$log_file" 2>&1
 
     if [[ -f "${out_dir}/peaks.txt" ]]; then
@@ -2667,159 +2686,12 @@ run_group_ctk_analysis() {
     console_msg "  > Group CTK analysis complete"
 }
 
-# ---------------------------------------------------------------------------
-# run_group_clink_analysis — group-level Clink CITS/CIMS after batch processing
-#
-# Merges per-sample dedup BAMs by group, then runs pileup → cits/cims on the
-# merged BAM (reusing run_clink_full with prebuilt_dedup to skip collapse).
-#
-# Args:
-#   $1  groups_file      Path to groups TSV (sample<TAB>group)
-#   $2  output_root      Root output directory
-#   $3  clink_dir_name   Relative Clink output folder (e.g. "5_Clink")
-#   $4  umi_len          UMI length (-1 = auto; unused for merged BAM but kept for API parity)
-#   $5  threads          Thread count for samtools + pileup
-#   $6  run_cits         "true"|"false"
-#   $7  run_cims         "true"|"false"
-#   $8  min_cov          Minimum coverage threshold (default 5)
-#   $9  min_frac         Minimum signal fraction (default 0.05)
-#   $10 fdr              BH FDR threshold (default 0.05)
-#   $11 work_dir         Directory containing *_analysis subdirs
-# ---------------------------------------------------------------------------
-run_group_clink_analysis() {
-    local groups_file="$1"
-    local output_root="$2"
-    local clink_dir_name="$3"
-    local umi_len="${4:--1}"
-    local threads="${5:-4}"
-    local run_cits="${6:-true}"
-    local run_cims="${7:-true}"
-    local min_cov="${8:-5}"
-    local min_frac="${9:-0.05}"
-    local fdr="${10:-0.05}"
-    local work_dir="${11:-$(pwd)}"
 
-    console_msg "\n[GROUP CLINK ANALYSIS]"
+# ═══════════════════════════════════════════════════════════════════════════════
+# CLINK PIPELINE  (UMI-tools + Python pileup engine)
+# Replaces: tag2collapse.pl + parseAlignment.pl + CIMS.pl + CITS.pl
+# ═══════════════════════════════════════════════════════════════════════════════
 
-    # 1. Parse groups file
-    local groups_map
-    groups_map=$(mktemp)
-    parse_groups_file "$groups_file" "$groups_map"
-
-    # 2. Build group→sample list
-    local group_samples_file
-    group_samples_file=$(mktemp)
-
-    for sample_dir in "${work_dir}"/*_analysis; do
-        [[ ! -d "$sample_dir" ]] && continue
-        local sample_name
-        sample_name="$(basename "${sample_dir%_analysis}")"
-        local group
-        group=$(grep -w "^${sample_name}" "$groups_map" 2>/dev/null | cut -f2)
-        if [[ -z "$group" ]]; then
-            group="$sample_name"
-            log_info "Clink group: '$sample_name' not in groups file, treating as individual"
-        fi
-        echo -e "${group}\t${sample_name}" >> "$group_samples_file"
-    done
-
-    # 3. Process each group
-    local unique_groups
-    unique_groups=$(cut -f1 "$group_samples_file" | sort -u | grep -v "^unknown$")
-
-    for group in $unique_groups; do
-        local samples
-        samples=$(grep -w "^${group}" "$group_samples_file" | cut -f2 | tr '\n' ' ')
-        local sample_count
-        sample_count=$(echo $samples | wc -w | tr -d ' ')
-
-        if [[ "$sample_count" -eq 1 ]]; then
-            printf "  > Clink group %s: " "$group"
-        else
-            printf "  > Clink group %s (%d samples): " "$group" "$sample_count"
-        fi
-
-        # Create group output dir
-        local group_clink_dir="${output_root}/${clink_dir_name}/${group}"
-        mkdir -p "$group_clink_dir"
-
-        # 4. Collect per-sample dedup BAMs.
-        #    Prefers CLINK_ANALYSIS dedup BAMs (individual CLINK ran).
-        #    Falls back to inline per-sample dedup from mapped BAMs (--group-xlsite mode).
-        local bam_inputs=()
-        for sample in $samples; do
-            local sample_dir="${work_dir}/${sample}_analysis"
-            local dedup_bam
-            # Try prebuilt dedup BAM first (individual CLINK ran)
-            dedup_bam=$(find "$sample_dir" -name "*_dedup.bam" -path "*/CLINK_ANALYSIS/*" 2>/dev/null | head -n 1)
-            if [[ -s "$dedup_bam" ]]; then
-                bam_inputs+=("$dedup_bam")
-                log_info "  Clink group $group: adding prebuilt dedup BAM $dedup_bam"
-            else
-                # --group-xlsite: per-sample CLINK was skipped; dedup inline from mapped BAM
-                local mapped_bam
-                mapped_bam=$(find "$sample_dir" -name "*mapped.Aligned.sortedByCoord.out.bam" 2>/dev/null | head -n 1)
-                if [[ -s "$mapped_bam" ]]; then
-                    local inline_dedup="${group_clink_dir}/${sample}_dedup.bam"
-                    echo -ne "Dedup ${sample} > "
-                    run_clink_collapse "$mapped_bam" "$inline_dedup" "$umi_len" "$threads" || {
-                        log_warning "  Clink group $group: inline dedup failed for $sample, skipping"
-                        continue
-                    }
-                    bam_inputs+=("$inline_dedup")
-                    log_info "  Clink group $group: inline-deduped $sample → $inline_dedup"
-                else
-                    log_warning "  Clink group $group: no BAM found for $sample, skipping"
-                fi
-            fi
-        done
-
-        if [[ ${#bam_inputs[@]} -eq 0 ]]; then
-            log_error "Clink group $group: no dedup BAMs found, skipping"
-            update_status_done
-            continue
-        fi
-
-        # 5. Merge BAMs (or copy if only one)
-        local merged_bam="${group_clink_dir}/${group}_dedup.bam"
-        if [[ ${#bam_inputs[@]} -eq 1 ]]; then
-            cp "${bam_inputs[0]}" "$merged_bam"
-        else
-            echo -ne "Merge > "
-            samtools merge -f -@ "$threads" "$merged_bam" "${bam_inputs[@]}" 2>>"${LOG_FILE:-/dev/null}"
-        fi
-
-        if [[ ! -s "$merged_bam" ]]; then
-            log_error "Clink group $group: BAM merge failed"
-            update_status_done
-            continue
-        fi
-
-        # Sort + index merged BAM (pysam pileup needs random-access index)
-        samtools sort -@ "$threads" -o "${merged_bam%.bam}_sorted.bam" "$merged_bam" 2>>"${LOG_FILE:-/dev/null}"
-        mv "${merged_bam%.bam}_sorted.bam" "$merged_bam"
-        samtools index "$merged_bam" 2>>"${LOG_FILE:-/dev/null}"
-
-        # 6. Run pileup → cits/cims via run_clink_full (prebuilt_dedup skips collapse)
-        run_clink_full \
-            "$merged_bam" \
-            "$group_clink_dir" \
-            "$group" \
-            "$umi_len" \
-            "$threads" \
-            "$run_cits" \
-            "$run_cims" \
-            "$min_cov" \
-            "$min_frac" \
-            "$fdr" \
-            "$merged_bam"   # prebuilt_dedup — all BAMs already deduped
-
-        update_status_done
-    done
-
-    rm -f "$groups_map" "$group_samples_file"
-    console_msg "  > Group Clink analysis complete"
-}
 # Resolve the path to the Clink Python scripts bundled in lib/clink/
 _clink_dir() {
     echo "$(dirname "${BASH_SOURCE[0]}")/clink"
@@ -2928,7 +2800,7 @@ run_clink_collapse() {
 # Args:
 #   $1  deduplicated BAM
 #   $2  output .npz path
-#   $3  threads
+#   $3  threads (default 1; passed to pileup.py --threads for chromosome-level parallelism)
 # ---------------------------------------------------------------------------
 run_clink_pileup() {
     local bam_in="$1"
@@ -3101,5 +2973,149 @@ run_clink_full() {
         log_warning "Clink: bedtools bamtobed produced empty BED — peak calling may be affected"
     fi
 
+    update_status_done
     log_info "Clink full pipeline complete for $sample_name"
+    echo "$collapsed_bed"   # Return path for caller to use in peak calling
+}
+
+# ---------------------------------------------------------------------------
+# run_group_clink_analysis — grouped Clink CITS/CIMS (--group-xlsite)
+#
+# Merges per-sample dedup BAMs by group, then runs pileup → CITS/CIMS on the
+# merged BAM.  Mirrors run_group_ctk_analysis but for the Clink sub-pipeline.
+#
+# Args:
+#   $1  groups_file         — same groups.txt used by CTK/bedgraph
+#   $2  clink_output_root   — e.g. OUTPUT_ROOT/5_Clink  or  OUTPUT_ROOT/6_Clink
+#                             (per-sample sub-dirs live here after aggregation)
+#   $3  threads             (default 4)
+#   $4  run_cits            "true"|"false"
+#   $5  run_cims            "true"|"false"
+#   $6  min_coverage        (default 5)
+#   $7  min_fraction        (default 0.05)
+#   $8  fdr                 (default 0.05)
+# ---------------------------------------------------------------------------
+run_group_clink_analysis() {
+    local groups_file="$1"
+    local clink_output_root="$2"
+    local threads="${3:-4}"
+    local run_cits="${4:-true}"
+    local run_cims="${5:-true}"
+    local min_cov="${6:-5}"
+    local min_frac="${7:-0.05}"
+    local fdr="${8:-0.05}"
+
+    console_msg "\n[GROUP CLINK ANALYSIS]"
+
+    # --- Parse groups file → sample→group map ---
+    local groups_map
+    groups_map=$(mktemp)
+    parse_groups_file "$groups_file" "$groups_map"
+
+    # --- Scan clink_output_root for per-sample dirs; skip GROUP_* dirs ---
+    local group_samples_file
+    group_samples_file=$(mktemp)
+
+    for sample_dir in "$clink_output_root"/*/; do
+        [[ ! -d "$sample_dir" ]] && continue
+        local sample_name
+        sample_name="$(basename "$sample_dir")"
+        # Skip group output dirs from this (or a previous) run
+        [[ "$sample_name" == GROUP_* ]] && continue   # unquoted RHS = glob pattern in [[ ]]
+
+        local group
+        group=$(grep -w "^${sample_name}" "$groups_map" 2>/dev/null | cut -f2)
+        if [[ -z "$group" ]]; then
+            group="$sample_name"
+            log_info "Clink group: '$sample_name' not in groups file → treated as individual"
+        fi
+        printf "%s\t%s\n" "$group" "$sample_name" >> "$group_samples_file"
+    done
+
+    if [[ ! -s "$group_samples_file" ]]; then
+        log_warning "Clink group analysis: no sample directories found in $clink_output_root"
+        rm -f "$groups_map" "$group_samples_file"
+        return 0
+    fi
+
+    local unique_groups
+    unique_groups=$(cut -f1 "$group_samples_file" | sort -u)
+
+    for group in $unique_groups; do
+        local samples
+        samples=$(grep -w "^${group}" "$group_samples_file" | cut -f2 | tr '\n' ' ')
+        local sample_count
+        sample_count=$(echo $samples | wc -w | tr -d ' ')
+
+        printf "  > %s (%d sample%s): " \
+            "$group" "$sample_count" "$([[ $sample_count -eq 1 ]] && echo '' || echo 's')"
+
+        local group_dir="$clink_output_root/GROUP_${group}"
+        mkdir -p "$group_dir"
+
+        # --- Collect per-sample dedup BAMs ---
+        local bam_inputs=()
+        for sample in $samples; do
+            local bam="$clink_output_root/${sample}/${sample}_dedup.bam"
+            if [[ -f "$bam" ]]; then
+                bam_inputs+=("$bam")
+                log_info "  Clink group $group: adding $bam"
+            else
+                log_warning "  Clink group $group: dedup BAM not found for $sample ($bam)"
+            fi
+        done
+
+        if [[ ${#bam_inputs[@]} -eq 0 ]]; then
+            log_warning "Clink group $group: no dedup BAMs found — skipping"
+            printf "SKIPPED (no BAMs)\n"
+            continue
+        fi
+
+        # --- Merge BAMs (or symlink if only one sample) ---
+        local merged_bam="$group_dir/${group}_merged_dedup.bam"
+        if [[ ${#bam_inputs[@]} -eq 1 ]]; then
+            cp "${bam_inputs[0]}" "$merged_bam"
+        else
+            update_status "Clink group $group merge"
+            samtools merge -f -@ "$threads" "$merged_bam" "${bam_inputs[@]}" \
+                2>>"${LOG_FILE:-/dev/null}"
+        fi
+
+        if [[ ! -s "$merged_bam" ]]; then
+            log_error "Clink group $group: BAM merge failed → $merged_bam"
+            printf "FAILED\n"
+            continue
+        fi
+
+        # Index merged BAM (required by pileup.py)
+        samtools index "$merged_bam" 2>>"${LOG_FILE:-/dev/null}"
+
+        # --- Pileup ---
+        local npz="$group_dir/${group}_pileup.npz"
+        update_status "Clink group $group pileup"
+        if ! run_clink_pileup "$merged_bam" "$npz" "$threads"; then
+            log_error "Clink group $group: pileup failed"
+            printf "FAILED\n"
+            continue
+        fi
+
+        local prefix="$group_dir/${group}"
+
+        # --- CITS ---
+        if [[ "$run_cits" == "true" ]]; then
+            update_status "Clink group $group CITS"
+            run_clink_cits "$npz" "$prefix" "$min_cov" "$min_frac" "$fdr" || true
+        fi
+
+        # --- CIMS ---
+        if [[ "$run_cims" == "true" ]]; then
+            update_status "Clink group $group CIMS"
+            run_clink_cims "$npz" "$prefix" "$min_cov" "$min_frac" "$fdr" || true
+        fi
+
+        update_status_done
+        log_info "Clink group $group complete → $group_dir"
+    done
+
+    rm -f "$groups_map" "$group_samples_file"
 }

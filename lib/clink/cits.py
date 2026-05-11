@@ -38,6 +38,10 @@ from stats import estimate_background, test_signal, write_bed, HEADER
 import numpy as np
 
 
+# ---------------------------------------------------------------------------
+# Local cluster background
+# ---------------------------------------------------------------------------
+
 def build_local_rates(positions: np.ndarray,
                       clean_truncations: np.ndarray,
                       coverage: np.ndarray,
@@ -101,7 +105,7 @@ def run_cits(pileup_path:  str   = None,
     End-to-end CITS: pileup (.npz) or BAM → significant truncation sites BED.
 
     Strand-aware: fwd (+) and rev (-) strand signals are tested independently
-    using per-position local cluster background rates (matching CTK).
+    using a shared genome-wide background rate (computed across both strands).
 
     Args:
         pileup_path  : .npz file from clink pileup (preferred)
@@ -176,7 +180,7 @@ def run_cits(pileup_path:  str   = None,
         print("  No signal found.", file=sys.stderr)
         return
 
-    # --- Genome-wide background rate (reference only — local rates used for testing) ---
+    # --- Genome-wide background rate (fallback / reference only) ---
     all_cov   = np.concatenate(g_cov)
     all_trunc = np.concatenate(g_trunc)
     lambda_global = estimate_background(all_trunc, all_cov, min_coverage)

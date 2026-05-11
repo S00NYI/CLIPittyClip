@@ -272,14 +272,14 @@ dependencies:
 
   # Python packages
   - python>=3.10,<3.12   # umi_tools 1.1.6 requires distutils (removed in Python 3.12+)
-  - pysam
-  - umi_tools
   - pandas
   - numpy
   - scipy
   - setuptools
   - seaborn
   - matplotlib
+  - pysam
+  - umi_tools
 
   # SSL/Certs
   - ca-certificates

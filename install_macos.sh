@@ -256,9 +256,7 @@ if [[ -z "$SKIP_CONDA" ]]; then
     $CONDA_CMD install -n "$ENV_NAME" -y \
         -c conda-forge -c bioconda \
         wget \
-        "python>=3.10,<3.12" \  # umi_tools 1.1.6 requires distutils (removed in Python 3.12+)
-        pysam \
-        umi_tools \
+        "python>=3.10,<3.12" \
         perl \
         perl-threaded \
         perl-yaml \
@@ -278,6 +276,8 @@ if [[ -z "$SKIP_CONDA" ]]; then
         setuptools \
         seaborn \
         matplotlib \
+        pysam \
+        umi_tools \
         ca-certificates \
         openssl \
         certifi \

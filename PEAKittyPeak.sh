@@ -181,7 +181,7 @@ call_peaks() {
 
         makeTagDirectory "$tag_dir/" "$input_file" -single -format bed > /dev/null 2>&1
 
-        local cmd="findPeaks $tag_dir/ -o auto -style factor -L 2 -localSize 10000 -strand separate \
+        local cmd="findPeaks $tag_dir/ -o auto -style factor -L 2 -localSize 1000 -strand separate \
             -minDist ${PEAK_DIST} -size ${PEAK_SIZE} -fragLength ${FRAG_LEN} ${ADV_PEAK_CALLER_ARGS}"
 
         log_info "Running: findPeaks ..."

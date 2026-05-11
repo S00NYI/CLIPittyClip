@@ -154,7 +154,7 @@ def test_signal(positions:        np.ndarray,
         valid = rate > 0
         if not np.any(valid):
             return []
-        raw_pvals        = np.ones(len(k))
+        raw_pvals      = np.ones(len(k))
         raw_pvals[valid] = binom.sf(k[valid] - 1, n[valid], rate[valid])
     else:
         raw_pvals = binom.sf(k - 1, n, rate)
@@ -242,30 +242,25 @@ def run_analysis(bam_path:     str,
     pileups = scan_bam(bam_path, chrom=chrom, min_mapq=min_mapq,
                        max_nh=max_nh, verbose=verbose)
 
-    # --- Convert to arrays, accumulate genome-wide (both strands) ---
+    # --- Convert to arrays, accumulate genome-wide ---
     chrom_data = {}
     g_cov, g_trunc, g_del = [], [], []
-    g_subs     = {}   # sub_type -> [signal arrays per (chrom, strand)]
-    g_subs_cov = {}   # sub_type -> [coverage arrays for same (chrom, strand)s]
+    g_subs     = {}   # sub_type -> [signal arrays per chrom]
+    g_subs_cov = {}   # sub_type -> [coverage arrays for same chroms only]
 
     for c, pileup in pileups.items():
         result = to_arrays(pileup)
         if result is None:
             continue
-        chrom_data[c] = {}
-        for strand_key, strand_arr in result.items():
-            if strand_arr is None:
-                continue
-            positions, coverage, truncations, deletions, clean_truncations, subs = strand_arr
-            chrom_data[c][strand_key] = (positions, coverage, truncations, deletions, clean_truncations, subs)
-            g_cov.append(coverage)
-            g_trunc.append(truncations)
-            g_del.append(deletions)
-            for sub_type, arr in subs.items():
-                g_subs.setdefault(sub_type, []).append(arr)
-                g_subs_cov.setdefault(sub_type, []).append(coverage)
-        if not chrom_data[c]:
-            del chrom_data[c]
+        positions, coverage, truncations, deletions, clean_truncations, subs = result
+        chrom_data[c] = (positions, coverage, truncations, deletions, clean_truncations, subs)
+
+        g_cov.append(coverage)
+        g_trunc.append(truncations)
+        g_del.append(deletions)
+        for sub_type, arr in subs.items():
+            g_subs.setdefault(sub_type, []).append(arr)
+            g_subs_cov.setdefault(sub_type, []).append(coverage)
 
     if not chrom_data:
         print("No signal found.", file=sys.stderr)
@@ -315,34 +310,30 @@ def run_analysis(bam_path:     str,
     totals = {'trunc': 0, 'del': 0}
     totals.update({st: 0 for st in λ_subs})
 
-    # --- Per-chromosome, per-strand testing ---
-    STRAND_CHAR = {'fwd': '+', 'rev': '-'}
-    for c, strands in chrom_data.items():
-        for strand_key, (positions, coverage, truncations, deletions, clean_truncations, subs) in strands.items():
-            strand_char = STRAND_CHAR.get(strand_key, '.')
+    # --- Per-chromosome testing ---
+    for c, (positions, coverage, truncations, deletions, clean_truncations, subs) in chrom_data.items():
 
-            # Truncation sites (CITS-equivalent)
-            t_res = test_signal(positions, truncations, coverage,
-                                λ_trunc, min_coverage, min_fraction, fdr)
-            write_bed(t_res, c, "trunc", fh_trunc, strand=strand_char)
-            totals['trunc'] += len(t_res)
+        # Truncation sites (CITS-equivalent)
+        t_res = test_signal(positions, truncations, coverage,
+                            λ_trunc, min_coverage, min_fraction, fdr)
+        write_bed(t_res, c, "trunc", fh_trunc)
+        totals['trunc'] += len(t_res)
 
-            # Deletion sites (CIMS-equivalent)
-            d_res = test_signal(positions, deletions, coverage,
-                                λ_del, min_coverage, min_fraction, fdr)
-            write_bed(d_res, c, "del", fh_del, strand=strand_char)
-            totals['del'] += len(d_res)
+        # Deletion sites (CIMS-equivalent)
+        d_res = test_signal(positions, deletions, coverage,
+                            λ_del, min_coverage, min_fraction, fdr)
+        write_bed(d_res, c, "del", fh_del)
+        totals['del'] += len(d_res)
 
-            # Substitution sites (PAR-CLIP T>C, iCLIP any sub)
-            for sub_type, sub_arr in subs.items():
-                if sub_type not in λ_subs:
-                    continue
-                s_res = test_signal(positions, sub_arr, coverage,
-                                    λ_subs[sub_type], min_coverage, min_fraction, fdr)
-                _, fh_sub = sub_files[sub_type]
-                write_bed(s_res, c, f"{sub_type[0]}to{sub_type[1]}", fh_sub,
-                          strand=strand_char)
-                totals[sub_type] = totals.get(sub_type, 0) + len(s_res)
+        # Substitution sites (PAR-CLIP T>C, iCLIP any sub)
+        for sub_type, sub_arr in subs.items():
+            if sub_type not in λ_subs:
+                continue
+            s_res = test_signal(positions, sub_arr, coverage,
+                                λ_subs[sub_type], min_coverage, min_fraction, fdr)
+            _, fh_sub = sub_files[sub_type]
+            write_bed(s_res, c, f"{sub_type[0]}to{sub_type[1]}", fh_sub)
+            totals[sub_type] = totals.get(sub_type, 0) + len(s_res)
 
     # --- Close files ---
     fh_trunc.close()

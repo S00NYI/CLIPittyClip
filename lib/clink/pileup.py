@@ -180,6 +180,7 @@ def _process_chunk(M_starts: list, M_ends: list,
     M_starts, M_ends : M/=/X block endpoints, already offset to [0, size)
     D_starts, D_ends : D block endpoints, already offset to [0, size)
     T_off            : truncation positions offset to [0, size)
+    T_clean          : truncation positions for reads with no deletion in CIGAR
     size             : chunk size in bp
     subs_sparse      : accumulate substitutions here (modified in place)
     sub_reads        : reads with mismatches owned by this chunk
@@ -253,7 +254,8 @@ def _build_strand_arrays(all_positions: list, all_coverage: list,
                           subs_sparse: dict):
     """
     Concatenate chunk accumulation lists into final numpy arrays for one strand.
-    Returns (positions, coverage, truncations, deletions, clean_truncations, subs_out) or None.
+    Returns (positions, coverage, truncations, deletions, clean_truncations, subs_out)
+    or None.
     """
     if not all_positions:
         return None
