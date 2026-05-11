@@ -1832,23 +1832,31 @@ fi
 
 COLLAPSED_BED="${BASENAME}_collapsed.bed"
 MUTATION_FILE="${BASENAME}_mutations.txt"
-CLINK_PREBUILT_DEDUP_BAM=""   # set below when Clink-only path does early dedup
 
-if [[ "$RUN_CIMS" == "true" ]] || [[ "$RUN_CITS" == "true" ]] || [[ "$RUN_CLINK" != "true" ]]; then
-    # CTK path, or no crosslink analysis: standard parseAlignment + tag2collapse
-    log_info "Preprocessing: samtools calmd → parseAlignment.pl → tag2collapse.pl"
+# 3b. DEFAULT PCR dedup: collapse.py (Clink) + bedtools bamtobed
+#     This always produces the canonical COLLAPSED_BED that feeds bedgraph,
+#     peak calling, and the peak matrix.  CTK's parseAlignment/tag2collapse
+#     run separately below ONLY when --run-cims or --run-cits is requested —
+#     they produce their own CTK_COLLAPSED_BED for CITS.pl/CIMS.pl and do
+#     NOT replace this BED.
+log_info "PCR dedup: collapse.py (Clink) → bedtools bamtobed → 2_COLLAPSED_BED"
+mkdir -p "Clink_Analysis"
+CLINK_DEDUP_BAM="Clink_Analysis/${BASENAME}_dedup.bam"
+run_clink_collapse "$BAM_FILE" "$CLINK_DEDUP_BAM" "$CLINK_UMI_LEN" "$THREADS" || true
+bedtools bamtobed -i "$CLINK_DEDUP_BAM" -split 2>/dev/null \
+    | sort -k1,1 -k2,2n > "$COLLAPSED_BED"
+log_info "Collapsed BED (Clink): $COLLAPSED_BED ($(wc -l < "$COLLAPSED_BED") reads)"
+
+# 3c. CTK preprocessing — only when --run-cims or --run-cits is explicitly requested.
+#     parseAlignment.pl + tag2collapse.pl produce a separate CTK_COLLAPSED_BED
+#     and mutation file required by CITS.pl / CIMS.pl.
+CTK_COLLAPSED_BED=""
+if [[ "$RUN_CIMS" == "true" ]] || [[ "$RUN_CITS" == "true" ]]; then
+    log_info "CTK preprocessing: samtools calmd → parseAlignment.pl → tag2collapse.pl"
     check_dependency parseAlignment.pl
-    run_parse_alignment "${BAM_FILE}" "${BASENAME}_parsed.bed" "${MUTATION_FILE}" "$GENOME_INDEX"
-    run_collapse_pcr "${BASENAME}_parsed.bed" "${COLLAPSED_BED}" "${UMI_LEN}" "${DEDUP_MODE}"
-else
-    # Clink-only: skip CTK preprocessing entirely; run umi_tools dedup + bamtobed
-    log_info "Clink-only mode: skipping parseAlignment/tag2collapse — using umi_tools dedup"
-    mkdir -p "Clink_Analysis"
-    CLINK_PREBUILT_DEDUP_BAM="Clink_Analysis/${BASENAME}_dedup.bam"
-    run_clink_collapse "$BAM_FILE" "$CLINK_PREBUILT_DEDUP_BAM" "$CLINK_UMI_LEN" "$THREADS" || true
-    bedtools bamtobed -i "$CLINK_PREBUILT_DEDUP_BAM" -split 2>/dev/null \
-        | sort -k1,1 -k2,2n > "$COLLAPSED_BED"
-    log_info "Collapsed BED from Clink dedup: $COLLAPSED_BED ($(wc -l < "$COLLAPSED_BED") reads)"
+    CTK_COLLAPSED_BED="${BASENAME}_ctk_collapsed.bed"
+    run_parse_alignment "$BAM_FILE" "${BASENAME}_parsed.bed" "$MUTATION_FILE" "$GENOME_INDEX"
+    run_collapse_pcr "${BASENAME}_parsed.bed" "$CTK_COLLAPSED_BED" "$UMI_LEN" "$DEDUP_MODE"
 fi
 
 # 4. Coverage Analysis (Bedgraph)
@@ -1896,9 +1904,10 @@ if [[ "$RUN_CIMS" == "true" ]] || [[ "$RUN_CITS" == "true" ]]; then
     
     mkdir -p "$CTK_OUTPUT"
     
-    # Run CTK analysis using the STANDARD pipeline outputs (no duplicate preprocessing)
+    # CTK analysis uses its own parseAlignment/tag2collapse outputs (CTK_COLLAPSED_BED),
+    # not the Clink BED — the mutation file only matches the CTK collapsed read set.
     run_ctk_analysis \
-        "${COLLAPSED_BED}" \
+        "${CTK_COLLAPSED_BED}" \
         "${MUTATION_FILE}" \
         "$CTK_OUTPUT" \
         "$ref_fasta" \
@@ -1932,16 +1941,9 @@ if [[ "$RUN_CLINK" == "true" ]]; then
         "$CLINK_MIN_COV" \
         "$CLINK_MIN_FRAC" \
         "$CLINK_FDR" \
-        "${CLINK_PREBUILT_DEDUP_BAM:-}")
-
-    # Use Clink collapsed BED for peak calling only when:
-    # - CTK is not running (no duplicate peaks), AND
-    # - Peaks were not already called from the early Clink dedup path
-    if [[ -z "$RUN_CTK" ]] && [[ -z "$CLINK_PREBUILT_DEDUP_BAM" ]] && \
-       [[ -n "$clink_bed" ]] && [[ -s "$clink_bed" ]]; then
-        log_info "Using Clink collapsed BED for peak calling: $clink_bed"
-        run_peak_calling "$clink_bed" "${BASENAME}_clink_peaks" "$PEAK_DIST" "$PEAK_SIZE" "$FRAG_LEN"
-    fi
+        "$CLINK_DEDUP_BAM")
+    # Peak calling already ran on the Clink COLLAPSED_BED in step 5 above.
+    # run_clink_full receives the pre-built dedup BAM so it skips deduplication.
 
     log_info "Clink pipeline complete. Output: $CLINK_OUTPUT"
 fi

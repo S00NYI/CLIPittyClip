@@ -22,6 +22,7 @@ THREADS=1
 UMI_LEN="-1"
 FDR=0.05
 MIN_SIGNAL=1
+MIN_FRAC=0.05
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLINK_DIR="${SCRIPT_DIR}/lib/clink"
@@ -39,6 +40,7 @@ usage() {
     echo "  -u            UMI length (default: auto-detect from read names)"
     echo "  --fdr         FDR/p-value threshold (default: 0.05)"
     echo "  --min-signal  Minimum mutation/truncation read count per site (default: 1)"
+    echo "  --min-frac    Minimum mutation fraction per site (default: 0.05; try 0.10-0.15)"
     echo ""
     exit 1
 }
@@ -52,6 +54,7 @@ while [[ $# -gt 0 ]]; do
         -u) UMI_LEN="$2";          shift 2 ;;
         --fdr) FDR="$2";           shift 2 ;;
         --min-signal) MIN_SIGNAL="$2"; shift 2 ;;
+        --min-frac)   MIN_FRAC="$2";   shift 2 ;;
         -h|--help) usage ;;
         *) echo "[ERROR] Unknown option: $1"; usage ;;
     esac
@@ -132,7 +135,7 @@ echo "════════════════════════�
 echo "  Input BAM   : $INPUT_BAM"
 echo "  Reads       : $(fmt_num $N_READS)"
 echo "  Threads     : $THREADS  (pileup.py)"
-echo "  FDR         : $FDR"
+echo "  min-signal  : $MIN_SIGNAL   min-frac: $MIN_FRAC   FDR: $FDR"
 echo "  Output dir  : $OUTDIR"
 echo "════════════════════════════════════════════════════════════════"
 echo ""
@@ -168,7 +171,7 @@ TOTAL_WALL=0; PEAK_RSS=0
 DEDUP_BAM="${CLK_DIR}/dedup.bam"
 DEDUP_LOG="${CLK_DIR}/dedup.log"
 
-CLINK_COLLAPSE_ARGS="--bam '$SUBSET_SORTED' --out '$DEDUP_BAM'"
+CLINK_COLLAPSE_ARGS="--bam '$SUBSET_SORTED' --out '$DEDUP_BAM' --max-nh 1"
 [[ "$UMI_LEN" != "-1" ]] && CLINK_COLLAPSE_ARGS="$CLINK_COLLAPSE_ARGS --umi-len $UMI_LEN"
 CLINK_COLLAPSE_ARGS="$CLINK_COLLAPSE_ARGS --log '$DEDUP_LOG'"
 
@@ -184,12 +187,45 @@ run_timed "pileup.py (t=${THREADS})" "${CLK_DIR}/gt_pileup.txt" \
     python3 "${CLINK_DIR}/pileup.py" "$DEDUP_BAM" --out "$NPZ" --threads "$THREADS"
 accumulate "$LAST_WALL" "$LAST_RSS"
 
+# ── Clink 2b: raw pileup signal counts (positions with any signal, min-cov=5) ─
+CLK_RAW_DEL_POS=0; CLK_RAW_SUB_POS=0; CLK_RAW_TRUNC_POS=0
+if [[ -f "$NPZ" ]]; then
+    read -r CLK_RAW_DEL_POS CLK_RAW_SUB_POS CLK_RAW_TRUNC_POS < <(python3 - "$NPZ" <<'PYEOF'
+import sys, numpy as np
+data = np.load(sys.argv[1])
+dels = subs = trunc = 0
+for k in data.files:
+    parts = k.split('__')
+    if len(parts) < 3 or parts[1] not in ('fwd', 'rev'):
+        continue
+    if parts[2] != 'coverage':
+        continue
+    pfx = f'{parts[0]}__{parts[1]}'
+    cov = data[k]
+    mask = cov >= 5
+    d_key = f'{pfx}__deletions'
+    t_key = f'{pfx}__truncations'
+    if d_key in data.files:
+        dels  += int(np.sum(data[d_key][mask] > 0))
+    if t_key in data.files:
+        trunc += int(np.sum(data[t_key][mask] > 0))
+    sub_keys = [sk for sk in data.files if sk.startswith(f'{pfx}__sub__')]
+    if sub_keys:
+        sub_any = np.zeros(int(mask.sum()), dtype=bool)
+        for sk in sub_keys:
+            sub_any |= (data[sk][mask] > 0)
+        subs += int(np.sum(sub_any))
+print(dels, subs, trunc)
+PYEOF
+)
+fi
+
 # ── Clink 3: cits.py ─────────────────────────────────────────────────────────
 CLK_PREFIX="${CLK_DIR}/sample"
 run_timed "cits.py" "${CLK_DIR}/gt_cits.txt" \
     python3 "${CLINK_DIR}/cits.py" \
         --pileup "$NPZ" --prefix "$CLK_PREFIX" \
-        --min-cov 5 --min-frac 0.05 --min-signal "$MIN_SIGNAL" --fdr "$FDR"
+        --min-cov 5 --min-frac "$MIN_FRAC" --min-signal "$MIN_SIGNAL" --fdr "$FDR"
 accumulate "$LAST_WALL" "$LAST_RSS"
 
 CLK_TRUNC=$(count_data "${CLK_PREFIX}_truncations.bed")
@@ -198,7 +234,7 @@ CLK_TRUNC=$(count_data "${CLK_PREFIX}_truncations.bed")
 run_timed "cims.py" "${CLK_DIR}/gt_cims.txt" \
     python3 "${CLINK_DIR}/cims.py" \
         --pileup "$NPZ" --prefix "$CLK_PREFIX" \
-        --min-cov 5 --min-frac 0.05 --min-signal "$MIN_SIGNAL" --fdr "$FDR"
+        --min-cov 5 --min-frac "$MIN_FRAC" --min-signal "$MIN_SIGNAL" --fdr "$FDR"
 accumulate "$LAST_WALL" "$LAST_RSS"
 
 CLK_DELS=$(count_data "${CLK_PREFIX}_deletions.bed")
@@ -223,19 +259,35 @@ printf "════════════════════════
 printf "  Input BAM     : %s\n" "$INPUT_BAM"
 printf "  Reads tested  : %s\n" "$(fmt_num $INPUT_READS)"
 printf "  Threads       : %s  (pileup.py)\n" "$THREADS"
-printf "  FDR           : %s\n" "$FDR"
+printf "  min-signal    : %s    min-frac: %s    FDR: %s\n" "$MIN_SIGNAL" "$MIN_FRAC" "$FDR"
 printf "────────────────────────────────────────────────────────────────\n"
-printf "  %-38s  %10s\n" "Total wall time (s)"      "$TOTAL_WALL"
-printf "  %-38s  %10s\n" "Peak RAM (MB)"             "$PEAK_RSS"
-printf "────────────────────────────────────────────────────────────────\n"
-printf "  %-38s  %10s\n" "OUTPUT COUNTS"             ""
+printf "  %-38s  %10s\n" "PERFORMANCE"               ""
 printf "  %-38s  %10s\n" "──────────────────────"    "──────────"
-printf "  %-38s  %10s\n" "Input reads"               "$(fmt_num $INPUT_READS)"
-printf "  %-38s  %10s\n" "Dedup reads"               "$(fmt_num $CLK_DEDUP)"
-printf "  %-38s  %10s\n" "CIMS deletion sites"       "$(fmt_num $CLK_DELS)"
-printf "  %-38s  %10s\n" "CIMS substitution sites"   "$(fmt_num $CLK_SUBS_TOTAL)"
-printf "  %-38s  %10s\n" "  of which T>C"            "$(fmt_num $CLK_TtoC)"
-printf "  %-38s  %10s\n" "CITS truncation sites"     "$(fmt_num $CLK_TRUNC)"
+printf "  %-38s  %10s\n" "Total wall time (s)"        "$TOTAL_WALL"
+printf "  %-38s  %10s\n" "Peak RAM (MB)"              "$PEAK_RSS"
+printf "────────────────────────────────────────────────────────────────\n"
+printf "  %-38s  %10s\n" "INPUT / DEDUPLICATION"     ""
+printf "  %-38s  %10s\n" "──────────────────────"    "──────────"
+printf "  %-38s  %10s\n" "Input reads"                "$(fmt_num $INPUT_READS)"
+printf "  %-38s  %10s\n" "After dedup"                "$(fmt_num $CLK_DEDUP)"
+printf "────────────────────────────────────────────────────────────────\n"
+printf "  %-38s  %10s\n" "RAW SIGNAL (min-cov≥5)"    ""
+printf "  %-38s  %10s\n" "──────────────────────"    "──────────"
+printf "  %-38s  %10s\n" "Positions with deletion"    "$(fmt_num $CLK_RAW_DEL_POS)"
+printf "  %-38s  %10s\n" "Positions with substitution" "$(fmt_num $CLK_RAW_SUB_POS)"
+printf "  %-38s  %10s\n" "Positions with truncation"  "$(fmt_num $CLK_RAW_TRUNC_POS)"
+printf "────────────────────────────────────────────────────────────────\n"
+printf "  %-38s  %10s\n" "CIMS SIGNIFICANT SITES"    ""
+printf "  (FDR≤${FDR}, min-signal≥${MIN_SIGNAL}, min-frac≥${MIN_FRAC})\n"
+printf "  %-38s  %10s\n" "──────────────────────"    "──────────"
+printf "  %-38s  %10s\n" "Deletion sites"             "$(fmt_num $CLK_DELS)"
+printf "  %-38s  %10s\n" "Substitution sites"         "$(fmt_num $CLK_SUBS_TOTAL)"
+printf "  %-38s  %10s\n" "  of which T>C"             "$(fmt_num $CLK_TtoC)"
+printf "────────────────────────────────────────────────────────────────\n"
+printf "  %-38s  %10s\n" "CITS TRUNCATION SITES"     ""
+printf "  (FDR≤${FDR}, min-cov≥5, min-frac≥${MIN_FRAC})\n"
+printf "  %-38s  %10s\n" "──────────────────────"    "──────────"
+printf "  %-38s  %10s\n" "Truncation sites"           "$(fmt_num $CLK_TRUNC)"
 printf "════════════════════════════════════════════════════════════════\n"
 } | tee "$REPORT"
 

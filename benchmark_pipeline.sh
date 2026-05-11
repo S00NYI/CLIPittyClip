@@ -14,6 +14,7 @@
 #   --cims-iter  CIMS permutation iterations (default: 5; use 200+ for reliable FDR)
 #   --cims-m     Min mutations per site to report (default: 1; post-filters CIMS output)
 #   --cims-k     Min coverage per site to report  (default: 1; post-filters CIMS output)
+#   --cims-frac  Min mutation fraction per site (default: 0.05; raise to 0.10-0.15 to match CTK stringency)
 #   --fdr        FDR threshold for CIMS/CITS (default: 0.05)
 
 set -uo pipefail
@@ -28,6 +29,7 @@ GENOME_FASTA=""
 CIMS_ITER=5
 CIMS_M=1
 CIMS_K=1
+CIMS_FRAC=0.05
 FDR=0.05
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -49,6 +51,7 @@ usage() {
     echo "  --cims-iter   CIMS permutation iterations (default: 5; use 200+ for reliable FDR)"
     echo "  --cims-m      CIMS minimum mutations per site (default: 1)"
     echo "  --cims-k      CIMS minimum coverage per site (default: 1)"
+    echo "  --cims-frac   CIMS minimum mutation fraction (default: 0.05; try 0.10-0.15)"
     echo "  --fdr         FDR/p-value threshold (default: 0.05)"
     echo ""
     exit 1
@@ -62,10 +65,11 @@ while [[ $# -gt 0 ]]; do
         -t) THREADS="$2";     shift 2 ;;
         -u) UMI_LEN="$2";     shift 2 ;;
         -f) GENOME_FASTA="$2"; shift 2 ;;
-        --cims-iter) CIMS_ITER="$2"; shift 2 ;;
-        --cims-m)    CIMS_M="$2";    shift 2 ;;
-        --cims-k)    CIMS_K="$2";    shift 2 ;;
-        --fdr) FDR="$2";      shift 2 ;;
+        --cims-iter) CIMS_ITER="$2";  shift 2 ;;
+        --cims-m)    CIMS_M="$2";     shift 2 ;;
+        --cims-k)    CIMS_K="$2";     shift 2 ;;
+        --cims-frac) CIMS_FRAC="$2";  shift 2 ;;
+        --fdr) FDR="$2";              shift 2 ;;
         -h|--help) usage ;;
         *) echo "[ERROR] Unknown option: $1"; usage ;;
     esac
@@ -165,34 +169,38 @@ echo "════════════════════════�
 echo "  CLIPittyClip — CTK vs Clink Pipeline Benchmark"
 echo "════════════════════════════════════════════════════════════════"
 echo "  Input BAM   : $INPUT_BAM"
-echo "  Reads       : $(fmt_num $N_READS)"
+echo "  Unique reads (NH=1) to extract : $(fmt_num $N_READS)"
 echo "  Threads     : $THREADS  (pileup.py)"
-echo "  CIMS iter   : $CIMS_ITER   min-mut: $CIMS_M   min-cov: $CIMS_K   FDR: $FDR"
+echo "  CIMS iter   : $CIMS_ITER   min-mut: $CIMS_M   min-cov: $CIMS_K   min-frac: $CIMS_FRAC   FDR: $FDR"
 echo "  Genome FASTA: ${GENOME_FASTA:-none (calmd skipped)}"
 echo "  Output dir  : $OUTDIR"
 echo "════════════════════════════════════════════════════════════════"
 echo ""
 
-# ── Step 0: Subset BAM ────────────────────────────────────────────────────────
-echo "[0] Extracting $(fmt_num $N_READS) reads from BAM..."
+# ── Step 0: Subset BAM (NH=1 unique mappers only) ────────────────────────────
+echo "[0] Extracting $(fmt_num $N_READS) uniquely mapped reads (NH=1) from BAM..."
 
-SUBSET_BAM="${OUTDIR}/subset_${N_READS}.bam"
 SUBSET_SORTED="${OUTDIR}/subset_sorted.bam"
 
-# Disable pipefail here: head closes the pipe early once it has N lines,
-# causing samtools view to receive SIGPIPE (exit 141). That is expected behaviour.
-set +o pipefail
-{ samtools view -H "$INPUT_BAM"
-  samtools view -F 4 "$INPUT_BAM" | head -n "$N_READS"
-} | samtools view -bS -o "${SUBSET_BAM}.tmp"
-set -o pipefail
-
-samtools sort -o "$SUBSET_SORTED" "${SUBSET_BAM}.tmp"
-samtools index "$SUBSET_SORTED"
-rm -f "${SUBSET_BAM}.tmp"
+if [[ ! -f "$SUBSET_SORTED" ]]; then
+    SUBSET_TMP="${OUTDIR}/subset.bam.tmp"
+    set +o pipefail
+    { samtools view -H "$INPUT_BAM"
+      samtools view -F 4 "$INPUT_BAM" \
+        | awk '$0 ~ /\tNH:i:1(\t|$)/ || !/\tNH:i:/' \
+        | head -n "$N_READS"
+    } | samtools view -bS -o "$SUBSET_TMP"
+    set -o pipefail
+    samtools sort -o "$SUBSET_SORTED" "$SUBSET_TMP"
+    samtools index "$SUBSET_SORTED"
+    rm -f "$SUBSET_TMP"
+    echo "    Created: $SUBSET_SORTED"
+else
+    echo "    Reusing: $SUBSET_SORTED"
+fi
 
 INPUT_READS=$(bam_count "$SUBSET_SORTED")
-echo "    Extracted: $(fmt_num $INPUT_READS) mapped reads"
+echo "    Extracted: $(fmt_num $INPUT_READS) uniquely mapped reads"
 echo ""
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -206,7 +214,7 @@ TOTAL_WALL=0; PEAK_RSS=0
 DEDUP_BAM="${CLK_DIR}/dedup.bam"
 DEDUP_LOG="${CLK_DIR}/dedup.log"
 
-CLINK_COLLAPSE_ARGS="--bam '$SUBSET_SORTED' --out '$DEDUP_BAM'"
+CLINK_COLLAPSE_ARGS="--bam '$SUBSET_SORTED' --out '$DEDUP_BAM' --max-nh 1"
 if [[ "$UMI_LEN" != "-1" ]]; then
     CLINK_COLLAPSE_ARGS="$CLINK_COLLAPSE_ARGS --umi-len $UMI_LEN"
 fi
@@ -268,7 +276,7 @@ CLK_PREFIX="${CLK_DIR}/sample"
 run_timed "cits.py" "${CLK_DIR}/gt_cits.txt" \
     python3 "${CLINK_DIR}/cits.py" \
         --pileup "$NPZ" --prefix "$CLK_PREFIX" \
-        --min-cov 5 --min-frac 0.05 --min-signal "$CIMS_M" --fdr "$FDR"
+        --min-cov 5 --min-frac "$CIMS_FRAC" --min-signal "$CIMS_M" --fdr "$FDR"
 accumulate "$LAST_WALL" "$LAST_RSS"
 
 CLK_TRUNC=$(count_data "${CLK_PREFIX}_truncations.bed")
@@ -277,7 +285,7 @@ CLK_TRUNC=$(count_data "${CLK_PREFIX}_truncations.bed")
 run_timed "cims.py" "${CLK_DIR}/gt_cims.txt" \
     python3 "${CLINK_DIR}/cims.py" \
         --pileup "$NPZ" --prefix "$CLK_PREFIX" \
-        --min-cov 5 --min-frac 0.05 --min-signal "$CIMS_M" --fdr "$FDR"
+        --min-cov 5 --min-frac "$CIMS_FRAC" --min-signal "$CIMS_M" --fdr "$FDR"
 accumulate "$LAST_WALL" "$LAST_RSS"
 
 CLK_DELS=$(count_data "${CLK_PREFIX}_deletions.bed")
@@ -320,7 +328,7 @@ accumulate "$LAST_WALL" "$LAST_RSS"
 TAGS_BED="${CTK_DIR}/tags.bed"
 MUTATIONS_TXT="${CTK_DIR}/mutations.txt"
 run_timed "parseAlignment.pl" "${CTK_DIR}/gt_parse.txt" \
-    parseAlignment.pl --map-qual 1 --min-len 16 \
+    parseAlignment.pl --map-qual 255 --min-len 16 \
         --mutation-file "$MUTATIONS_TXT" "$SAM_FILE" "$TAGS_BED"
 accumulate "$LAST_WALL" "$LAST_RSS"
 rm -f "$SAM_FILE"
@@ -392,14 +400,62 @@ fi
 
 CTK_CIMS_SUB=$(count_data "$CIMS_SUB")
 
-# ── CTK 7: CITS.pl ───────────────────────────────────────────────────────────
+# ── CTK 7: CITS (manual steps — 1bp cluster-boundary fix) ───────────────────
+#
+# CITS.pl internally does:
+#   1. removeRow.pl        — strip reads with deletions (matched by name col3)
+#   2. bedExt.pl -n up -l -1 -r -1 — truncation = 1bp upstream of read start
+#      (+: trunc=[start-1,start)   -: trunc=[end,end+1))
+#   3. tag2cluster.pl -s -maxgap -1 — cluster reads (strand-specific, overlap only)
+#   4. awk '$5>2'          — keep clusters with >2 reads
+#   5. tag2peak.pl         — Binomial test of truncation density in clusters
+#
+# BUG: truncation positions (step 2) fall 1bp OUTSIDE cluster boundaries
+# (step 3/4), because clusters span read extents not truncation positions.
+# Fix: extend each cluster 1bp upstream before tag2peak (step 4.5).
+#
 CITS_TXT="${CTK_DIR}/CITS.txt"
-CACHE_CITS=$(mktemp -u "${TMPDIR:-/tmp}/cits.XXXXXX")
-run_timed "CITS.pl" "${CTK_DIR}/gt_cits.txt" \
-    CITS.pl -big -c "$CACHE_CITS" -p "$FDR" --gap 25 \
-        "$COLLAPSED_BED" "$DEL_BED" "$CITS_TXT"
+CITS_CLEAN="${CTK_DIR}/cits_clean.bed"
+CITS_TRUNC="${CTK_DIR}/cits_trunc.bed"
+CITS_CLUSTER0="${CTK_DIR}/cits_cluster0.bed"
+CITS_CLUSTER="${CTK_DIR}/cits_cluster.bed"
+CITS_CLUSTER_FIX="${CTK_DIR}/cits_cluster_fix.bed"
+CITS_CACHE=$(mktemp -d "${TMPDIR:-/tmp}/cits_cache.XXXXXX")
+# Note: tag2cluster and tag2peak each require a non-existent cache subdir
+# (they create it themselves; they die if it already exists).
+# Pass subdirs under $CITS_CACHE — they exist as a parent but not as a path.
+
+run_timed "CITS (manual + 1bp cluster fix)" "${CTK_DIR}/gt_cits.txt" \
+    bash -c "
+        set -e
+        # 1. Remove reads that carry a deletion (by read name, col 3)
+        removeRow.pl -q 3 -f 3 '$COLLAPSED_BED' '$DEL_BED' > '$CITS_CLEAN'
+        # 2. Extract truncation positions from deletion-free reads
+        bedExt.pl -n up -l '-1' -r '-1' '$CITS_CLEAN' '$CITS_TRUNC'
+        # 3. Cluster all reads, strand-specific, no gap (overlap only)
+        #    -c subdir must NOT exist yet (tag2cluster creates it)
+        tag2cluster.pl -big -s -maxgap '-1' \
+            -c '$CITS_CACHE/t2c' '$COLLAPSED_BED' '$CITS_CLUSTER0'
+        # 4. Keep clusters with >2 reads
+        awk '\$5>2' '$CITS_CLUSTER0' > '$CITS_CLUSTER'
+        # 4.5 Fix: extend each cluster 1bp on its 5' end so truncation
+        #     positions (1bp upstream of read start) fall within the cluster.
+        #     + strand: start -= 1;   - strand: end += 1
+        awk 'BEGIN{OFS=\"\t\"} {
+            if (\$6==\"+\") { \$2=(\$2>0 ? \$2-1 : 0) }
+            else            { \$3=\$3+1 }
+            print
+        }' '$CITS_CLUSTER' > '$CITS_CLUSTER_FIX'
+        # 5. Binomial test: truncation density within each cluster region
+        #    -c subdir must NOT exist yet (tag2peak creates it)
+        tag2peak.pl -big -ss --prefix CITS \
+            -c '$CITS_CACHE/t2p' \
+            -gap 25 -p '$FDR' \
+            --gene '$CITS_CLUSTER_FIX' '$CITS_TRUNC' '$CITS_TXT'
+    "
 accumulate "$LAST_WALL" "$LAST_RSS"
-rm -rf "$CACHE_CITS"
+rm -rf "$CITS_CACHE" "$CITS_CLEAN" "$CITS_TRUNC" "$CITS_CLUSTER0" \
+       "$CITS_CLUSTER" "$CITS_CLUSTER_FIX"
 
 CTK_CITS=$(count_data "$CITS_TXT")
 
@@ -422,7 +478,7 @@ printf "  CTK vs Clink Benchmark Report\n"
 printf "════════════════════════════════════════════════════════════════\n"
 printf "  Input BAM     : %s\n" "$INPUT_BAM"
 printf "  Reads tested  : %s\n" "$(fmt_num $INPUT_READS)"
-printf "  CIMS iter     : %s    min-mut: %s    min-cov: %s    FDR: %s\n" "$CIMS_ITER" "$CIMS_M" "$CIMS_K" "$FDR"
+printf "  CIMS iter     : %s    min-mut: %s    min-cov: %s    min-frac: %s    FDR: %s\n" "$CIMS_ITER" "$CIMS_M" "$CIMS_K" "$CIMS_FRAC" "$FDR"
 printf "  Genome FASTA  : %s\n" "${GENOME_FASTA:-none}"
 printf "────────────────────────────────────────────────────────────────\n"
 printf "  %-38s  %10s  %10s\n" "PERFORMANCE"             "Clink"      "CTK"
@@ -446,14 +502,14 @@ printf "  %-38s  %10s  %10s\n" "Positions/reads with substitution" "$(fmt_num $C
 printf "  %-38s  %10s  %10s\n" "Positions/reads with truncation"   "$(fmt_num $CLK_RAW_TRUNC_POS)" "—"
 printf "────────────────────────────────────────────────────────────────\n"
 printf "  %-38s  %10s  %10s\n" "CIMS SIGNIFICANT SITES"  "Clink"      "CTK"
-printf "  (FDR≤${FDR}, min-mut≥${CIMS_M}, min-cov≥${CIMS_K}; CTK: ${CIMS_ITER} permutations)\n"
+printf "  (FDR≤${FDR}, min-mut≥${CIMS_M}, min-cov≥${CIMS_K}, min-frac≥${CIMS_FRAC}; CTK: ${CIMS_ITER} permutations)\n"
 printf "  %-38s  %10s  %10s\n" "──────────────────────" "──────────" "──────────"
 printf "  %-38s  %10s  %10s\n" "Deletion sites"           "$(fmt_num $CLK_DELS)"         "$(fmt_num $CTK_CIMS_DEL)"
 printf "  %-38s  %10s  %10s\n" "Substitution sites"       "$(fmt_num $CLK_SUBS_TOTAL)"   "$(fmt_num $CTK_CIMS_SUB)"
 printf "  %-38s  %10s  %10s\n" "  of which T>C"           "$(fmt_num $CLK_TtoC)"         "—"
 printf "────────────────────────────────────────────────────────────────\n"
 printf "  %-38s  %10s  %10s\n" "CITS TRUNCATION SITES"   "Clink"      "CTK"
-printf "  (FDR≤${FDR}, min-cov≥5, min-frac≥0.05; CTK requires read clusters)\n"
+printf "  (FDR≤${FDR}, min-cov≥5, min-frac≥${CIMS_FRAC}; CTK requires read clusters)\n"
 printf "  %-38s  %10s  %10s\n" "──────────────────────" "──────────" "──────────"
 printf "  %-38s  %10s  %10s\n" "Truncation sites"         "$(fmt_num $CLK_TRUNC)"        "$(fmt_num $CTK_CITS)"
 printf "════════════════════════════════════════════════════════════════\n"
