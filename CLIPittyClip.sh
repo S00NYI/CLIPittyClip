@@ -462,7 +462,7 @@ if [[ "$GROUP_XLSITE" == "true" ]]; then
         log_info "--group-xlsite: CTK group analysis enabled"
     fi
     if [[ "$RUN_CLINK" != "true" ]]; then
-        log_warning "--group-xlsite: --run-clink not specified; Clink group analysis will be skipped."
+        log_info "--group-xlsite: Clink not enabled; group Clink analysis will be skipped."
     fi
 fi
 
@@ -738,11 +738,11 @@ if [[ -n "$INPUT_DIR" ]]; then
     
     # Build extra flags for child processes
     EXTRA_FLAGS=""
-    # Only pass CIMS/CITS to children if NOT using groups file (group CTK runs after batch)
-    if [[ -z "$CTK_GROUPS_FILE" ]]; then
-        if [[ "$RUN_CIMS" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --run-cims"; fi
-        if [[ "$RUN_CITS" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --run-cits"; fi
-    fi
+    # Always pass CIMS/CITS to children so parseAlignment.pl generates mutation
+    # files needed by group CTK aggregation.  Per-sample CIMS/CITS analysis still
+    # runs (individual results alongside group results).
+    if [[ "$RUN_CIMS" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --run-cims"; fi
+    if [[ "$RUN_CITS" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --run-cits"; fi
     if [[ "$RUN_CLINK" == "true" ]]; then
         EXTRA_FLAGS="$EXTRA_FLAGS --run-clink"
         EXTRA_FLAGS="$EXTRA_FLAGS --clink-umi-len $CLINK_UMI_LEN"
@@ -1217,14 +1217,11 @@ if [[ "$DEMUX" == "yes" ]]; then
     
     # Check if we need to pass CIMS/CITS flags
     EXTRA_FLAGS=""
-    # Only pass CIMS/CITS to children if NOT using group CTK mode
-    # When --ctk-group is enabled, skip individual CTK (group CTK runs after batch)
-    if [[ "$CTK_GROUP_MODE" != "true" ]]; then
-        if [[ "$RUN_CIMS" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --run-cims"; fi
-        if [[ "$RUN_CITS" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --run-cits"; fi
-    else
-        log_info "Group CTK mode: skipping individual CIMS/CITS (will run on grouped data)"
-    fi
+    # Always pass CIMS/CITS to children so parseAlignment.pl generates mutation
+    # files needed by group CTK aggregation.  Per-sample CIMS/CITS analysis still
+    # runs (individual results alongside group results).
+    if [[ "$RUN_CIMS" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --run-cims"; fi
+    if [[ "$RUN_CITS" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --run-cits"; fi
     if [[ "$RUN_CLINK" == "true" ]]; then
         EXTRA_FLAGS="$EXTRA_FLAGS --run-clink"
         EXTRA_FLAGS="$EXTRA_FLAGS --clink-umi-len $CLINK_UMI_LEN"
