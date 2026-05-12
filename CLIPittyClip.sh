@@ -1502,6 +1502,12 @@ if [[ "$DEMUX" == "yes" ]]; then
                     done
                 fi
 
+                # 5b. Clink Analysis — copy per-sample Clink output
+                if [[ -n "$DIR_CLINK" ]] && [[ -d "$analysis_dir/Clink_Analysis" ]]; then
+                    mkdir -p "$OUTPUT_ROOT/$DIR_CLINK/${sample_name}"
+                    cp -r "$analysis_dir/Clink_Analysis/"* "$OUTPUT_ROOT/$DIR_CLINK/${sample_name}/" 2>/dev/null
+                fi
+
                 # Pipeline Log (The child specific one)
                 # It's named ${sample_name}_analysis.log inside the dir
                 cp "$analysis_dir"/*.log "$OUTPUT_ROOT/$DIR_REPORTS/SAMPLES/${sample_name}_detailed.log" 2>/dev/null
@@ -1520,6 +1526,15 @@ if [[ "$DEMUX" == "yes" ]]; then
     else
         rm -rf demux_fastq
         log_info "Demux FASTQs discarded (use -k to retain)."
+    fi
+
+    # Group Clink Analysis (--group-xlsite with --run-clink)
+    # Runs after per-sample aggregation so dedup BAMs are in OUTPUT_ROOT/DIR_CLINK/
+    if [[ "$GROUP_XLSITE" == "true" ]] && [[ "$RUN_CLINK" == "true" ]] && \
+       [[ -n "$GROUPS_FILE" ]] && [[ -n "$DIR_CLINK" ]]; then
+        run_group_clink_analysis "$GROUPS_FILE" "$OUTPUT_ROOT/$DIR_CLINK" "$THREADS" \
+            "$CLINK_RUN_CITS" "$CLINK_RUN_CIMS" \
+            "$CLINK_MIN_COV" "$CLINK_MIN_FRAC" "$CLINK_FDR"
     fi
     
     if [[ "$count" -eq 0 ]]; then
