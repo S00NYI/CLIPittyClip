@@ -1418,7 +1418,7 @@ if [[ "$DEMUX" == "yes" ]]; then
                 fi
 
                 # 2. BED (Collapsed)
-                bed_file=$(find "$analysis_dir" -name "*_collapsed.bed" -not -name '._*' 2>/dev/null | head -n 1)
+                bed_file=$(find "$analysis_dir" -name "*_collapsed.bed" -not -name '*_ctk_*' -not -name '._*' 2>/dev/null | head -n 1)
                 if [[ -n "$bed_file" ]]; then
                     cp "$bed_file" "$OUTPUT_ROOT/$DIR_BED/${sample_name}.bed"
                     ((count++))

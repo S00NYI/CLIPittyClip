@@ -2633,7 +2633,7 @@ run_group_ctk_analysis() {
         for sample in $samples; do
             local sample_dir="${work_dir}/${sample}_analysis"
             if [[ -d "$sample_dir" ]]; then
-                local sample_collapsed=$(find "$sample_dir" -name "*_collapsed.bed" 2>/dev/null | head -n 1)
+                local sample_collapsed=$(find "$sample_dir" -name "*_ctk_collapsed.bed" 2>/dev/null | head -n 1)
                 if [[ -s "$sample_collapsed" ]]; then
                     cat "$sample_collapsed" >> "$group_collapsed"
                     log_info "Added $sample_collapsed to group $group"
