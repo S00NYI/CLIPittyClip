@@ -1070,7 +1070,7 @@ if [[ -n "$INPUT_DIR" ]]; then
         PEAK_CMD="$PEAK_CMD --ctk-dir \"$OUTPUT_ROOT/$DIR_CTK\""
     fi
     if [[ -n "$CTK_GROUPS_FILE" ]]; then
-        PEAK_CMD="$PEAK_CMD --ctk-group \"$CTK_GROUPS_FILE\""
+        PEAK_CMD="$PEAK_CMD --group-xlsite \"$CTK_GROUPS_FILE\""
     fi
     if [[ "$RUN_CIMS" == "true" ]]; then
         PEAK_CMD="$PEAK_CMD --cims-fdr \"$CIMS_FDR\""
