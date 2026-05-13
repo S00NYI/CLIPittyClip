@@ -911,7 +911,7 @@ if [[ -n "$INPUT_DIR" ]]; then
             fi
             
             # 2. Collapsed BED files
-            bed_file=$(find "$sample_out" -name "*_collapsed.bed" 2>/dev/null | head -n 1)
+            bed_file=$(find "$sample_out" -name "*_collapsed.bed" -not -name '*_ctk_*' 2>/dev/null | head -n 1)
             if [[ -n "$bed_file" ]]; then
                 cp "$bed_file" "$OUTPUT_ROOT/$DIR_BED/${sample_name}.bed"
             fi
