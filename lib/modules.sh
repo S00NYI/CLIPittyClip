@@ -1156,7 +1156,7 @@ run_peak_calling_ctk() {
     local raw_peaks="${out_dir}_raw.bed"
 
     echo "Running CTK tag2peak.pl..." > "$log_file"
-    $CONDA_PREFIX/bin/perl $(which tag2peak.pl) -big -ss --valley-seeking -minPH 2 -gap "${peak_dist}" \
+    $CONDA_PREFIX/bin/perl $(which tag2peak.pl) -big -ss --valley-seeking -gap "${peak_dist}" \
         ${ADV_PEAK_CALLER_ARGS} -c "${cache_dir}" "${input_bed}" "${raw_peaks}" >> "$log_file" 2>&1
     local exit_code=$?
     rm -rf "$cache_dir"

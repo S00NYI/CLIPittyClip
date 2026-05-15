@@ -156,7 +156,7 @@ call_peaks() {
         local cache_dir=$(mktemp -u "${TMPDIR:-/tmp}/tag2peak_cache.XXXXXX")
 
         log_info "Running: tag2peak.pl ..."
-        $CONDA_PREFIX/bin/perl $(which tag2peak.pl) -big -ss --valley-seeking -minPH 2 -gap ${PEAK_DIST} \
+        $CONDA_PREFIX/bin/perl $(which tag2peak.pl) -big -ss --valley-seeking -gap ${PEAK_DIST} \
             ${ADV_PEAK_CALLER_ARGS} -c "${cache_dir}" "${input_file}" "${raw_peaks}" 2>&1 | grep -v "^CMD="
         local exit_code=${PIPESTATUS[0]}
         rm -rf "$cache_dir"
