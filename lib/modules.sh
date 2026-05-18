@@ -2780,6 +2780,9 @@ run_clink_collapse() {
     if [[ "$umi_len" -ge 0 ]] 2>/dev/null; then
         extra_args="$extra_args --umi-len $umi_len"
     fi
+    if [[ "${CLINK_MULTI_MAP:-false}" == "true" ]]; then
+        extra_args="$extra_args --multi-map"
+    fi
 
     _clink_exec python3 "$clink_dir/collapse.py" \
         --bam     "$bam_in" \

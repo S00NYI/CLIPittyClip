@@ -96,6 +96,8 @@ function show_usage {
     echo "  --clink-umi-len <int>    UMI length for umi_tools (default: auto-detect)"
     echo "  --clink-fdr <float>      Clink FDR threshold (default: 0.05)"
     echo "  --clink-min-cov <int>    Clink min coverage to test (default: 5)"
+    echo "  --clink-multi-map        Rescue multi-mapped reads via EM assignment"
+    echo "                             before deduplication (requires pysam; default: off)"
     echo "  -f, --flank <int>        Flanked BED nucleotides (default: 10)"
     echo "  --no-motif               Skip flanked BED generation"
     echo "  -g, --groups <file>      Groups file for bedgraph/peak grouping"
@@ -218,6 +220,7 @@ while [[ $# -gt 0 ]]; do
         --clink-umi-len) CLINK_UMI_LEN="$2"; shift 2 ;;
         --clink-fdr) CLINK_FDR="$2"; shift 2 ;;
         --clink-min-cov) CLINK_MIN_COV="$2"; shift 2 ;;
+        --clink-multi-map) CLINK_MULTI_MAP=true; shift ;;
         -f|--flank) MOTIF_FLANK="$2"; shift 2 ;;
         --no-motif) RUN_MOTIF="no"; shift ;;
         -g|--groups) GROUPS_FILE="$2"; shift 2 ;;
@@ -755,11 +758,17 @@ if [[ -n "$INPUT_DIR" ]]; then
             # --group-xlsite: children produce dedup BAMs only, group analysis runs post-batch
             EXTRA_FLAGS="$EXTRA_FLAGS --clink-dedup-only"
             EXTRA_FLAGS="$EXTRA_FLAGS --clink-umi-len $CLINK_UMI_LEN"
+            if [[ "${CLINK_MULTI_MAP:-false}" == "true" ]]; then
+                EXTRA_FLAGS="$EXTRA_FLAGS --clink-multi-map"
+            fi
         else
             EXTRA_FLAGS="$EXTRA_FLAGS --run-clink"
             EXTRA_FLAGS="$EXTRA_FLAGS --clink-umi-len $CLINK_UMI_LEN"
             EXTRA_FLAGS="$EXTRA_FLAGS --clink-fdr $CLINK_FDR"
             EXTRA_FLAGS="$EXTRA_FLAGS --clink-min-cov $CLINK_MIN_COV"
+            if [[ "${CLINK_MULTI_MAP:-false}" == "true" ]]; then
+                EXTRA_FLAGS="$EXTRA_FLAGS --clink-multi-map"
+            fi
         fi
     fi
     if [[ "$VERBOSE" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --verbose"; fi
@@ -1240,11 +1249,17 @@ if [[ "$DEMUX" == "yes" ]]; then
         if [[ "$GROUP_XLSITE" == "true" ]]; then
             EXTRA_FLAGS="$EXTRA_FLAGS --clink-dedup-only"
             EXTRA_FLAGS="$EXTRA_FLAGS --clink-umi-len $CLINK_UMI_LEN"
+            if [[ "${CLINK_MULTI_MAP:-false}" == "true" ]]; then
+                EXTRA_FLAGS="$EXTRA_FLAGS --clink-multi-map"
+            fi
         else
             EXTRA_FLAGS="$EXTRA_FLAGS --run-clink"
             EXTRA_FLAGS="$EXTRA_FLAGS --clink-umi-len $CLINK_UMI_LEN"
             EXTRA_FLAGS="$EXTRA_FLAGS --clink-fdr $CLINK_FDR"
             EXTRA_FLAGS="$EXTRA_FLAGS --clink-min-cov $CLINK_MIN_COV"
+            if [[ "${CLINK_MULTI_MAP:-false}" == "true" ]]; then
+                EXTRA_FLAGS="$EXTRA_FLAGS --clink-multi-map"
+            fi
         fi
     fi
     if [[ "$VERBOSE" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --verbose"; fi
