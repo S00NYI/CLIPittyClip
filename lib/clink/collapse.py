@@ -286,31 +286,18 @@ def em_assign_multimappers(multi_bam:   str,
                            out_bam:     str,
                            pseudocount: float = 0.1,
                            window:      int   = 50,
-                           max_iter:    int   = 100,
-                           epsilon:     float = 1e-6,
-                           threads:     int   = 4) -> int:
+                           threads:     int   = 4,
+                           **kwargs) -> int:
     """
-    CLAM-style iterative EM assignment of multi-mapped reads.
+    Single-pass positional rescue of multi-mapped reads.
 
-    Algorithm:
-    1. Load all NH:i:>1 alignments grouped by query name.
-    2. Initialise weights uniformly (1/n_loci per read).
-    3. Iterate (up to max_iter):
-         E-step : score each candidate locus by summing the *combined* pileup
-                  (unique dedup counts + current fractional multi contributions)
-                  over a ±window bp neighbourhood, plus a pseudocount.
-         Normalise: divide each locus score by the read's total score so
-                    weights sum to 1.0 per read.
-         M-step : rebuild the dynamic pileup from the new fractional weights.
-         Convergence: stop when the mean absolute change in pileup < epsilon.
-    4. Hard-assign each read to its argmax-weight locus.
-    5. Re-tag winners as NH:i:1; clear secondary/supplementary flags.
-    6. Sort and index the output BAM.
+    For each read name, scores every candidate locus by summing the
+    unique-dedup pileup within a ±window bp neighbourhood plus a
+    pseudocount, then hard-assigns the read to the highest-scoring locus.
 
-    This mirrors CLAM's realigner (Zhang et al., NAR 2017) but uses a plain
-    dict pileup rather than a Binary Indexed Tree.  Convergence is checked on
-    the dynamic pileup rather than individual read weights (equivalent proxy,
-    cheaper to compute).
+    Ties are broken by preferring the primary alignment (FLAG & 256 == 0).
+    The winning alignment is re-tagged NH:i:1 so downstream umi_tools dedup
+    treats it as a unique mapper.
 
     Requires pysam. Returns number of reads written.
 
@@ -320,10 +307,8 @@ def em_assign_multimappers(multi_bam:   str,
         out_bam     : output BAM (one hard-assigned alignment per read name)
         pseudocount : floor score added to every locus (avoid zero weights)
         window      : half-width (bp) of pileup scoring window
-        max_iter    : maximum EM iterations (default: 100, matches CLAM)
-        epsilon     : convergence threshold — mean |Δpileup| per read
-                      (default: 1e-6, matches CLAM)
         threads     : pysam / samtools threads
+        **kwargs    : accepts (and ignores) max_iter / epsilon for API compat
     """
     if not HAS_PYSAM:
         print(
@@ -335,102 +320,41 @@ def em_assign_multimappers(multi_bam:   str,
 
     import pysam as _pysam
 
-    # ── 1. Load alignments grouped by query name ──────────────────────────────
-    # Each entry: (chrom, pos, strand, AlignedSegment)
+    # Group all alignments per query name
     read_groups: dict = defaultdict(list)
     with _pysam.AlignmentFile(multi_bam, 'rb', threads=threads) as bam_in:
         header = bam_in.header.to_dict()
         for read in bam_in:
             if read.is_unmapped:
                 continue
-            chrom  = read.reference_name
-            pos    = read.reference_start       # 0-based
-            strand = '-' if read.is_reverse else '+'
-            read_groups[read.query_name].append((chrom, pos, strand, read))
+            read_groups[read.query_name].append(read)
 
-    n_reads = len(read_groups)
-
-    # ── 2. Initialise weights uniformly ───────────────────────────────────────
-    # weights[qname] = list of floats, one per candidate locus, summing to 1.0
-    weights = {
-        qname: [1.0 / len(loci)] * len(loci)
-        for qname, loci in read_groups.items()
-    }
-
-    # dynamic_pileup holds fractional multi-mapper contributions;
-    # combined pileup = unique pileup (fixed) + dynamic_pileup (updated each iter)
-    dynamic_pileup: dict = defaultdict(float)
-
-    # ── 3. EM iterations ──────────────────────────────────────────────────────
-    converged = False
-    for iteration in range(max_iter):
-
-        new_weights  = {}
-        new_dynamic: dict = defaultdict(float)
-
-        # E-step: score each locus against the combined pileup
-        for qname, loci in read_groups.items():
-            scores = []
-            for chrom, pos, strand, _aln in loci:
-                score = pseudocount
-                for p in range(max(0, pos - window), pos + window + 1):
-                    score += pileup.get((chrom, p, strand), 0)
-                    score += dynamic_pileup.get((chrom, p, strand), 0.0)
-                scores.append(score)
-
-            # Normalise → soft weights summing to 1.0
-            total = sum(scores)
-            if total > 0:
-                new_weights[qname] = [s / total for s in scores]
-            else:
-                n = len(loci)
-                new_weights[qname] = [1.0 / n] * n
-
-        # M-step: rebuild dynamic pileup from fractional weights
-        for qname, loci in read_groups.items():
-            for i, (chrom, pos, strand, _aln) in enumerate(loci):
-                new_dynamic[(chrom, pos, strand)] += new_weights[qname][i]
-
-        # Convergence: mean |Δdynamic_pileup| per read
-        all_keys   = set(new_dynamic) | set(dynamic_pileup)
-        residue    = sum(
-            abs(new_dynamic.get(k, 0.0) - dynamic_pileup.get(k, 0.0))
-            for k in all_keys
-        ) / max(1, n_reads)
-
-        dynamic_pileup = new_dynamic
-        weights        = new_weights
-
-        if (iteration + 1) % 10 == 0 or residue < epsilon:
-            print(
-                f"  [multi-map] EM iter {iteration + 1:3d}/{max_iter}  "
-                f"residue = {residue:.2e}",
-                file=sys.stderr
-            )
-
-        if residue < epsilon:
-            print(
-                f"  [multi-map] EM converged at iteration {iteration + 1}",
-                file=sys.stderr
-            )
-            converged = True
-            break
-
-    if not converged:
-        print(
-            f"  [multi-map] EM reached max_iter={max_iter} without converging "
-            f"(residue={residue:.2e}); proceeding with current weights.",
-            file=sys.stderr
-        )
-
-    # ── 4 & 5. Hard-assign: argmax weight; re-tag NH:i:1 ─────────────────────
     n_written = 0
     with _pysam.AlignmentFile(out_bam, 'wb',
                                header=header, threads=threads) as bam_out:
-        for qname, loci in read_groups.items():
-            w         = weights[qname]
-            best_idx  = w.index(max(w))
-            _chrom, _pos, _strand, best_aln = loci[best_idx]
+        for qname, alignments in read_groups.items():
+            best_score = -1.0
+            best_aln   = None
+
+            for aln in alignments:
+                chrom  = aln.reference_name
+                pos    = aln.reference_start        # 0-based
+                strand = '-' if aln.is_reverse else '+'
+
+                score = pseudocount
+                for p in range(max(0, pos - window), pos + window + 1):
+                    score += pileup.get((chrom, p, strand), 0)
+
+                # Prefer primary alignment on tie
+                is_primary = not (aln.flag & 256)
+                if (score > best_score) or \
+                   (score == best_score and is_primary and
+                    best_aln is not None and (best_aln.flag & 256)):
+                    best_score = score
+                    best_aln   = aln
+
+            if best_aln is None:
+                continue
 
             best_aln.set_tag('NH', 1)
             best_aln.flag &= ~256   # clear not-primary-alignment
@@ -438,7 +362,7 @@ def em_assign_multimappers(multi_bam:   str,
             bam_out.write(best_aln)
             n_written += 1
 
-    # ── 6. Sort and index ─────────────────────────────────────────────────────
+    # Sort and index
     sorted_tmp = out_bam + '.sorted.bam'
     subprocess.run(
         ['samtools', 'sort', '-@', str(threads), '-o', sorted_tmp, out_bam],
@@ -459,8 +383,6 @@ def run_dedup(bam_path:   str,
               umi_len:    int,
               max_nh:     int   = 1,
               multi_map:  bool  = False,
-              mm_iter:    int   = 100,
-              mm_epsilon: float = 1e-6,
               threads:    int   = 4,
               log_path:   str   = None,
               tmp_dir:    str   = None,
@@ -489,11 +411,8 @@ def run_dedup(bam_path:   str,
                     (1 = unique only, 0 = disable; default: 1).
                     Ignored when multi_map=True (unique reads are always
                     extracted first; all multi-mappers are EM-assigned).
-        multi_map : if True, rescue multi-mapped reads via EM assignment
-                    (default: False)
-        mm_iter   : maximum EM iterations (default: 100, matches CLAM)
-        mm_epsilon: convergence threshold — mean |Δpileup| per read
-                    (default: 1e-6, matches CLAM)
+        multi_map : if True, rescue multi-mapped reads via single-pass
+                    positional assignment (default: False)
         threads   : samtools threads for sort/index steps
         log_path  : path for umi_tools log (default: <out>.log)
         tmp_dir   : temp directory for intermediate files
@@ -574,8 +493,7 @@ def run_dedup(bam_path:   str,
             tmp_assigned_bam = str(Path(use_tmp) / f"{stem}_multi.assigned.bam")
             print(f"\n  [multi-map] EM-assigning multi-mapped reads...", file=sys.stderr)
             n_assigned = em_assign_multimappers(
-                tmp_multi_bam, pileup, tmp_assigned_bam,
-                max_iter=mm_iter, epsilon=mm_epsilon, threads=threads
+                tmp_multi_bam, pileup, tmp_assigned_bam, threads=threads
             )
             print(f"  [multi-map] Assigned reads: {n_assigned:,}", file=sys.stderr)
 
@@ -707,17 +625,11 @@ if __name__ == '__main__':
              '0 = disable filter and keep all reads; default: 1). '
              'Ignored when --multi-map is set.')
     parser.add_argument('--multi-map', action='store_true', default=False,
-        help='Rescue multi-mapped reads (NH:i:>1) via CLAM-style iterative '
-             'EM assignment. Requires pysam. Unique reads are deduped first; '
-             'multi-mappers are soft-assigned via EM using the unique-read '
-             'pileup as prior, then hard-assigned, deduped, and merged. '
-             'Default: off (unique-only).')
-    parser.add_argument('--multi-map-iter', type=int, default=100,
-        help='Maximum EM iterations for --multi-map mode '
-             '(default: 100, matches CLAM).')
-    parser.add_argument('--multi-map-eps', type=float, default=1e-6,
-        help='EM convergence threshold — mean absolute pileup change per read '
-             '(default: 1e-6, matches CLAM).')
+        help='Rescue multi-mapped reads (NH:i:>1) via single-pass positional '
+             'assignment. Unique reads are deduped first; multi-mappers are '
+             'hard-assigned to the candidate locus with the greatest unique-read '
+             'pileup support (±50 bp window), then deduped and merged. '
+             'Requires pysam. Default: off (unique-only).')
     parser.add_argument('--threads', type=int, default=4,
         help='samtools threads (default: 4)')
     parser.add_argument('--log', default=None,
@@ -739,14 +651,12 @@ if __name__ == '__main__':
             umi_len = 0
 
     run_dedup(
-        bam_path   = args.bam,
-        out_path   = args.out,
-        umi_len    = umi_len,
-        max_nh     = args.max_nh,
-        multi_map  = args.multi_map,
-        mm_iter    = args.multi_map_iter,
-        mm_epsilon = args.multi_map_eps,
-        threads    = args.threads,
-        log_path   = args.log,
-        umi_tools  = args.umi_tools,
+        bam_path  = args.bam,
+        out_path  = args.out,
+        umi_len   = umi_len,
+        max_nh    = args.max_nh,
+        multi_map = args.multi_map,
+        threads   = args.threads,
+        log_path  = args.log,
+        umi_tools = args.umi_tools,
     )

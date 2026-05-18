@@ -254,11 +254,11 @@ Run `CLIPittyClip.sh --help` for full usage.
 | `--clink-umi-len` | auto | UMI length for umi_tools (auto-detected if omitted) |
 | `--clink-fdr` | `0.05` | Benjamini-Hochberg FDR threshold |
 | `--clink-min-cov` | `5` | Minimum coverage to test a position |
-| `--clink-multi-map` | off | Rescue multi-mapped reads (NH:i:>1) via CLAM-style iterative EM before deduplication. Requires `pysam`. See note below. |
+| `--clink-multi-map` | off | Rescue multi-mapped reads (NH:i:>1) via single-pass positional assignment before deduplication. Requires `pysam`. See note below. |
 
 > **Grouped Clink analysis:** combine `--run-clink --group-xlsite -g groups.txt` to produce per-sample dedup BAMs first, then merge by group for pileup → CITS/CIMS. Group results land in `GROUP_<name>/` inside the Clink output directory.
 
-> **Multi-mapper rescue (`--clink-multi-map`):** implements the CLAM iterative EM algorithm (Zhang et al., *NAR* 2017) inside the collapse step. Multi-mapped reads are soft-assigned across candidate loci using the unique-read pileup as prior; weights iterate until convergence (mean |Δpileup| < 1×10⁻⁶, max 100 iterations), then each read is hard-assigned to its highest-weight locus and passed through normal UMI deduplication. Compatible with `--group-xlsite`. Off by default — all primary benchmarks use unique reads only.
+> **Multi-mapper rescue (`--clink-multi-map`):** unique reads (NH:i:1) are deduped first; multi-mapped reads (NH:i:>1) are hard-assigned to the candidate locus with the greatest unique-read pileup support within a ±50 bp window, then passed through normal UMI deduplication, and merged with the unique dedup BAM. Compatible with `--group-xlsite`. Off by default — all analyses presented here use unique reads only.
 
 ### Other
 
@@ -538,10 +538,9 @@ bowtie2-build Homo_sapiens.GRCh38.ncrna.fa /path/to/annotation/ncRNA/ncrna
 ## Changelog
 
 ### v3.3.1
-- **`--clink-multi-map`**: CLAM-style iterative EM rescue of multi-mapped reads (NH:i:>1) in the Clink collapse step
-  - Unique reads (NH:i:1) are deduped first via `umi_tools`; multi-mappers are soft-assigned across candidate loci using the unique-read pileup as prior
-  - Iterates until convergence (mean |Δpileup| < 1×10⁻⁶, max 100 iterations), then hard-assigns each read to its argmax locus and runs UMI deduplication
-  - Algorithm mirrors CLAM (Zhang et al., *NAR* 2017); off by default — all primary analyses use unique reads only
+- **`--clink-multi-map`**: single-pass positional rescue of multi-mapped reads (NH:i:>1) in the Clink collapse step
+  - Unique reads (NH:i:1) are deduped first; multi-mappers are hard-assigned to the candidate locus with the greatest unique-read pileup support (±50 bp window), then deduped and merged
+  - Off by default — all analyses presented use unique reads only
   - Compatible with `--group-xlsite`
 - **`--group-xlsite`** flag propagated correctly through all batch/group code paths
 - Removed `benchmark_pipeline.sh` and `benchmark_pipeline_clink.sh` (superseded by test suite)
