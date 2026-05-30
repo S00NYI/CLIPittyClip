@@ -5,7 +5,7 @@
 # CLIPittyClip: Modern CLIP-seq Analysis Pipeline
 **Version 3.3.0**
 
-A comprehensive, single-command CLIP-seq analysis pipeline from raw FASTQ to peaks and crosslink sites. Supports iCLIP, irCLIP, eCLIP, and related variant protocols.
+A comprehensive, single-command CLIP-seq analysis pipeline from raw FASTQ to peaks and crosslink sites. Supports iCLIP, irCLIP, eCLIP, PAR-CLIP, and related variant protocols.
 
 ---
 
@@ -18,7 +18,7 @@ A comprehensive, single-command CLIP-seq analysis pipeline from raw FASTQ to pea
 5. [Output Structure](#output-structure)
 6. [Command-Line Reference](#command-line-reference)
 7. [Crosslink Site Analysis: CTK and Clink](#crosslink-site-analysis-ctk-and-clink)
-8. [eCLIP Modes](#eclip-modes)
+8. [Protocol-Specific Modes](#protocol-specific-modes)
 9. [Standalone Tools](#standalone-tools)
 10. [Genome Index Setup](#genome-index-setup)
 11. [Peak Matrix Metrics](#peak-matrix-metrics)
@@ -116,6 +116,9 @@ CLIPittyClip.sh -i reads.fastq.gz -x /path/to/star_index \
 
 # eCLIP paired-end
 CLIPittyClip.sh --eclip pe -d /path/to/eclip_r2s/ -x /path/to/star_index -t 8 --run-clink
+
+# PAR-CLIP (T>C crosslink sites)
+CLIPittyClip.sh --parclip -i reads.fastq.gz -u 4 -x /path/to/star_index -t 8 --run-clink
 ```
 
 ---
@@ -210,6 +213,8 @@ Run `CLIPittyClip.sh --help` for full usage.
 | `-b` | `--barcodes` | — | Barcode file (enables demultiplexing) |
 | — | `--demux-mismatches` | `1` | Max barcode mismatches |
 | — | `--eclip` | — | eCLIP mode: `pe` (paired-end) or `se` (single-end) |
+| — | `--parclip` | — | PAR-CLIP mode: specialized preprocessing for 4SU CLIP (requires `-u`) |
+| — | `--parclip-adapters` | bundled | Custom PAR-CLIP adapter FASTA (default: `lib/parclip_adapters.fa`) |
 | — | `--no-dedup` | — | Skip FASTQ deduplication |
 | — | `--filter-ncrna` | off | Pre-filter ncRNA reads (opt-in) |
 | — | `--bc-len` | — | Barcode length (auto-detected from `-b`) |
@@ -274,128 +279,84 @@ Run `CLIPittyClip.sh --help` for full usage.
 
 ## Crosslink Site Analysis: CTK and Clink
 
-CLIPittyClip supports two crosslink site callers. Both can run in the same command for direct comparison.
+CLIPittyClip supports two crosslink site callers that can run in parallel on the same BAM.
 
-### How they differ
+**CTK** (`--run-cims-cits`) uses Perl tools from the Chaolin Zhang lab: `tag2collapse.pl` deduplication, `parseAlignment.pl` signal extraction, and permutation-based FDR.
 
-| Step | CTK | Clink |
-|------|-----|-------|
-| BAM deduplication | `tag2collapse.pl` — EM algorithm (~48% reads retained) | `umi_tools directional` — conservative graph collapse (~80% retained) |
-| Signal extraction | `parseAlignment.pl` — BAM → BED → mutation file | `pileup.py` — single BAM scan → `.npz` (shared by CITS + CIMS) |
-| Truncation sites | `CITS.pl` — binomial test | `cits.py` — binomial test + Benjamini-Hochberg FDR |
-| Mutation/deletion sites | `CIMS.pl` — binomial test | `cims.py` — deletions + all 12 substitution types |
-| Bedgraph / peaks | BAM-based, unchanged | BAM-based, unchanged |
-
-### Running CTK
+**Clink** (`--run-clink`, v3.3) is CLIPittyClip's Python-native caller: `umi_tools` deduplication, a single-pass `pileup.py` scan shared by both CITS and CIMS, and Benjamini-Hochberg FDR.
 
 ```bash
-# Both CIMS and CITS
+# CTK only
 CLIPittyClip.sh -i reads.fastq.gz -x /path/to/star_index \
     --genome-fasta /path/to/genome.fa -t 8 --run-cims-cits
 
-# CITS only (truncation sites — iCLIP primary signal)
-CLIPittyClip.sh -i reads.fastq.gz -x /path/to/star_index \
-    --genome-fasta /path/to/genome.fa -t 8 --run-cits
-```
-
-Output: `5_CTK_Analysis/{sample}/CITS/` and `CIMS/`
-
-### Running Clink
-
-```bash
-# Single sample
+# Clink only (recommended)
 CLIPittyClip.sh -i reads.fastq.gz -x /path/to/star_index \
     --genome-fasta /path/to/genome.fa -t 8 --run-clink
 
-# Batch
-CLIPittyClip.sh -d /path/to/samples/ -x /path/to/star_index \
-    --genome-fasta /path/to/genome.fa -t 8 --run-clink
-```
-
-Output: `5_Clink/{sample}/` containing:
-- `{sample}_dedup.bam` — umi_tools-deduplicated BAM
-- `{sample}_pileup.npz` — compressed pileup (shared by CITS + CIMS)
-- `{sample}_truncations.bed` — significant truncation sites
-- `{sample}_deletions.bed` — significant deletion sites
-- `{sample}_TtoC.bed` etc. — one file per substitution type (all 12 types)
-
-### Head-to-head comparison
-
-Run both in one command to compare CTK and Clink on the same dataset:
-
-```bash
+# Both in one run
 CLIPittyClip.sh -i reads.fastq.gz -x /path/to/star_index \
-    --genome-fasta /path/to/genome.fa -t 8 \
-    --run-cims-cits --run-clink
+    --genome-fasta /path/to/genome.fa -t 8 --run-cims-cits --run-clink
 ```
 
-This produces `5_CTK_Analysis/` and `6_Clink/` from the same aligned BAM. Both pipelines are fully independent — different deduplication, different signal extraction, same statistical framework.
+**Clink output** (`5_Clink/{sample}/`): `_dedup.bam`, `_pileup.npz`, `_truncations.bed`, `_deletions.bed`, `_TtoC.bed` (+ all 12 substitution types).
 
-### STAR alignment tuning for crosslink site analysis
+> [!NOTE]
+> `--genome-fasta` is strongly recommended for crosslink site analysis. STAR index directories don't store the source FASTA; without it, `samtools calmd` can't recalculate MD tags and crosslink deletions near homopolymers may be missed.
 
-CLIPittyClip tunes STAR specifically so reads carrying crosslink-induced deletions survive alignment.
+### Group-based crosslink analysis
 
-**Why `--genome-fasta` matters:**
-STAR index directories do not store the source FASTA. Without it, `samtools calmd` cannot recalculate MD tags, and STAR's native MD at deletion boundaries can be inconsistent — causing `parseAlignment.pl` (CTK) or `pileup.py` (Clink) to miss genuine crosslink deletions. Provide `--genome-fasta /path/to/genome.fa` to enable authoritative MD recalculation.
-
-**STAR parameters applied automatically:**
-
-| Parameter | Value | Rationale |
-|-----------|-------|-----------|
-| `--outFilterMismatchNoverReadLmax` | `0.1` | Fractional filter (10% of read length): ~3 mismatches in 30 bp, ~2 in 20 bp. Replaces the old hard limit of 2 which discarded reads with a crosslink deletion + 2 sequencing errors (NM = 3). |
-| `--outFilterMismatchNmax` | `5` | Hard backstop only. |
-| `--scoreDelOpen` / `--scoreDelBase` | `-1` | Lowers deletion penalty to match substitution cost. STAR's default (`-2/-2`) makes 1-nt crosslink deletions score worse than mismatches on short iCLIP reads, causing them to be realigned as substitutions. |
-| `--scoreInsOpen` / `--scoreInsBase` | `-1` | Symmetric insertion penalty. |
-
-> **Bowtie2 note:** Bowtie2 is not splice-aware and its gap penalties are not tuned for crosslink deletions. A warning is emitted automatically when Bowtie2 + crosslink site analysis are combined. STAR is strongly recommended.
-
-### Group-based crosslink analysis (CTK)
-
-Pool replicates before running CTK to increase power:
+Pool replicates before running CITS/CIMS to increase depth:
 
 ```bash
+# CTK
 CLIPittyClip.sh -i pool.fq.gz -b barcodes.txt -x index \
     --run-cims-cits -g groups.txt --ctk-group
+
+# Clink
+CLIPittyClip.sh -d /path/to/samples/ -x index \
+    --run-clink -g groups.txt --group-xlsite
 ```
 
-**groups.txt format** (tab-separated):
-```
-Condition_A_Rep1    Condition_A
-Condition_A_Rep2    Condition_A
-Condition_B_Rep1    Condition_B
-Condition_B_Rep2    Condition_B
-```
-
-Samples not listed are analyzed individually.
+**groups.txt** (tab-separated): `SampleName\tGroupName`. Samples not listed run individually.
 
 > [!WARNING]
-> Group-based CTK aggregates all samples before running CIMS/CITS. This can require >64 GB RAM for large datasets.
+> Group-based CTK aggregates all samples before CIMS/CITS. This can require >64 GB RAM for large datasets.
 
 ---
 
-## eCLIP Modes
+## Protocol-Specific Modes
 
-Select with `--eclip pe` or `--eclip se`.
+### eCLIP Paired-end (`--eclip pe`)
 
-### Paired-end eCLIP (`--eclip pe`)
-
-For ENCODE eCLIP data after inline-barcode demultiplexing by `eclipdemux`. Supply **Read 2** (cross-link site end) with UMI in the header (`@NTACGTTGAT:NB501168:...`).
+For ENCODE eCLIP data after `eclipdemux`. Supply **Read 2** with UMI already in the header (`@NTACGTTGAT:NB501168:...`).
 
 ```bash
 CLIPittyClip.sh --eclip pe -d /path/to/eclip_r2s/ -x /path/to/star_index -t 8 --run-clink
 ```
 
-Preprocessing: validate R2 format → UMI to sequence → hash dedup → extract UMI → fastp (full eCLIP adapter set).
+Preprocessing: validate R2 format → UMI to sequence → hash dedup → extract UMI → fastp (full eCLIP adapter set). UMI length auto-detected from header.
 
-### Single-end eCLIP (`--eclip se`)
+### eCLIP Single-end (`--eclip se`)
 
-For seCLIP data (Blue et al. 2022). Supply raw **Read 1** — UMI is the first 10 nt of the read sequence. UMI length and adapter are hardcoded (10 nt; TruSeq R1).
+For seCLIP (Blue et al. 2022). Supply raw **Read 1** — UMI is the first 10 nt of the sequence. UMI length and adapter hardcoded (10 nt; TruSeq R1).
 
 ```bash
 CLIPittyClip.sh --eclip se -i sample_R1.fastq.gz -x /path/to/star_index -t 8
 ```
 
-Preprocessing: validate R1 format → hash dedup → extract UMI → fastp (TruSeq R1 adapter).
+### PAR-CLIP (`--parclip`)
+
+For 4-thiouridine CLIP data. Read layout: `[UMI][READ][2nt spacer][6mer barcode][adapter]`. Requires `-u` (UMI length). Primary crosslink signal is T→C substitution — use `--run-clink` for CIMS.
+
+```bash
+CLIPittyClip.sh --parclip -i reads.fastq.gz -u 4 \
+    -x /path/to/star_index -t 8 --run-clink
+```
+
+Preprocessing: hash dedup → fastp pass 1 (UMI extraction + barcode+adapter trim using `lib/parclip_adapters.fa`) → fastp pass 2 (2nt spacer trim). A custom adapter FASTA can be supplied with `--parclip-adapters`.
+
+The bundled `lib/parclip_adapters.fa` contains 43 MDX-O barcodes (6mer + `TGGAATTCTCGGGTGCCAAGG`). The leading 2nt random spacer is not included in the FASTA — it is removed in pass 2 after the barcode+adapter is trimmed.
 
 ---
 
