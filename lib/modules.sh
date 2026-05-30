@@ -599,6 +599,114 @@ run_eclip_se_preprocessing() {
     ECLIP_UMI_LEN="$umi_len"
 }
 
+# ── PAR-CLIP Preprocessing ───────────────────────────────────────────────────
+# run_parclip_preprocessing — PAR-CLIP preprocessing chain
+#
+# Read layout: [UMI (umi_len nt)][READ][2nt spacer][6mer barcode][adapter]
+#   e.g. NNNNREADNNTGACTGTGGAATTCTCGGGTGCCAAGG  (UMI=4nt, MDX-O-84 barcode)
+#
+# Flow: validate → Pass 1 (UMI extract + barcode+adapter trim) → Pass 2 (2nt spacer trim)
+#
+# The 2-pass design is required because fastp --trim_tail1 runs BEFORE adapter
+# trimming in a single pass, so it would bite off 2nt of live read rather than
+# the exposed spacer. Pass 2 runs --trim_tail1 2 after the adapter is already gone.
+#
+# Args: $1 = input_file    (.fastq or .fastq.gz)
+#       $2 = output_prefix
+#       $3 = umi_len       (from -u flag; required)
+#       $4 = threads
+#       $5 = sample_size   (0 = no limit)
+#       $6 = adapters_fasta (optional override; default = lib/parclip_adapters.fa)
+run_parclip_preprocessing() {
+    local input_file="$1"
+    local output_prefix="$2"
+    local umi_len="${3:-0}"
+    local threads="${4:-1}"
+    local sample_size="${5:-0}"
+    local adapters_fasta="${6:-}"
+
+    # Resolve default adapter FASTA relative to this script's directory
+    local script_dir
+    script_dir="$(dirname "${BASH_SOURCE[0]}")"
+    if [[ -z "$adapters_fasta" ]]; then
+        adapters_fasta="${script_dir}/parclip_adapters.fa"
+    fi
+
+    if [[ ! -f "$adapters_fasta" ]]; then
+        log_error "PAR-CLIP adapter FASTA not found: $adapters_fasta"
+        log_error "Expected at lib/parclip_adapters.fa or supply --parclip-adapters <path>"
+        exit 1
+    fi
+
+    if [[ "${umi_len:-0}" -eq 0 ]]; then
+        log_error "PAR-CLIP mode requires a UMI length (-u / --umi-length). "
+        log_error "Typical PAR-CLIP UMI lengths: 4nt (compact) or 5nt (extended)."
+        exit 1
+    fi
+
+    log_info "PAR-CLIP mode: UMI=${umi_len}nt | Adapters: $(basename "$adapters_fasta")"
+    log_info "Flow: UMI extract → barcode+adapter trim → 2nt spacer trim"
+
+    update_status_first "PAR-CLIP Preprocessing"
+    echo -ne "(UMI extract + adapter trim"
+
+    # ── Pass 1: UMI extraction + barcode+adapter trimming ────────────────────
+    local pass1_file="${output_prefix}_parclip_pass1.fastq"
+
+    local pass1_cmd="fastp \
+        -i ${input_file} \
+        -o ${pass1_file} \
+        --thread ${threads} \
+        --length_required 16 \
+        --average_qual 30 \
+        --umi --umi_loc=read1 --umi_len=${umi_len} --umi_delim=# \
+        --adapter_fasta ${adapters_fasta} \
+        --html ${output_prefix}_fastp.html \
+        --json ${output_prefix}_fastp.json"
+    if [[ "$sample_size" -gt 0 ]]; then
+        pass1_cmd+=" --reads_to_process ${sample_size}"
+    fi
+
+    log_info "Running PAR-CLIP pass 1: $pass1_cmd"
+    execute_cmd "$pass1_cmd"
+
+    if [[ ! -s "$pass1_file" ]]; then
+        log_error "PAR-CLIP pass 1 (UMI extract + adapter trim) failed or produced empty output"
+        exit 1
+    fi
+
+    echo -ne " → spacer trim) > "
+
+    # ── Pass 2: trim 2nt spacer from 3' end ──────────────────────────────────
+    # After pass 1 the read is [READ][2nt spacer]; remove the trailing spacer.
+    # Quality/length filtering already done in pass 1; disable here to avoid
+    # re-filtering and to keep reads that are borderline after spacer removal.
+    local final_file="${output_prefix}_cleaned.fastq"
+
+    local pass2_cmd="fastp \
+        -i ${pass1_file} \
+        -o ${final_file} \
+        --thread ${threads} \
+        --trim_tail1 2 \
+        --disable_adapter_trimming \
+        --disable_quality_filtering \
+        --disable_length_filtering \
+        --html /dev/null \
+        --json /dev/null"
+
+    log_info "Running PAR-CLIP pass 2 (spacer trim): $pass2_cmd"
+    execute_cmd "$pass2_cmd"
+    rm -f "$pass1_file"
+
+    if [[ ! -s "$final_file" ]]; then
+        log_error "PAR-CLIP pass 2 (spacer trim) failed or produced empty output"
+        exit 1
+    fi
+
+    log_info "PAR-CLIP preprocessing complete: $final_file"
+    log_info "Read name format: READ_ID#COUNT#UMI (CTK-compatible, count from FASTQ dedup)"
+}
+
 # 1b. Adapter trimming and quality filtering with fastp (standard mode only)
 run_fastp() {
     local input_file="$1"
@@ -867,9 +975,10 @@ run_parse_alignment() {
     local sam_file="${bam_file%.bam}.sam"
     log_info "Converting BAM to SAM for parseAlignment.pl..."
     samtools view -h "$bam_file" > "$sam_file"
-    
+
     if [[ ! -s "$sam_file" ]]; then
         log_error "BAM to SAM conversion failed or empty output: $sam_file"
+        rm -f "$sam_file" 2>/dev/null   # clean up partial file before early exit
         return 1
     fi
     
@@ -2188,6 +2297,10 @@ run_ctk_full_analysis() {
     local run_motif="${9:-yes}"
     local run_cims="${10:-true}"
     local run_cits="${11:-true}"
+    # skip_collapse: set to "true" when input BAM is already UMI-deduplicated.
+    # Position-based tag2collapse on pre-dedup data collapses genuine multi-cell
+    # crosslinks to depth=1, making minPH>=2 impossible and CITS yield zero peaks.
+    local skip_collapse="${12:-false}"
     
     log_info "═══════════════════════════════════════════════════════════════"
     log_info "  CTK CIMS/CITS FULL ANALYSIS"
@@ -2216,13 +2329,18 @@ run_ctk_full_analysis() {
     fi
     
     # Phase 1b: Collapse tags
-    log_info "Phase 1b: Collapsing PCR duplicates..."
     local collapsed_bed="${output_dir}/preprocessing/${sample_name}_collapsed.bed"
-    tag2collapse.pl --keep-tag-name "$tags_bed" "$collapsed_bed"
-    
-    if [[ ! -s "$collapsed_bed" ]]; then
-        log_error "tag2collapse.pl failed. Aborting CTK analysis."
-        return 1
+    if [[ "$skip_collapse" == "true" ]]; then
+        log_info "Phase 1b: Skipping position-based collapse (input is pre-deduplicated)."
+        # Symlink tags_bed so downstream steps find the expected filename
+        ln -sf "$tags_bed" "$collapsed_bed"
+    else
+        log_info "Phase 1b: Collapsing PCR duplicates..."
+        tag2collapse.pl --keep-tag-name "$tags_bed" "$collapsed_bed"
+        if [[ ! -s "$collapsed_bed" ]]; then
+            log_error "tag2collapse.pl failed. Aborting CTK analysis."
+            return 1
+        fi
     fi
     
     # Phase 1c: CTK Preprocessing (selectRow + getMutationType)

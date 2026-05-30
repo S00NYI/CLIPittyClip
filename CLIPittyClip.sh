@@ -75,6 +75,10 @@ function show_usage {
     echo "  --no-dedup               Disable FASTQ deduplication (default: ON)"
     echo "  --eclip <pe|se>          eCLIP mode: 'pe' for paired-end (post-eclipdemux R2, UMI in header),
                                       'se' for single-end seCLIP (raw R1, UMI in sequence)"
+    echo "  --parclip                PAR-CLIP mode: [UMI][READ][2nt spacer][6mer barcode][adapter]"
+    echo "                             Requires -u (UMI length). Primary signal: T>C substitutions."
+    echo "                             Use --run-clink for CIMS (--sub-types TC recommended)."
+    echo "  --parclip-adapters <fa>  Custom PAR-CLIP adapter FASTA (default: lib/parclip_adapters.fa)"
     echo ""
     echo "DEMULTIPLEXING OPTIONS (for -i mode):"
     echo "  -b, --barcodes <path>    Barcode file for demultiplexing"
@@ -145,6 +149,8 @@ WIZARD_MODE="false"
 FILTER_NCRNA="false"  # ncRNA filtering is OFF by default; enable with --filter-ncrna
 ALIGNER="star" # Default aligner
 ECLIP_MODE=""       # eCLIP mode: "pe" (paired-end) or "se" (single-end), empty = off
+PARCLIP_MODE="false"    # PAR-CLIP mode: specialized preprocessing for 4SU CLIP
+PARCLIP_ADAPTERS=""     # Optional override for PAR-CLIP adapter FASTA (default: lib/parclip_adapters.fa)
 FILTER_CHR="true"   # Filter to canonical chromosomes (chr1-22, X, Y, M) - default ON
 DEMUX_MISMATCHES="1"   # Default for barcode demultiplexing
 ALIGN_MISMATCHES="2"   # Default for STAR --outFilterMismatchNmax
@@ -235,6 +241,8 @@ while [[ $# -gt 0 ]]; do
         --no-dedup) DEDUP_MODE="false"; shift ;;
         --filter-ncrna) FILTER_NCRNA="true"; shift ;;
         --eclip) ECLIP_MODE="$2"; shift 2 ;;
+        --parclip) PARCLIP_MODE="true"; shift ;;
+        --parclip-adapters) PARCLIP_ADAPTERS="$2"; shift 2 ;;
         --no-chr-filter) FILTER_CHR="false"; shift ;;
         --notification) NOTIFY_MODE="true"; shift ;;
         --child) CHILD_MODE="true"; shift ;;
@@ -657,6 +665,25 @@ if [[ "$CHILD_MODE" != "true" ]]; then
             console_msg "[WARNING] --eclip se: -a will be ignored (TruSeq R1 adapter is hardcoded)"
         fi
         console_msg "Threads: $THREADS | Mode: eCLIP SE (raw seCLIP R1)"
+    elif [[ "$PARCLIP_MODE" == "true" ]]; then
+        console_msg "╔══════════════════════════════════════════════════════════════════╗"
+        console_msg "║                     PAR-CLIP MODE ENABLED                        ║"
+        console_msg "╠══════════════════════════════════════════════════════════════════╣"
+        console_msg "║  • Layout: [UMI][READ][2nt spacer][6mer barcode][adapter]        ║"
+        console_msg "║  • Pass 1: UMI extraction + barcode+adapter trimming             ║"
+        console_msg "║  • Pass 2: 2nt spacer trim                                       ║"
+        console_msg "║  • Primary signal: T>C substitutions (use --run-clink for CIMS)  ║"
+        _parclip_fa="${PARCLIP_ADAPTERS:-lib/parclip_adapters.fa}"
+        console_msg "║  • Adapter FASTA: $(basename "$_parclip_fa" | head -c 50)$(printf '%*s' $((50 - ${#_parclip_fa})) '')  ║"
+        console_msg "╚══════════════════════════════════════════════════════════════════╝"
+        if [[ "${UMI_LEN:-0}" -eq 0 ]]; then
+            console_msg "[ERROR] --parclip requires -u <umi_length>. Specify your UMI length (e.g. -u 4)."
+            exit 1
+        fi
+        if [[ "$ADAPTER_3" != "GTGTCAGTCACTTCCAGCGG" ]]; then
+            console_msg "[WARNING] --parclip: -a will be ignored (using parclip_adapters.fa)"
+        fi
+        console_msg "Threads: $THREADS | UMI: ${UMI_LEN}nt | Mode: PAR-CLIP"
     else
         # Display adapter: show "L32" if default, or full custom sequence
         adapter_display="L32"
@@ -778,6 +805,10 @@ if [[ -n "$INPUT_DIR" ]]; then
     if [[ -n "$ALIGN_MISMATCHES" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --align-mismatches $ALIGN_MISMATCHES"; fi
     if [[ -n "$GENOME_FASTA" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --genome-fasta $GENOME_FASTA"; fi
     if [[ -n "$ECLIP_MODE" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --eclip $ECLIP_MODE"; fi
+    if [[ "$PARCLIP_MODE" == "true" ]]; then
+        EXTRA_FLAGS="$EXTRA_FLAGS --parclip"
+        if [[ -n "$PARCLIP_ADAPTERS" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --parclip-adapters $PARCLIP_ADAPTERS"; fi
+    fi
     if [[ "$FILTER_NCRNA" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --filter-ncrna"; fi
     if [[ "$DEDUP_MODE" == "false" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --no-dedup"; fi
     EXTRA_FLAGS="$EXTRA_FLAGS --peak-caller $PEAK_CALLER"
@@ -1271,6 +1302,10 @@ if [[ "$DEMUX" == "yes" ]]; then
     if [[ -n "$ALIGN_MISMATCHES" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --align-mismatches $ALIGN_MISMATCHES"; fi
     if [[ -n "$GENOME_FASTA" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --genome-fasta $GENOME_FASTA"; fi
     if [[ -n "$ECLIP_MODE" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --eclip $ECLIP_MODE"; fi
+    if [[ "$PARCLIP_MODE" == "true" ]]; then
+        EXTRA_FLAGS="$EXTRA_FLAGS --parclip"
+        if [[ -n "$PARCLIP_ADAPTERS" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --parclip-adapters $PARCLIP_ADAPTERS"; fi
+    fi
     if [[ "$FILTER_NCRNA" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --filter-ncrna"; fi
     # Pool was already deduped above; tell children to skip dedup
     EXTRA_FLAGS="$EXTRA_FLAGS --no-dedup"
@@ -1835,6 +1870,8 @@ if   [[ "$ECLIP_MODE" == "pe" ]]; then
     run_eclip_pe_preprocessing "$INPUT_FILE" "$BASENAME" "$THREADS" "$SAMPLE_SIZE" "$UMI_LEN"
 elif [[ "$ECLIP_MODE" == "se" ]]; then
     run_eclip_se_preprocessing "$INPUT_FILE" "$BASENAME" "$THREADS" "$SAMPLE_SIZE"
+elif [[ "$PARCLIP_MODE" == "true" ]]; then
+    run_parclip_preprocessing "$INPUT_FILE" "$BASENAME" "$UMI_LEN" "$THREADS" "$SAMPLE_SIZE" "$PARCLIP_ADAPTERS"
 else
     run_fastp "$INPUT_FILE" "$BASENAME" "$UMI_LEN" "$ADAPTER_3" "$THREADS" "$SAMPLE_SIZE" "$BC_LEN" "$SPACER_LEN" "$BC_FIRST" "$FASTP_MIN_QUAL"
 fi
