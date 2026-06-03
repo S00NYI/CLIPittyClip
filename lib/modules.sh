@@ -304,30 +304,30 @@ filter_canonical_chromosomes() {
     # UCSC uses chr-prefixed names (chr1, chr2, ..., chrX, chrY, chrM).
     # We read the actual @SQ lines from the header so this works for any
     # organism (human chr1-22, mouse chr1-19, etc.) without hard-coding a list.
+    # Detect naming convention from BAM header.
+    # Uses sed to extract the SN field value (SN:<name>\t...) — portable across
+    # macOS BSD sed, GNU sed (Linux), and avoids gawk extensions.
+    local sq_names
+    sq_names=$(samtools view -H "$input_bam" \
+        | grep '^@SQ' \
+        | sed 's/.*SN:\([^	]*\).*/\1/')   # extract value between SN: and next tab
+
     local has_chr
-    has_chr=$(samtools view -H "$input_bam" \
-        | awk '/^@SQ/ { if ($0 ~ /SN:chr/) { found=1; exit } }
-               END { print (found ? "yes" : "no") }')
+    has_chr=$(echo "$sq_names" | grep -c '^chr' 2>/dev/null || echo 0)
 
     local chr_list
-    if [[ "$has_chr" == "yes" ]]; then
-        # UCSC style: keep chrN, chrX, chrY, chrM — extract directly from header
+    if [[ "$has_chr" -gt 0 ]]; then
+        # UCSC style: keep chrN, chrX, chrY, chrM
         log_info "Filtering to canonical chromosomes (UCSC style: chrN/X/Y/M)..."
-        chr_list=$(samtools view -H "$input_bam" \
-            | awk '/^@SQ/ {
-                  match($0, /SN:([^\t]+)/, a)
-                  c = a[1]
-                  if (c ~ /^chr([0-9]+|X|Y|M)$/) print c
-              }' | tr '\n' ' ')
+        chr_list=$(echo "$sq_names" \
+            | grep -E '^chr([0-9]+|X|Y|M)$' \
+            | tr '\n' ' ')
     else
-        # Ensembl style: keep 1-22 (or 1-19 for mouse), X, Y, MT
+        # Ensembl style: keep bare numbers, X, Y, MT
         log_info "Filtering to canonical chromosomes (Ensembl style: N/X/Y/MT)..."
-        chr_list=$(samtools view -H "$input_bam" \
-            | awk '/^@SQ/ {
-                  match($0, /SN:([^\t]+)/, a)
-                  c = a[1]
-                  if (c ~ /^([0-9]+|X|Y|MT)$/) print c
-              }' | tr '\n' ' ')
+        chr_list=$(echo "$sq_names" \
+            | grep -E '^([0-9]+|X|Y|MT)$' \
+            | tr '\n' ' ')
     fi
 
     if [[ -z "$chr_list" ]]; then
@@ -1241,7 +1241,11 @@ run_collapse_pcr() {
     local cmd="$CONDA_PREFIX/bin/perl $(which tag2collapse.pl) -big -c \"${cache_dir}\" --keep-tag-name --keep-max-score ${barcode_flag} ${weight_flags} \
         \"${input_bed}\" \"${output_bed}\""
 
-    execute_cmd "$cmd"
+    # Always log tag2collapse output to file only — never tee to console.
+    # The --seq-error-model alignment flag prints every UMI at every covered
+    # position (thousands of lines); this is useful for debugging but not the console.
+    log_info "CMD = $cmd"
+    eval "$cmd" >> "${LOG_FILE:-/dev/null}" 2>&1
     local exit_code=$?
     
     # Cleanup cache directory
