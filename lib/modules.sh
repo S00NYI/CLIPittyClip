@@ -298,27 +298,62 @@ run_geo_demux() {
 filter_canonical_chromosomes() {
     local input_bam="$1"
     local output_bam="$2"
-    
-    log_info "Filtering to canonical chromosomes (chr1-22, X, Y, M)..."
-    
-    # Create list of canonical chromosomes
-    local chr_list="chr1 chr2 chr3 chr4 chr5 chr6 chr7 chr8 chr9 chr10"
-    chr_list+=" chr11 chr12 chr13 chr14 chr15 chr16 chr17 chr18 chr19"
-    chr_list+=" chr20 chr21 chr22 chrX chrY chrM"
-    
+
+    # Detect chromosome naming convention from BAM header.
+    # Ensembl uses bare numbers + MT (1, 2, ..., X, Y, MT).
+    # UCSC uses chr-prefixed names (chr1, chr2, ..., chrX, chrY, chrM).
+    # We read the actual @SQ lines from the header so this works for any
+    # organism (human chr1-22, mouse chr1-19, etc.) without hard-coding a list.
+    local has_chr
+    has_chr=$(samtools view -H "$input_bam" \
+        | awk '/^@SQ/ { if ($0 ~ /SN:chr/) { found=1; exit } }
+               END { print (found ? "yes" : "no") }')
+
+    local chr_list
+    if [[ "$has_chr" == "yes" ]]; then
+        # UCSC style: keep chrN, chrX, chrY, chrM — extract directly from header
+        log_info "Filtering to canonical chromosomes (UCSC style: chrN/X/Y/M)..."
+        chr_list=$(samtools view -H "$input_bam" \
+            | awk '/^@SQ/ {
+                  match($0, /SN:([^\t]+)/, a)
+                  c = a[1]
+                  if (c ~ /^chr([0-9]+|X|Y|M)$/) print c
+              }' | tr '\n' ' ')
+    else
+        # Ensembl style: keep 1-22 (or 1-19 for mouse), X, Y, MT
+        log_info "Filtering to canonical chromosomes (Ensembl style: N/X/Y/MT)..."
+        chr_list=$(samtools view -H "$input_bam" \
+            | awk '/^@SQ/ {
+                  match($0, /SN:([^\t]+)/, a)
+                  c = a[1]
+                  if (c ~ /^([0-9]+|X|Y|MT)$/) print c
+              }' | tr '\n' ' ')
+    fi
+
+    if [[ -z "$chr_list" ]]; then
+        log_warning "Could not identify canonical chromosomes from BAM header. Using unfiltered BAM."
+        cp "$input_bam" "$output_bam"
+        samtools index "$output_bam"
+        return
+    fi
+
+    log_info "Canonical chromosomes found: $chr_list"
+
     # Count reads before filtering
-    local before_count=$(samtools view -c "$input_bam")
-    
+    local before_count
+    before_count=$(samtools view -c "$input_bam")
+
     # Filter BAM to canonical chromosomes
-    samtools view -b "$input_bam" $chr_list > "$output_bam" 2>> "${LOG_FILE}"
-    
+    samtools view -b "$input_bam" $chr_list > "$output_bam" 2>> "${LOG_FILE:-/dev/null}"
+
     if [[ $? -eq 0 && -s "$output_bam" ]]; then
         samtools index "$output_bam"
-        local after_count=$(samtools view -c "$output_bam")
-        local filtered=$((before_count - after_count))
-        log_info "Chromosome filtering complete: $after_count reads kept, $filtered reads on contigs removed"
+        local after_count
+        after_count=$(samtools view -c "$output_bam")
+        local filtered=$(( before_count - after_count ))
+        log_info "Chromosome filtering: $after_count reads kept, $filtered reads on non-canonical contigs removed"
     else
-        log_warning "Chromosome filtering failed. Using unfiltered BAM."
+        log_warning "Chromosome filtering produced empty BAM. Using unfiltered BAM."
         cp "$input_bam" "$output_bam"
         samtools index "$output_bam"
     fi
