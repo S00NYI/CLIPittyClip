@@ -79,12 +79,19 @@ _OP_X  = 8   # sequence mismatch
 # The '^' prefix marks reference deletions in MD (e.g. ^ACG); bare letters = mismatches
 _MD_HAS_MISMATCH = re.compile(r'(?<!\^)[ACGT]')
 
-# Standard chromosomes: chr1-22, X, Y, M
+# Standard chromosomes — handles both UCSC (chr1-22, chrX, chrY, chrM)
+# and Ensembl (1-22, X, Y, MT) naming conventions.
 def is_standard_chrom(name: str) -> bool:
+    # UCSC style
     if name in ('chrX', 'chrY', 'chrM', 'chrMT'):
         return True
     if name.startswith('chr') and name[3:].isdigit():
         return 1 <= int(name[3:]) <= 22
+    # Ensembl style
+    if name in ('X', 'Y', 'MT'):
+        return True
+    if name.isdigit():
+        return 1 <= int(name) <= 22
     return False
 
 

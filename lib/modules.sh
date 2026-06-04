@@ -312,8 +312,11 @@ filter_canonical_chromosomes() {
         | grep '^@SQ' \
         | sed 's/.*SN:\([^	]*\).*/\1/')   # extract value between SN: and next tab
 
-    local has_chr
-    has_chr=$(echo "$sq_names" | grep -c '^chr' 2>/dev/null || echo 0)
+    # Use grep -q (no output) to avoid the grep -c stdout+exit-code double-zero bug:
+    # grep -c with no matches outputs "0" AND exits 1, so "|| echo 0" would append
+    # a second "0", producing "0\n0" and breaking the [[ -gt 0 ]] comparison.
+    local has_chr=0
+    echo "$sq_names" | grep -q '^chr' 2>/dev/null && has_chr=1 || true
 
     local chr_list
     if [[ "$has_chr" -gt 0 ]]; then
