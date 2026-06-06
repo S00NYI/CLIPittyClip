@@ -57,6 +57,13 @@ import pysam
 
 BASES = frozenset('ACGT')
 
+# Complement map for strand-aware substitution recording.
+# Reverse-strand reads are stored in reverse-complement orientation in the BAM,
+# so pysam reports substitutions against the + strand reference.  To convert
+# to the biological (gene-strand) context we complement both ref and alt:
+#   e.g. A→G on a − strand read = T→C in the RNA (4SU crosslink signal)
+_COMP = {'A': 'T', 'T': 'A', 'C': 'G', 'G': 'C'}
+
 # CIGAR operation codes
 _OP_M  = 0   # alignment match (can be match or mismatch)
 _OP_I  = 1   # insertion to reference
@@ -72,12 +79,19 @@ _OP_X  = 8   # sequence mismatch
 # The '^' prefix marks reference deletions in MD (e.g. ^ACG); bare letters = mismatches
 _MD_HAS_MISMATCH = re.compile(r'(?<!\^)[ACGT]')
 
-# Standard chromosomes: chr1-22, X, Y, M
+# Standard chromosomes — handles both UCSC (chr1-22, chrX, chrY, chrM)
+# and Ensembl (1-22, X, Y, MT) naming conventions.
 def is_standard_chrom(name: str) -> bool:
+    # UCSC style
     if name in ('chrX', 'chrY', 'chrM', 'chrMT'):
         return True
     if name.startswith('chr') and name[3:].isdigit():
         return 1 <= int(name[3:]) <= 22
+    # Ensembl style
+    if name in ('X', 'Y', 'MT'):
+        return True
+    if name.isdigit():
+        return 1 <= int(name) <= 22
     return False
 
 
@@ -134,12 +148,27 @@ def truncation_site(read: pysam.AlignedSegment) -> int:
 # ---------------------------------------------------------------------------
 
 def _extract_subs_from_pairs(read: pysam.AlignedSegment,
-                              subs_sparse: dict) -> None:
+                              subs_sparse: dict,
+                              is_reverse: bool = False) -> None:
     """
     Extract per-position substitution counts using get_aligned_pairs(with_seq=True).
 
     Only called when the MD tag regex confirmed at least one mismatch, so the
     fraction of reads reaching this path is typically 5-15% for CLIP data.
+
+    Strand convention
+    -----------------
+    pysam always reports ref_base in + strand orientation, and for reverse-strand
+    reads the stored query sequence is the reverse complement of the RNA.  This
+    means the same biological event (e.g. a 4SU T→C crosslink) appears as:
+      - T→C on a + strand read  (ref=T, read=C)
+      - A→G on a − strand read  (ref=A, read=G — reverse complement of T→C)
+
+    When is_reverse=True we complement both ref and alt before recording, so
+    all substitution types are stored in biological (gene-strand) context:
+      A→G on − strand → _COMP('A')=T, _COMP('G')=C → T→C  ✓
+    This ensures T→C arrays accumulate signal from both strand orientations,
+    making background rates and site calls biologically coherent.
     """
     query_seq = read.query_sequence
     if query_seq is None:
@@ -154,6 +183,10 @@ def _extract_subs_from_pairs(read: pysam.AlignedSegment,
         ref_upper = ref_base.upper()
         alt_base  = query_seq[query_pos].upper()
         if ref_upper in BASES and alt_base in BASES and ref_upper != alt_base:
+            if is_reverse:
+                # Convert to biological (gene-strand) context
+                ref_upper = _COMP[ref_upper]
+                alt_base  = _COMP[alt_base]
             subs_sparse[ref_pos][(ref_upper, alt_base)] += 1
 
 
@@ -171,7 +204,8 @@ _CHUNK_SIZE = 5_000_000
 def _process_chunk(M_starts: list, M_ends: list,
                    D_starts: list, D_ends: list,
                    T_off: list, T_clean: list, size: int,
-                   subs_sparse: dict, sub_reads: list) -> tuple:
+                   subs_sparse: dict, sub_reads: list,
+                   is_reverse: bool = False) -> tuple:
     """
     Run bincount/cumsum on one chunk's interval lists and return sparse arrays.
 
@@ -233,7 +267,7 @@ def _process_chunk(M_starts: list, M_ends: list,
 
     # Substitutions for reads owned by this chunk
     for read in sub_reads:
-        _extract_subs_from_pairs(read, subs_sparse)
+        _extract_subs_from_pairs(read, subs_sparse, is_reverse=is_reverse)
 
     # Sparse extraction
     has_signal = (cov_arr > 0) | (trunc_arr > 0) | (del_arr > 0)
@@ -441,7 +475,8 @@ def _scan_single_chrom(bam_path: str, chrom: str,
 
             result_rev = _process_chunk(
                 M_starts_rev, M_ends_rev, D_starts_rev, D_ends_rev,
-                T_off_rev, T_off_rev_clean, size, subs_sparse_rev, sub_reads_rev)
+                T_off_rev, T_off_rev_clean, size, subs_sparse_rev, sub_reads_rev,
+                is_reverse=True)
             if result_rev is not None:
                 local_idx, cov, trunc, dels, clean_trunc = result_rev
                 all_positions_rev.append(local_idx + chunk_start)
