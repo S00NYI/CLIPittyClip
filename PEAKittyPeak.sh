@@ -19,6 +19,7 @@ FRAG_LEN=25
 BASE_NAME="Combined"
 ADV_PEAK_CALLER_ARGS="" # Additional arguments for the peak caller
 PEAK_CALLER="homer" # Peak caller: homer (default) or ctk
+GROUP_PEAKS_FILE=""  # --group-peaks: run one aggregate call per group in file
 LOG_FILE="${LOG_FILE:-/dev/null}" # Use parent's log if set, otherwise discard
 WIZARD_MODE="false"
 CTK_DIR=""         # Optional: CTK analysis output directory
@@ -40,6 +41,8 @@ function show_usage {
     echo "  -i, --input <dir> Input directory containing BED files (default: BED)"
     echo "  --aggregate    Enable Aggregation Mode (combine all inputs)"
     echo "  --no-aggregate Disable Aggregation Mode (process individually)"
+    echo "  --group-peaks <file>  Run one aggregate peak call per group in groups file"
+    echo "                        File format: sample_id<TAB>group  (one per line)"
     echo "  -p <int>       Min distance between peaks (default: 50)"
     echo "  -z <int>       Peak size (default: 20)"
     echo "  -f <int>       Fragment length (default: 25)"
@@ -83,6 +86,7 @@ while [[ $# -gt 0 ]]; do
         -i|--input) INPUT_BED_DIR="$2"; shift 2 ;;
         --aggregate) AGGREGATE="true"; shift ;;
         --no-aggregate) AGGREGATE="false"; shift ;;
+        --group-peaks) GROUP_PEAKS_FILE="$2"; shift 2 ;;
         -p) PEAK_DIST="$2"; shift 2 ;;
         -z) PEAK_SIZE="$2"; shift 2 ;;
         -f) FRAG_LEN="$2"; shift 2 ;;
@@ -135,7 +139,7 @@ fi
 log_info "PEAKittyPeak: Peak Calling Module"
 log_info "Input Dir:   $INPUT_BED_DIR"
 log_info "Input Files: $BED_COUNT"
-log_info "Mode:        $(if [[ "$AGGREGATE" == "true" ]]; then echo "AGGREGATE"; else echo "INDIVIDUAL"; fi)"
+log_info "Mode:        $(if [[ "$AGGREGATE" == "true" ]]; then echo "AGGREGATE"; elif [[ -n "$GROUP_PEAKS_FILE" ]]; then echo "GROUP-PEAKS"; else echo "INDIVIDUAL"; fi)"
 log_info "Caller:      $PEAK_CALLER"
 log_info "Parameters:  Dist=$PEAK_DIST, Size=$PEAK_SIZE, Frag=$FRAG_LEN"
 
@@ -253,7 +257,58 @@ if [[ "$AGGREGATE" == "true" ]]; then
     cat "$INPUT_BED_DIR"/*.bed > "${BASE_NAME}.bed"
     call_peaks "${BASE_NAME}.bed" "${BASE_NAME}"
     rm "${BASE_NAME}.bed" 2>/dev/null
-    
+
+elif [[ -n "$GROUP_PEAKS_FILE" ]]; then
+    # Group-Peaks Mode: one aggregate call per group in the groups file
+    # Groups file format: sample_id<TAB>group  (two-column TSV, no header)
+    if [[ ! -f "$GROUP_PEAKS_FILE" ]]; then
+        log_error "--group-peaks file not found: $GROUP_PEAKS_FILE"
+        exit 1
+    fi
+    log_info "Mode: GROUP-PEAKS - One aggregate call per group"
+    log_info "Groups file: $GROUP_PEAKS_FILE"
+
+    # Get unique group names (bash 3.2 compatible: no mapfile)
+    unique_groups=$(awk 'NF>=2 {print $2}' "$GROUP_PEAKS_FILE" | sort -u)
+
+    for grp in $unique_groups; do
+        log_info "Group: $grp"
+        grp_bed="${grp}_combined.bed"
+        > "$grp_bed"
+        found=0
+
+        # Cat all BEDs for samples in this group.
+        # Tries {sample}.bed first (CLIPittyClip aggregated dir),
+        # then {sample}_collapsed.bed (standalone use).
+        while IFS=$'\t' read -r sample grp_val; do
+            [[ -z "$sample" || -z "$grp_val" ]] && continue
+            [[ "$grp_val" != "$grp" ]] && continue
+            bed=""
+            if [[ -f "$INPUT_BED_DIR/${sample}.bed" ]]; then
+                bed="$INPUT_BED_DIR/${sample}.bed"
+            elif [[ -f "$INPUT_BED_DIR/${sample}_collapsed.bed" ]]; then
+                bed="$INPUT_BED_DIR/${sample}_collapsed.bed"
+            fi
+            if [[ -n "$bed" ]]; then
+                cat "$bed" >> "$grp_bed"
+                found=$((found + 1))
+                log_info "  Added: $(basename "$bed")"
+            else
+                log_info "  [SKIP] No BED found for sample: $sample"
+            fi
+        done < "$GROUP_PEAKS_FILE"
+
+        if [[ $found -eq 0 ]]; then
+            log_info "  [SKIP] No BED files found for group: $grp"
+            rm -f "$grp_bed"
+            continue
+        fi
+
+        log_info "  Merged $found BED file(s) for group: $grp"
+        call_peaks "$grp_bed" "$grp"
+        rm -f "$grp_bed"
+    done
+
 else
     # Individual Mode: Loop through files
     log_info "Mode: INDIVIDUAL - Processing files separately..."

@@ -1127,9 +1127,56 @@ if [[ -n "$INPUT_DIR" ]]; then
         mv COMBINED_peaks/* "$OUTPUT_ROOT/$DIR_PEAKS/COMBINED_PEAKS/" 2>/dev/null
         rm -rf COMBINED_peaks
     fi
-    
+
     console_msg "  > Combined peaks: $OUTPUT_ROOT/$DIR_PEAKS/COMBINED_PEAKS/"
-    
+
+    # Group-level peak calling (auto-runs whenever -g is supplied)
+    # Produces one aggregate peak set per group, matching CTK/CLINK group outputs.
+    if [[ -n "$GROUPS_FILE" ]]; then
+        console_msg "\n[GROUP PEAK CALLING]"
+        mkdir -p "$OUTPUT_ROOT/$DIR_PEAKS/GROUP_PEAKS"
+
+        GRP_PEAK_CMD="$SCRIPT_DIR/PEAKittyPeak.sh -i \"$BED_DIR\" --group-peaks \"$GROUPS_FILE\" -p \"$PEAK_DIST\" -z \"$PEAK_SIZE\" -f \"$FRAG_LEN\" --peak-caller \"$PEAK_CALLER\""
+        if [[ -n "$ADV_PEAK_CALLER_ARGS" ]]; then GRP_PEAK_CMD="$GRP_PEAK_CMD --peak-caller-args \"$ADV_PEAK_CALLER_ARGS\""; fi
+
+        eval "$GRP_PEAK_CMD" >> "$OUTPUT_ROOT/$DIR_PEAK_LOGS/Combined_PeakCalling.log" 2>&1
+
+        # PEAKittyPeak creates {group}_peaks/ in CWD; move each to GROUP_PEAKS/{group}/
+        grp_found=0
+        for grp_dir in *_peaks; do
+            [[ -d "$grp_dir" ]] || continue
+            [[ "$grp_dir" == "COMBINED_peaks" ]] && continue
+            grp="${grp_dir%_peaks}"
+            mkdir -p "$OUTPUT_ROOT/$DIR_PEAKS/GROUP_PEAKS/$grp"
+            mv "$grp_dir"/* "$OUTPUT_ROOT/$DIR_PEAKS/GROUP_PEAKS/$grp/" 2>/dev/null
+            rm -rf "$grp_dir" 2>/dev/null
+            console_msg "  > Group peaks ($grp): $OUTPUT_ROOT/$DIR_PEAKS/GROUP_PEAKS/$grp/"
+            grp_found=$((grp_found + 1))
+        done
+        if [[ $grp_found -eq 0 ]]; then
+            console_msg "  > ${YELLOW}[WARN] No group peak dirs produced - check Combined_PeakCalling.log${NC}"
+        fi
+
+        # Add enhanced columns (BC + NormedTC) to each group peak matrix.
+        # scale_factors.tsv is already populated by run_combined_bedgraph above.
+        if [[ $grp_found -gt 0 ]]; then
+            console_msg "  > Adding enhanced matrix columns to group peak matrices..."
+            unique_grps=$(awk 'NF>=2{print $2}' "$GROUPS_FILE" | sort -u)
+            for grp in $unique_grps; do
+                GRP_MATRIX="$OUTPUT_ROOT/$DIR_PEAKS/GROUP_PEAKS/$grp/${grp}_PEAK_MATRIX.txt"
+                GRP_BED="$OUTPUT_ROOT/$DIR_PEAKS/GROUP_PEAKS/$grp/peaks_Sorted.bed"
+                if [[ -f "$GRP_MATRIX" && -f "$GRP_BED" ]]; then
+                    add_matrix_columns "$GRP_MATRIX" "$GRP_BED" \
+                        "$OUTPUT_ROOT/$DIR_BG" "$OUTPUT_ROOT/$DIR_BG/scale_factors.tsv" \
+                        "$GROUPS_FILE"
+                    mv "$GRP_BED" \
+                       "$OUTPUT_ROOT/$DIR_PEAKS/GROUP_PEAKS/$grp/FINAL_${grp}_PEAKS.bed" 2>/dev/null
+                    console_msg "  > Enhanced matrix: GROUP_PEAKS/$grp/${grp}_PEAK_MATRIX.txt"
+                fi
+            done
+        fi
+    fi
+
     # Final Summary (print BEFORE moving logs so messages get captured)
     PIPELINE_END=$(date +%s)
     DURATION=$((PIPELINE_END - PIPELINE_START))
