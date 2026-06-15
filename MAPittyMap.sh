@@ -18,7 +18,7 @@ ALIGNER="star"
 MISMATCH_MAX=2
 GENOME_FASTA=""       # Path to reference FASTA (optional; strongly recommended for CIMS)
 WIZARD_MODE="false"
-FILTER_NCRNA="false"  # ncRNA filtering is OFF by default; enable with --filter-ncrna
+FILTER_REPEAT="false"  # Repeat element filtering is OFF by default; enable with --filter-repeat
 
 function show_usage {
     echo ""
@@ -38,7 +38,7 @@ function show_usage {
     echo "  -m <int>              Max absolute mismatches backstop (default: 2; STAR uses fractional 0.1)"
     echo "  --wizard              Launch interactive configuration wizard
   --advanced            Alias for --wizard (backward compatibility)
-  --filter-ncrna        Enable ncRNA pre-filtering (off by default)
+  --filter-repeat       Enable repeat element pre-filtering (off by default)
   -h, --help            Show this help message"
     echo ""
     echo "OUTPUT:"
@@ -67,7 +67,7 @@ while [[ $# -gt 0 ]]; do
         --aligner) ALIGNER=$(echo "$2" | tr '[:upper:]' '[:lower:]'); shift 2 ;;
         --genome-fasta) GENOME_FASTA="$2"; shift 2 ;;
         --wizard|--advanced) WIZARD_MODE="true"; shift 1 ;;
-        --filter-ncrna) FILTER_NCRNA="true"; shift ;;
+        --filter-repeat) FILTER_REPEAT="true"; shift ;;
         -t) THREADS="$2"; shift 2 ;;
         -m) MISMATCH_MAX="$2"; shift 2 ;;
         -h|--help) show_usage; exit 0 ;;
@@ -160,17 +160,21 @@ log_info "Logging to: $LOG_FILE"
 # Run Mapping
 cd "${OUT_DIR}" || exit 1
 
-# Run ncRNA pre-filtering if enabled and index exists
+# Run repeat element pre-filtering if enabled and index exists
 MAPPING_INPUT="$INPUT_FILE"
-if [[ "$FILTER_NCRNA" == "true" ]]; then
-    NCRNA_INDEX_DIR=$(check_ncrna_index "$GENOME_INDEX")
-    if [[ -n "$NCRNA_INDEX_DIR" ]]; then
-        mkdir -p "OTHERS/ncRNA_Mapping"
-        NCRNA_UNMAPPED="OTHERS/ncRNA_Mapping/${BASENAME}_ncrna_filtered.fastq.gz"
-        run_ncrna_filter "$INPUT_FILE" "$NCRNA_UNMAPPED" "OTHERS/ncRNA_Mapping" "$NCRNA_INDEX_DIR" "$THREADS" "$BASENAME"
-        MAPPING_INPUT="$NCRNA_UNMAPPED"
+if [[ "$FILTER_REPEAT" == "true" ]]; then
+    REPEAT_INDEX_DIR=$(check_repeat_index "$GENOME_INDEX")
+    if [[ -n "$REPEAT_INDEX_DIR" ]]; then
+        mkdir -p "OTHERS/Repeat_Mapping"
+        REPEAT_UNMAPPED="OTHERS/Repeat_Mapping/${BASENAME}_repeat_filtered.fastq.gz"
+        run_repeat_filter "$INPUT_FILE" "$REPEAT_UNMAPPED" "OTHERS/Repeat_Mapping" "$REPEAT_INDEX_DIR" "$THREADS" "$BASENAME"
+        run_repeat_quantify \
+            "OTHERS/Repeat_Mapping/${BASENAME}_repeat.bam" \
+            "OTHERS/Repeat_Mapping/${BASENAME}_repeat_stats.txt" \
+            "OTHERS/Repeat_Mapping" "$BASENAME"
+        MAPPING_INPUT="$REPEAT_UNMAPPED"
     else
-        log_warning "ncRNA index not found in $GENOME_INDEX or $GENOME_INDEX/ncRNA. Skipping ncRNA pre-filtering."
+        log_warning "Repeat index not found in $GENOME_INDEX or $GENOME_INDEX/Repeat. Skipping repeat pre-filtering."
     fi
 fi
 

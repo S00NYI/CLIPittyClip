@@ -863,58 +863,131 @@ run_fastp() {
     fi
 }
 
-# 1c. ncRNA Pre-filtering with Bowtie2
-
-# Filters out rRNA, tRNA, and other ncRNA reads before genome alignment
+# 1c. Repeat Element Pre-filtering with Bowtie2
+# Filters out rRNA, tRNA, and repeat element (TE) reads before genome alignment
 # Input: FASTQ from fastp
-# Output: Unmapped reads (for genome alignment), Mapped reads (QC)
-run_ncrna_filter() {
+# Output: Unmapped reads (for genome alignment), Mapped reads (QC/quantification)
+run_repeat_filter() {
     local input_fastq="$1"
-    local output_unmapped="$2"    # Reads that didn't map to ncRNA (continue to genome)
-    local output_dir="$3"         # Directory for ncRNA mapping outputs
+    local output_unmapped="$2"    # Reads that didn't map to repeats (continue to genome)
+    local output_dir="$3"         # Directory for repeat mapping outputs
     local index_dir="$4"
     local threads="$5"
     local sample_name="$6"
-    
+
     # Create output directory
     mkdir -p "$output_dir"
-    
-    local ncrna_bam="${output_dir}/${sample_name}_ncrna.bam"
-    local ncrna_stats="${output_dir}/${sample_name}_ncrna_stats.txt"
-    
-    update_status "ncRNA Filter"
-    
-    # Run Bowtie2 mapping to ncRNA index
+
+    local repeat_bam="${output_dir}/${sample_name}_repeat.bam"
+    local repeat_stats="${output_dir}/${sample_name}_repeat_stats.txt"
+
+    update_status "Repeat Filter"
+
+    # Run Bowtie2 mapping to repeat index
     # --un: write unmapped reads to plain .fastq (these go to genome mapping)
-    # Mapped reads are saved to BAM for QC
-    local bt2_cmd="bowtie2 -x \"${index_dir}/ncrna\" \
+    # Mapped reads are saved to BAM for QC/quantification
+    local bt2_cmd="bowtie2 -x \"${index_dir}/repeat\" \
         -U \"$input_fastq\" \
         --un \"$output_unmapped\" \
         -p $threads \
-        2> \"$ncrna_stats\" \
-        | samtools view -bS - > \"$ncrna_bam\""
-    
-    log_info "Running ncRNA filter: $bt2_cmd"
-    
+        2> \"$repeat_stats\" \
+        | samtools view -bS - > \"$repeat_bam\""
+
+    log_info "Running repeat filter: $bt2_cmd"
+
     if execute_cmd "$bt2_cmd"; then
         # Index the BAM for potential downstream use
-        samtools index "$ncrna_bam" 2>/dev/null || true
-        
+        samtools index "$repeat_bam" 2>/dev/null || true
+
         # Extract alignment rate from stats and display on console
-        local align_rate=$(grep "overall alignment rate" "$ncrna_stats" | grep -oE "[0-9]+\.[0-9]+%" || echo "N/A")
-        local total_reads=$(grep "reads; of these:" "$ncrna_stats" | grep -oE "^[0-9]+" || echo "N/A")
-        local aligned_reads=$(grep "aligned exactly 1 time" "$ncrna_stats" | grep -oE "^[[:space:]]*[0-9]+" | tr -d ' ' || echo "0")
-        local multi_aligned=$(grep "aligned >1 times" "$ncrna_stats" | grep -oE "^[[:space:]]*[0-9]+" | tr -d ' ' || echo "0")
-        local ncrna_reads=$((aligned_reads + multi_aligned))
-        
-        log_info "ncRNA alignment rate: $align_rate"
+        local align_rate=$(grep "overall alignment rate" "$repeat_stats" | grep -oE "[0-9]+\.[0-9]+%" || echo "N/A")
+        local total_reads=$(grep "reads; of these:" "$repeat_stats" | grep -oE "^[0-9]+" || echo "N/A")
+        local aligned_reads=$(grep "aligned exactly 1 time" "$repeat_stats" | grep -oE "^[[:space:]]*[0-9]+" | tr -d ' ' || echo "0")
+        local multi_aligned=$(grep "aligned >1 times" "$repeat_stats" | grep -oE "^[[:space:]]*[0-9]+" | tr -d ' ' || echo "0")
+        local repeat_reads=$((aligned_reads + multi_aligned))
+
+        log_info "Repeat alignment rate: $align_rate"
         # Note: Per-sample stats logged to file; summary table shown after batch
-        
+
         return 0
     else
-        log_error "ncRNA filtering failed"
+        log_error "Repeat filtering failed"
         return 1
     fi
+}
+
+# 1d. Repeat Element Quantification
+# Parses the repeat BAM from run_repeat_filter into per-element and per-family TSVs.
+# Reference name formats handled:
+#   Dfam:  Name#Class/Family  (e.g. AluSx#SINE/Alu)
+#   tRNA:  GtRNAdb names containing "tRNA"
+#   rDNA:  NCBI accessions lacking '#' (fallback to rRNA/rDNA)
+run_repeat_quantify() {
+    local repeat_bam="$1"
+    local repeat_stats_file="$2"
+    local output_dir="$3"
+    local sample_name="$4"
+
+    local element_tsv="${output_dir}/${sample_name}_repeat_elements.tsv"
+    local family_tsv="${output_dir}/${sample_name}_repeat_families.tsv"
+
+    update_status "Repeat Quantify"
+
+    # Total input reads from bowtie2 stats for RPM normalization
+    local total_reads
+    total_reads=$(grep "reads; of these:" "$repeat_stats_file" 2>/dev/null | grep -oE "^[0-9]+" || echo "0")
+    [[ "$total_reads" -eq 0 ]] && log_warning "Could not parse total reads from $repeat_stats_file; RPM will be 0"
+
+    log_info "Quantifying repeat element assignments for $sample_name (total input reads: $total_reads)..."
+
+    # Per-element counts: one row per reference sequence with >= 1 mapped read
+    samtools idxstats "$repeat_bam" 2>/dev/null | \
+    awk -v total="$total_reads" '
+    BEGIN { OFS="\t"; print "element", "class", "family", "raw_reads", "rpm" }
+    $1 == "*" || $3 == 0 { next }
+    {
+        name = $1; raw = $3
+        rpm  = (total > 0) ? raw / total * 1e6 : 0
+
+        if (index(name, "#") > 0) {
+            split(name, p, "#")
+            element = p[1]; cf = p[2]
+            if (index(cf, "/") > 0) {
+                split(cf, cfp, "/")
+                class = cfp[1]; family = cf
+            } else {
+                class = cf; family = cf
+            }
+        } else if (index(name, "tRNA") > 0) {
+            element = name; class = "tRNA"; family = "tRNA"
+        } else {
+            element = name; class = "rRNA"; family = "rRNA/rDNA"
+        }
+
+        printf "%s\t%s\t%s\t%d\t%.2f\n", element, class, family, raw, rpm
+    }' > "$element_tsv"
+
+    # Per-family counts: sum raw reads and RPM across all elements in the same family
+    { printf "class\tfamily\traw_reads\trpm\n"
+      awk 'NR > 1 {
+          fam_raw[$3] += $4; fam_rpm[$3] += $5; fam_cls[$3] = $2
+      }
+      END {
+          for (f in fam_raw)
+              printf "%s\t%s\t%d\t%.2f\n", fam_cls[f], f, fam_raw[f], fam_rpm[f]
+      }' "$element_tsv" | sort -t$'\t' -k3 -rn
+    } > "$family_tsv"
+
+    local n_elements
+    n_elements=$(awk 'NR > 1' "$element_tsv" | wc -l | tr -d ' ')
+    log_info "Repeat quantification complete: $n_elements elements with mapped reads"
+
+    # Log top 5 families for quick inspection
+    log_info "Top repeat families:"
+    awk 'NR > 1 && NR <= 6 { printf "  %-25s %-12s reads=%-8d rpm=%.1f\n", $2, $1, $3, $4 }' "$family_tsv" | \
+        while IFS= read -r line; do log_info "$line"; done
+
+    return 0
 }
 
 # 2. Mapping with STAR
@@ -1117,24 +1190,24 @@ run_mapping_bowtie2() {
     log_info "Input: $input_file"
     log_info "Index: $genome_index"
     
-    # Verify index (look for .1.bt2 or .1.bt2l, excluding ncRNA patterns)
+    # Verify index (look for .1.bt2 or .1.bt2l, excluding Repeat/ subfolder)
     # First try top-level (maxdepth 1), then fall back to deeper search
     local found_idx=""
-    
-    # Try .1.bt2 at top level first, excluding ncRNA
-    found_idx=$(find "$genome_index" -maxdepth 1 -name "*.1.bt2" ! -name "*ncrna*" ! -name "*.rev.*" 2>/dev/null | head -n 1)
-    
+
+    # Try .1.bt2 at top level first, excluding repeat index
+    found_idx=$(find "$genome_index" -maxdepth 1 -name "*.1.bt2" ! -name "*repeat*" ! -name "*.rev.*" 2>/dev/null | head -n 1)
+
     # If not found, try .1.bt2l at top level
     if [[ -z "$found_idx" ]]; then
-        found_idx=$(find "$genome_index" -maxdepth 1 -name "*.1.bt2l" ! -name "*ncrna*" ! -name "*.rev.*" 2>/dev/null | head -n 1)
+        found_idx=$(find "$genome_index" -maxdepth 1 -name "*.1.bt2l" ! -name "*repeat*" ! -name "*.rev.*" 2>/dev/null | head -n 1)
     fi
-    
-    # Fall back to deeper search (excluding ncRNA subfolder)
+
+    # Fall back to deeper search (excluding Repeat/ subfolder)
     if [[ -z "$found_idx" ]]; then
-        found_idx=$(find "$genome_index" -name "*.1.bt2" ! -path "*/ncRNA/*" ! -name "*ncrna*" ! -name "*.rev.*" 2>/dev/null | head -n 1)
+        found_idx=$(find "$genome_index" -name "*.1.bt2" ! -path "*/Repeat/*" ! -name "*repeat*" ! -name "*.rev.*" 2>/dev/null | head -n 1)
     fi
     if [[ -z "$found_idx" ]]; then
-        found_idx=$(find "$genome_index" -name "*.1.bt2l" ! -path "*/ncRNA/*" ! -name "*ncrna*" ! -name "*.rev.*" 2>/dev/null | head -n 1)
+        found_idx=$(find "$genome_index" -name "*.1.bt2l" ! -path "*/Repeat/*" ! -name "*repeat*" ! -name "*.rev.*" 2>/dev/null | head -n 1)
     fi
     
     if [[ -z "$found_idx" ]]; then
@@ -2818,13 +2891,13 @@ run_group_ctk_analysis() {
             fi
         done
         
-        # 9. Get genome fasta for motif analysis (prioritize genome/primary, exclude ncrna)
+        # 9. Get genome fasta for motif analysis (prioritize genome/primary, exclude repeat sequences)
         local genome_fasta=$(find "$genome_index" -maxdepth 1 \( -name "*genome*.fa" -o -name "*genome*.fasta" \) 2>/dev/null | head -n 1)
         if [[ -z "$genome_fasta" ]]; then
             genome_fasta=$(find "$genome_index" -maxdepth 1 \( -name "*primary*.fa" -o -name "*primary*.fasta" \) 2>/dev/null | head -n 1)
         fi
         if [[ -z "$genome_fasta" ]]; then
-            genome_fasta=$(find "$genome_index" -maxdepth 1 \( -name "*.fa" -o -name "*.fasta" \) ! -name "*ncrna*" 2>/dev/null | head -n 1)
+            genome_fasta=$(find "$genome_index" -maxdepth 1 \( -name "*.fa" -o -name "*.fasta" \) ! -name "*repeat*" 2>/dev/null | head -n 1)
         fi
         
         # 10. Run CTK analysis on aggregated data

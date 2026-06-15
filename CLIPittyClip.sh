@@ -109,7 +109,7 @@ function show_usage {
   --group-xlsite           Group crosslink site analysis for CTK + Clink (requires -g).
                              Implies --ctk-group for CTK; also runs group Clink CITS/CIMS."
     echo "  -s, --sample <int>       Test mode: process only first N reads"
-    echo "  --filter-ncrna           Enable ncRNA pre-filtering (off by default)"
+    echo "  --filter-repeat          Enable repeat element pre-filtering (off by default)"
     echo ""
     echo "OUTPUT OPTIONS:"
     echo "  -k, --keep               Keep intermediate files (in OUTPUT/OTHERS/sample_analysis/)"
@@ -146,7 +146,7 @@ CTK_PREPROCESS="false"  # Internal: run parseAlignment.pl without CIMS/CITS (set
 CLINK_DEDUP_ONLY="false"  # Internal: produce dedup BAMs only, skip pileup/CITS/CIMS (set by parent in group mode)
 NOTIFY_MODE="false"
 WIZARD_MODE="false"
-FILTER_NCRNA="false"  # ncRNA filtering is OFF by default; enable with --filter-ncrna
+FILTER_REPEAT="false"  # Repeat element filtering is OFF by default; enable with --filter-repeat
 ALIGNER="star" # Default aligner
 ECLIP_MODE=""       # eCLIP mode: "pe" (paired-end) or "se" (single-end), empty = off
 PARCLIP_MODE="false"    # PAR-CLIP mode: specialized preprocessing for 4SU CLIP
@@ -239,7 +239,7 @@ while [[ $# -gt 0 ]]; do
         --align-mismatches) ALIGN_MISMATCHES="$2"; shift 2 ;;
         --genome-fasta) GENOME_FASTA="$2"; shift 2 ;;
         --no-dedup) DEDUP_MODE="false"; shift ;;
-        --filter-ncrna) FILTER_NCRNA="true"; shift ;;
+        --filter-repeat) FILTER_REPEAT="true"; shift ;;
         --eclip) ECLIP_MODE="$2"; shift 2 ;;
         --parclip) PARCLIP_MODE="true"; shift ;;
         --parclip-adapters) PARCLIP_ADAPTERS="$2"; shift 2 ;;
@@ -809,7 +809,7 @@ if [[ -n "$INPUT_DIR" ]]; then
         EXTRA_FLAGS="$EXTRA_FLAGS --parclip"
         if [[ -n "$PARCLIP_ADAPTERS" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --parclip-adapters $PARCLIP_ADAPTERS"; fi
     fi
-    if [[ "$FILTER_NCRNA" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --filter-ncrna"; fi
+    if [[ "$FILTER_REPEAT" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --filter-repeat"; fi
     if [[ "$DEDUP_MODE" == "false" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --no-dedup"; fi
     EXTRA_FLAGS="$EXTRA_FLAGS --peak-caller $PEAK_CALLER"
     if [[ -n "$ADV_PEAK_CALLER_ARGS" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --peak-caller-args \"$ADV_PEAK_CALLER_ARGS\""; fi
@@ -1025,11 +1025,13 @@ if [[ -n "$INPUT_DIR" ]]; then
                 cp "$sample_out"/*Log.out "$OUTPUT_ROOT/$DIR_REPORTS/ALIGNER_LOGS/DETAILED_LOGS_CAN_BE_DELETED/" 2>/dev/null
             fi
             
-            # ncRNA Mapping outputs
-            if [[ -d "$sample_out/OTHERS/ncRNA_Mapping" ]]; then
-                mkdir -p "$OUTPUT_ROOT/$DIR_OTHERS/ncRNA_Mapping"
-                cp "$sample_out"/OTHERS/ncRNA_Mapping/*_ncrna_stats.txt "$OUTPUT_ROOT/$DIR_OTHERS/ncRNA_Mapping/" 2>/dev/null
-                cp "$sample_out"/OTHERS/ncRNA_Mapping/*_ncrna.bam* "$OUTPUT_ROOT/$DIR_OTHERS/ncRNA_Mapping/" 2>/dev/null
+            # Repeat Mapping outputs
+            if [[ -d "$sample_out/OTHERS/Repeat_Mapping" ]]; then
+                mkdir -p "$OUTPUT_ROOT/$DIR_OTHERS/Repeat_Mapping"
+                cp "$sample_out"/OTHERS/Repeat_Mapping/*_repeat_stats.txt "$OUTPUT_ROOT/$DIR_OTHERS/Repeat_Mapping/" 2>/dev/null
+                cp "$sample_out"/OTHERS/Repeat_Mapping/*_repeat.bam* "$OUTPUT_ROOT/$DIR_OTHERS/Repeat_Mapping/" 2>/dev/null
+                cp "$sample_out"/OTHERS/Repeat_Mapping/*_repeat_elements.tsv "$OUTPUT_ROOT/$DIR_OTHERS/Repeat_Mapping/" 2>/dev/null
+                cp "$sample_out"/OTHERS/Repeat_Mapping/*_repeat_families.tsv "$OUTPUT_ROOT/$DIR_OTHERS/Repeat_Mapping/" 2>/dev/null
             fi
             
             # Pipeline log
@@ -1067,10 +1069,10 @@ if [[ -n "$INPUT_DIR" ]]; then
         run_combined_bedgraph "$OUTPUT_ROOT" "$GROUPS_FILE" "$OUTPUT_ROOT/$DIR_BG"
     fi
     
-    # ncRNA Filtering Summary
-    if [[ "$FILTER_NCRNA" == "true" ]]; then
-        console_msg "\n[ncRNA FILTERING SUMMARY]"
-        printf "  %-25s %-15s %-15s %s\n" "Sample" "ncRNA Reads" "Total Reads" "% Filtered"
+    # Repeat Filtering Summary
+    if [[ "$FILTER_REPEAT" == "true" ]]; then
+        console_msg "\n[REPEAT FILTERING SUMMARY]"
+        printf "  %-25s %-15s %-15s %s\n" "Sample" "Repeat Reads" "Total Reads" "% Filtered"
         console_msg "  ----------------------------------------------------------------"
 
         for sample in "${SAMPLE_FILES[@]}"; do
@@ -1081,15 +1083,15 @@ if [[ -n "$INPUT_DIR" ]]; then
                 sample_name="${sample_name%.fastq}"
                 sample_name="${sample_name%.fq}"
                 # Read from aggregated location (sample_out was deleted after collection)
-                ncrna_stats="${OUTPUT_ROOT}/${DIR_OTHERS}/ncRNA_Mapping/${sample_name}_ncrna_stats.txt"
+                repeat_stats="${OUTPUT_ROOT}/${DIR_OTHERS}/Repeat_Mapping/${sample_name}_repeat_stats.txt"
 
-                if [[ -f "$ncrna_stats" ]]; then
-                    align_rate=$(grep "overall alignment rate" "$ncrna_stats" | grep -oE "[0-9]+\.[0-9]+%" || echo "N/A")
-                    total=$(grep "reads; of these:" "$ncrna_stats" | grep -oE "^[0-9]+" || echo "N/A")
-                    aligned=$(grep "aligned exactly 1 time" "$ncrna_stats" | grep -oE "^[[:space:]]*[0-9]+" | tr -d ' ' || echo "0")
-                    multi=$(grep "aligned >1 times" "$ncrna_stats" | grep -oE "^[[:space:]]*[0-9]+" | tr -d ' ' || echo "0")
-                    ncrna=$((aligned + multi))
-                    printf "  %-25s %-15s %-15s %s\n" "$sample_name" "$ncrna" "$total" "$align_rate"
+                if [[ -f "$repeat_stats" ]]; then
+                    align_rate=$(grep "overall alignment rate" "$repeat_stats" | grep -oE "[0-9]+\.[0-9]+%" || echo "N/A")
+                    total=$(grep "reads; of these:" "$repeat_stats" | grep -oE "^[0-9]+" || echo "N/A")
+                    aligned=$(grep "aligned exactly 1 time" "$repeat_stats" | grep -oE "^[[:space:]]*[0-9]+" | tr -d ' ' || echo "0")
+                    multi=$(grep "aligned >1 times" "$repeat_stats" | grep -oE "^[[:space:]]*[0-9]+" | tr -d ' ' || echo "0")
+                    repeat_reads=$((aligned + multi))
+                    printf "  %-25s %-15s %-15s %s\n" "$sample_name" "$repeat_reads" "$total" "$align_rate"
                 else
                     printf "  %-25s %-15s %-15s %s\n" "$sample_name" "-" "-" "SKIPPED"
                 fi
@@ -1353,7 +1355,7 @@ if [[ "$DEMUX" == "yes" ]]; then
         EXTRA_FLAGS="$EXTRA_FLAGS --parclip"
         if [[ -n "$PARCLIP_ADAPTERS" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --parclip-adapters $PARCLIP_ADAPTERS"; fi
     fi
-    if [[ "$FILTER_NCRNA" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --filter-ncrna"; fi
+    if [[ "$FILTER_REPEAT" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --filter-repeat"; fi
     # Pool was already deduped above; tell children to skip dedup
     EXTRA_FLAGS="$EXTRA_FLAGS --no-dedup"
 
@@ -1580,11 +1582,13 @@ if [[ "$DEMUX" == "yes" ]]; then
                     cp "$analysis_dir"/*SJ.out.tab "$OUTPUT_ROOT/$DIR_OTHERS/STAR_OUTPUT/" 2>/dev/null
                 fi
                 
-                # ncRNA Mapping outputs
-                if [[ -d "$analysis_dir/OTHERS/ncRNA_Mapping" ]]; then
-                    mkdir -p "$OUTPUT_ROOT/$DIR_OTHERS/ncRNA_Mapping"
-                    cp "$analysis_dir"/OTHERS/ncRNA_Mapping/*_ncrna_stats.txt "$OUTPUT_ROOT/$DIR_OTHERS/ncRNA_Mapping/" 2>/dev/null
-                    cp "$analysis_dir"/OTHERS/ncRNA_Mapping/*_ncrna.bam* "$OUTPUT_ROOT/$DIR_OTHERS/ncRNA_Mapping/" 2>/dev/null
+                # Repeat Mapping outputs
+                if [[ -d "$analysis_dir/OTHERS/Repeat_Mapping" ]]; then
+                    mkdir -p "$OUTPUT_ROOT/$DIR_OTHERS/Repeat_Mapping"
+                    cp "$analysis_dir"/OTHERS/Repeat_Mapping/*_repeat_stats.txt "$OUTPUT_ROOT/$DIR_OTHERS/Repeat_Mapping/" 2>/dev/null
+                    cp "$analysis_dir"/OTHERS/Repeat_Mapping/*_repeat.bam* "$OUTPUT_ROOT/$DIR_OTHERS/Repeat_Mapping/" 2>/dev/null
+                    cp "$analysis_dir"/OTHERS/Repeat_Mapping/*_repeat_elements.tsv "$OUTPUT_ROOT/$DIR_OTHERS/Repeat_Mapping/" 2>/dev/null
+                    cp "$analysis_dir"/OTHERS/Repeat_Mapping/*_repeat_families.tsv "$OUTPUT_ROOT/$DIR_OTHERS/Repeat_Mapping/" 2>/dev/null
                 fi
                 
                 # CTK Analysis outputs
@@ -1726,24 +1730,24 @@ if [[ "$DEMUX" == "yes" ]]; then
               "$PEAKS_BED"
     fi
 
-    # ncRNA Filtering Summary (before cleanup so stats files still exist)
-    if [[ "$FILTER_NCRNA" == "true" ]]; then
-        console_msg "\n[ncRNA FILTERING SUMMARY]"
-        printf "  %-25s %-15s %-15s %s\n" "Sample" "ncRNA Reads" "Total Reads" "% Filtered"
+    # Repeat Filtering Summary (before cleanup so stats files still exist)
+    if [[ "$FILTER_REPEAT" == "true" ]]; then
+        console_msg "\n[REPEAT FILTERING SUMMARY]"
+        printf "  %-25s %-15s %-15s %s\n" "Sample" "Repeat Reads" "Total Reads" "% Filtered"
         console_msg "  ----------------------------------------------------------------"
 
         for f in "$DEMUX_DIR"/*.fastq; do
             [[ -f "$f" ]] || continue
             sample_name=$(basename "$f" .fastq)
             [[ "$sample_name" == "unknown" ]] && continue
-            ncrna_stats="${WORK_DIR}/${sample_name}_analysis/OTHERS/ncRNA_Mapping/${sample_name}_ncrna_stats.txt"
-            if [[ -f "$ncrna_stats" ]]; then
-                align_rate=$(grep "overall alignment rate" "$ncrna_stats" | grep -oE "[0-9]+\.[0-9]+%" || echo "N/A")
-                total=$(grep "reads; of these:" "$ncrna_stats" | grep -oE "^[0-9]+" || echo "N/A")
-                aligned=$(grep "aligned exactly 1 time" "$ncrna_stats" | grep -oE "^[[:space:]]*[0-9]+" | tr -d ' ' || echo "0")
-                multi=$(grep "aligned >1 times" "$ncrna_stats" | grep -oE "^[[:space:]]*[0-9]+" | tr -d ' ' || echo "0")
-                ncrna=$((aligned + multi))
-                printf "  %-25s %-15s %-15s %s\n" "$sample_name" "$ncrna" "$total" "$align_rate"
+            repeat_stats="${WORK_DIR}/${sample_name}_analysis/OTHERS/Repeat_Mapping/${sample_name}_repeat_stats.txt"
+            if [[ -f "$repeat_stats" ]]; then
+                align_rate=$(grep "overall alignment rate" "$repeat_stats" | grep -oE "[0-9]+\.[0-9]+%" || echo "N/A")
+                total=$(grep "reads; of these:" "$repeat_stats" | grep -oE "^[0-9]+" || echo "N/A")
+                aligned=$(grep "aligned exactly 1 time" "$repeat_stats" | grep -oE "^[[:space:]]*[0-9]+" | tr -d ' ' || echo "0")
+                multi=$(grep "aligned >1 times" "$repeat_stats" | grep -oE "^[[:space:]]*[0-9]+" | tr -d ' ' || echo "0")
+                repeat_reads=$((aligned + multi))
+                printf "  %-25s %-15s %-15s %s\n" "$sample_name" "$repeat_reads" "$total" "$align_rate"
             else
                 printf "  %-25s %-15s %-15s %s\n" "$sample_name" "-" "-" "SKIPPED"
             fi
@@ -1930,19 +1934,23 @@ if [[ -n "$ECLIP_UMI_LEN" ]] && [[ "$ECLIP_UMI_LEN" -gt 0 ]]; then
     log_info "UMI length updated from eCLIP preprocessing: ${UMI_LEN}nt"
 fi
 
-# 1b. ncRNA Pre-filtering (if enabled and index exists)
+# 1b. Repeat Element Pre-filtering (if enabled and index exists)
 CLEANED_FASTQ="${BASENAME}_cleaned.fastq"
-if [[ "$FILTER_NCRNA" == "true" ]]; then
-    NCRNA_INDEX_DIR=$(check_ncrna_index "$GENOME_INDEX")
-    if [[ -n "$NCRNA_INDEX_DIR" ]]; then
-        NCRNA_OUTPUT_DIR="OTHERS/ncRNA_Mapping"
-        NCRNA_UNMAPPED="${BASENAME}_ncrna_filtered.fastq"
-        run_ncrna_filter "$CLEANED_FASTQ" "$NCRNA_UNMAPPED" "$NCRNA_OUTPUT_DIR" "$NCRNA_INDEX_DIR" "$THREADS" "$BASENAME"
-        # Use filtered reads for genome mapping
-        CLEANED_FASTQ="$NCRNA_UNMAPPED"
+if [[ "$FILTER_REPEAT" == "true" ]]; then
+    REPEAT_INDEX_DIR=$(check_repeat_index "$GENOME_INDEX")
+    if [[ -n "$REPEAT_INDEX_DIR" ]]; then
+        REPEAT_OUTPUT_DIR="OTHERS/Repeat_Mapping"
+        REPEAT_UNMAPPED="${BASENAME}_repeat_filtered.fastq"
+        run_repeat_filter "$CLEANED_FASTQ" "$REPEAT_UNMAPPED" "$REPEAT_OUTPUT_DIR" "$REPEAT_INDEX_DIR" "$THREADS" "$BASENAME"
+        run_repeat_quantify \
+            "${REPEAT_OUTPUT_DIR}/${BASENAME}_repeat.bam" \
+            "${REPEAT_OUTPUT_DIR}/${BASENAME}_repeat_stats.txt" \
+            "$REPEAT_OUTPUT_DIR" "$BASENAME"
+        # Use repeat-filtered reads for genome mapping
+        CLEANED_FASTQ="$REPEAT_UNMAPPED"
     else
-        log_warning "ncRNA index not found in $GENOME_INDEX or $GENOME_INDEX/ncRNA. Skipping ncRNA pre-filtering."
-        log_warning "To build ncRNA index, see README.md for instructions."
+        log_warning "Repeat index not found in $GENOME_INDEX or $GENOME_INDEX/Repeat. Skipping repeat pre-filtering."
+        log_warning "To build repeat index, see README.md for instructions."
     fi
 fi
 
@@ -2015,7 +2023,7 @@ if [[ "$RUN_CIMS" == "true" ]] || [[ "$RUN_CITS" == "true" ]]; then
     fi
     
     # Find reference FASTA for motif analysis
-    # Priority: 0) --genome-fasta flag, 1) *genome*.fa in index, 2) *primary*.fa, 3) any .fa excluding *ncrna*
+    # Priority: 0) --genome-fasta flag, 1) *genome*.fa in index, 2) *primary*.fa, 3) any .fa excluding repeat sequences
     ref_fasta=""
     if [[ -n "${GENOME_FASTA:-}" ]] && [[ -f "$GENOME_FASTA" ]]; then
         ref_fasta="$GENOME_FASTA"
@@ -2028,8 +2036,8 @@ if [[ "$RUN_CIMS" == "true" ]] || [[ "$RUN_CITS" == "true" ]]; then
         ref_fasta=$(find "$GENOME_INDEX" -maxdepth 1 \( -name "*primary*.fa" -o -name "*primary*.fasta" \) 2>/dev/null | head -n 1)
     fi
     if [[ -z "$ref_fasta" ]]; then
-        # Fallback: any .fa/.fasta excluding ncrna
-        ref_fasta=$(find "$GENOME_INDEX" -maxdepth 1 \( -name "*.fa" -o -name "*.fasta" \) ! -name "*ncrna*" 2>/dev/null | head -n 1)
+        # Fallback: any .fa/.fasta excluding repeat sequences
+        ref_fasta=$(find "$GENOME_INDEX" -maxdepth 1 \( -name "*.fa" -o -name "*.fasta" \) ! -name "*repeat*" 2>/dev/null | head -n 1)
     fi
     if [[ -z "$ref_fasta" ]]; then
         log_warning "Reference FASTA not found. Motif analysis may be skipped."
@@ -2217,10 +2225,10 @@ if [[ "$CHILD_MODE" != "true" ]]; then
         SF_DIR_CLINK="$_clink_dest"
     fi
 
-    # ncRNA mapping output
-    if [[ -d "OTHERS/ncRNA_Mapping" ]]; then
-        mkdir -p "$SINGLE_OUTPUT_ROOT/$SF_DIR_OTHERS/ncRNA_Mapping"
-        mv "OTHERS/ncRNA_Mapping/"* "$SINGLE_OUTPUT_ROOT/$SF_DIR_OTHERS/ncRNA_Mapping/" 2>/dev/null
+    # Repeat mapping output
+    if [[ -d "OTHERS/Repeat_Mapping" ]]; then
+        mkdir -p "$SINGLE_OUTPUT_ROOT/$SF_DIR_OTHERS/Repeat_Mapping"
+        mv "OTHERS/Repeat_Mapping/"* "$SINGLE_OUTPUT_ROOT/$SF_DIR_OTHERS/Repeat_Mapping/" 2>/dev/null
     fi
 
     # Reports: fastp, aligner logs, analysis log
@@ -2289,19 +2297,19 @@ S=$((DURATION%60))
 log_info "End Time: $(date '+%Y-%m-%d %H:%M:%S')"
 log_info "Total Duration: ${H}h ${M}m ${S}s"
 
-# ncRNA Filtering Summary (non-child mode, single-file only)
-if [[ "$CHILD_MODE" != "true" ]] && [[ "$FILTER_NCRNA" == "true" ]]; then
-    ncrna_stats_sf="${SINGLE_OUTPUT_ROOT}/${SF_DIR_OTHERS}/ncRNA_Mapping/${BASENAME}_ncrna_stats.txt"
-    if [[ -f "$ncrna_stats_sf" ]]; then
-        console_msg "\n[ncRNA FILTERING SUMMARY]"
-        printf "  %-25s %-15s %-15s %s\n" "Sample" "ncRNA Reads" "Total Reads" "% Filtered"
+# Repeat Filtering Summary (non-child mode, single-file only)
+if [[ "$CHILD_MODE" != "true" ]] && [[ "$FILTER_REPEAT" == "true" ]]; then
+    repeat_stats_sf="${SINGLE_OUTPUT_ROOT}/${SF_DIR_OTHERS}/Repeat_Mapping/${BASENAME}_repeat_stats.txt"
+    if [[ -f "$repeat_stats_sf" ]]; then
+        console_msg "\n[REPEAT FILTERING SUMMARY]"
+        printf "  %-25s %-15s %-15s %s\n" "Sample" "Repeat Reads" "Total Reads" "% Filtered"
         console_msg "  ----------------------------------------------------------------"
-        align_rate=$(grep "overall alignment rate" "$ncrna_stats_sf" | grep -oE "[0-9]+\.[0-9]+%" || echo "N/A")
-        total=$(grep "reads; of these:" "$ncrna_stats_sf" | grep -oE "^[0-9]+" || echo "N/A")
-        aligned=$(grep "aligned exactly 1 time" "$ncrna_stats_sf" | grep -oE "^[[:space:]]*[0-9]+" | tr -d ' ' || echo "0")
-        multi=$(grep "aligned >1 times" "$ncrna_stats_sf" | grep -oE "^[[:space:]]*[0-9]+" | tr -d ' ' || echo "0")
-        ncrna_reads=$(( ${aligned:-0} + ${multi:-0} ))
-        printf "  %-25s %-15s %-15s %s\n" "$BASENAME" "$ncrna_reads" "${total:-N/A}" "${align_rate:-N/A}"
+        align_rate=$(grep "overall alignment rate" "$repeat_stats_sf" | grep -oE "[0-9]+\.[0-9]+%" || echo "N/A")
+        total=$(grep "reads; of these:" "$repeat_stats_sf" | grep -oE "^[0-9]+" || echo "N/A")
+        aligned=$(grep "aligned exactly 1 time" "$repeat_stats_sf" | grep -oE "^[[:space:]]*[0-9]+" | tr -d ' ' || echo "0")
+        multi=$(grep "aligned >1 times" "$repeat_stats_sf" | grep -oE "^[[:space:]]*[0-9]+" | tr -d ' ' || echo "0")
+        repeat_reads=$(( ${aligned:-0} + ${multi:-0} ))
+        printf "  %-25s %-15s %-15s %s\n" "$BASENAME" "$repeat_reads" "${total:-N/A}" "${align_rate:-N/A}"
         console_msg "  ----------------------------------------------------------------"
     fi
 fi

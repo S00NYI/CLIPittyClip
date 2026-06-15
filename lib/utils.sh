@@ -126,17 +126,17 @@ check_bowtie_index() {
     return 0
 }
 
-# Check for ncRNA Bowtie2 index in annotation directory
+# Check for repeat element Bowtie2 index in genome index directory
 # Returns 0 if found, 1 if not found (silent - caller handles messaging)
-check_ncrna_index() {
+check_repeat_index() {
     local dir="$1"
-    # Check ncRNA/ subfolder first (recommended structure)
-    if [[ -f "${dir}/ncRNA/ncrna.1.bt2" ]] || [[ -f "${dir}/ncRNA/ncrna.1.bt2l" ]]; then
-        echo "${dir}/ncRNA"  # Return the path where index was found
+    # Check Repeat/ subfolder first (recommended structure)
+    if [[ -f "${dir}/Repeat/repeat.1.bt2" ]] || [[ -f "${dir}/Repeat/repeat.1.bt2l" ]]; then
+        echo "${dir}/Repeat"  # Return the path where index was found
         return 0
     fi
     # Fallback: check top-level directory (backwards compatibility)
-    if [[ -f "${dir}/ncrna.1.bt2" ]] || [[ -f "${dir}/ncrna.1.bt2l" ]]; then
+    if [[ -f "${dir}/repeat.1.bt2" ]] || [[ -f "${dir}/repeat.1.bt2l" ]]; then
         echo "${dir}"  # Return the path where index was found
         return 0
     fi

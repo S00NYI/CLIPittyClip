@@ -34,7 +34,7 @@ A comprehensive, single-command CLIP-seq analysis pipeline from raw FASTQ to pea
 
 CLIPittyClip runs the complete CLIP-seq stack in a single command. All three stages run automatically:
 
-1. **Preprocessing** — global sequence dedup, adapter trimming (fastp), optional ncRNA pre-filter, genome alignment (STAR / Bowtie2)
+1. **Preprocessing** — global sequence dedup, adapter trimming (fastp), optional repeat element pre-filter (rRNA/tRNA/TEs), genome alignment (STAR / Bowtie2)
 2. **Crosslink sites** — two parallel tracks from the same BAM:
    - **Clink** (`--run-clink`, v3.3): `umi_tools` dedup → `pileup.py` → strand-aware CITS + CIMS (Python, BH FDR)
    - **CTK** (`--run-cims-cits`): `tag2collapse.pl` → `parseAlignment.pl` → `CITS.pl` + `CIMS.pl` (Perl, permutation FDR)
@@ -163,7 +163,7 @@ All results land in a single numbered-folder hierarchy next to your input (or at
 │
 ├── 6_OTHERS/ or 7_OTHERS/  ← intermediate files; number adjusts automatically
 │   ├── STAR_OUTPUT/
-│   └── ncRNA_Mapping/
+│   └── Repeat_Mapping/      ← repeat element BAMs, stats, and quantification TSVs (if --filter-repeat)
 │
 └── REPORTS/
     ├── FASTP_REPORT/        ← HTML/JSON QC
@@ -216,7 +216,7 @@ Run `CLIPittyClip.sh --help` for full usage.
 | — | `--parclip` | — | PAR-CLIP mode: specialized preprocessing for 4SU CLIP (requires `-u`) |
 | — | `--parclip-adapters` | bundled | Custom PAR-CLIP adapter FASTA (default: `lib/parclip_adapters.fa`) |
 | — | `--no-dedup` | — | Skip FASTQ deduplication |
-| — | `--filter-ncrna` | off | Pre-filter ncRNA reads (opt-in) |
+| — | `--filter-repeat` | off | Pre-filter repeat element reads: rRNA, tRNA, and transposable elements (opt-in) |
 | — | `--bc-len` | — | Barcode length (auto-detected from `-b`) |
 | — | `--spacer-len` | `0` | Spacer bases after barcode |
 
@@ -384,7 +384,7 @@ Output: `{INPUT}_prepped/PREPPED_FASTQ/*_prepped.fastq.gz` + `REPORTS/`
 
 GEO output: `{INPUT}_GEO/{sample}.fastq.gz` + `md5sums.txt`
 
-Key options: `-u` (UMI length), `-b` (barcodes), `-a` (adapter), `--bc-len`, `--spacer-len`, `--no-dedup`, `--geo`, `--filter-ncrna`, `-k`
+Key options: `-u` (UMI length), `-b` (barcodes), `-a` (adapter), `--bc-len`, `--spacer-len`, `--no-dedup`, `--geo`, `--filter-repeat`, `-k`
 
 ---
 
@@ -447,31 +447,83 @@ STAR --runMode genomeGenerate \
 bowtie2-build genome.fa /path/to/bt2_index/GRCh38
 ```
 
-### ncRNA pre-filtering index (optional)
+### Repeat element pre-filtering index (optional)
 
-Filters rRNA, tRNA, snRNA, snoRNA before genome alignment. Enable with `--filter-ncrna`.
+Enable with `--filter-repeat`. Reads mapping to the repeat index are diverted to `OTHERS/Repeat_Mapping/` and excluded from genome alignment; unmapped reads continue to STAR normally.
+
+**Why repeats, not ncRNA?** rRNA, tRNA, and transposable elements are multi-copy: STAR either multi-maps them across hundreds of loci or discards them entirely, polluting alignment stats. Removing them before STAR gives cleaner uniquely-mappable read counts. ncRNAs with defined genomic loci (miRNA, Y RNA, lncRNA, snRNA, snoRNA) are left untouched and annotated normally by STAR.
+
+**Index composition (human GRCh38 example):**
+
+| Source | Contents | URL |
+|--------|----------|-----|
+| NCBI U13369.1 | Human 45S pre-rRNA (rDNA unit) | `https://www.ncbi.nlm.nih.gov/nuccore/U13369` |
+| GtRNAdb | All human tRNA gene sequences | `http://gtrnadb.ucsc.edu/GtRNAdb2/genomes/eukaryota/Hsapi38/` |
+| Dfam / RepeatMasker.lib | TE consensus sequences (mammal-relevant clades) | `https://www.dfam.org/releases/` |
+
+**Building the index (human GRCh38):**
 
 ```bash
-# Download ncRNA sequences (human GRCh38)
-wget ftp://ftp.ensembl.org/pub/release-110/fasta/homo_sapiens/ncrna/Homo_sapiens.GRCh38.ncrna.fa.gz
-gunzip Homo_sapiens.GRCh38.ncrna.fa.gz
+# 1. Download and prepare sources
+# rDNA (single 45S rDNA unit — covers 18S, 5.8S, 28S, ITS regions)
+efetch -db nuccore -id U13369.1 -format fasta > human_45S_rDNA.fa
 
-# Build Bowtie2 index — place in ncRNA/ subfolder of your annotation dir
-mkdir -p /path/to/annotation/ncRNA
-bowtie2-build Homo_sapiens.GRCh38.ncrna.fa /path/to/annotation/ncRNA/ncrna
+# tRNAs from GtRNAdb (download hg38-tRNAs.fa from http://gtrnadb.ucsc.edu)
+
+# Dfam TE consensus sequences — filter to mammal-relevant clades
+grep -B0 -A0 "^>" Dfam-RepeatMasker.lib | \
+    grep -E "@Vertebrata_vertebrates|@Amniota|@Mammalia|@Theria_mammals|@Eutheria|@Boreoeutheria|@Primates|@Haplorrhini|@Catarrhini|@Hominidae|@Homo_sapiens" \
+    | sed 's/^>//' | sed 's/ .*//' > human_dfam_names.txt
+
+python3 - <<'EOF'
+from Bio import SeqIO
+import sys
+keep = set(open("human_dfam_names.txt").read().splitlines())
+with open("Dfam-human.fa", "w") as out:
+    for rec in SeqIO.parse("Dfam-RepeatMasker.lib", "fasta"):
+        if rec.id in keep:
+            SeqIO.write(rec, out, "fasta")
+EOF
+
+# 2. Concatenate and build the Bowtie2 index
+mkdir -p /path/to/star_index/Repeat
+cat human_45S_rDNA.fa hg38-tRNAs.fa Dfam-human.fa > repeat_combined.fa
+bowtie2-build --threads 8 repeat_combined.fa /path/to/star_index/Repeat/repeat
 ```
+
+**Building the index (mouse GRCm39):**
+
+Same steps, substituting:
+- Mouse 45S rDNA (BK000964.3): `efetch -db nuccore -id BK000964.3 -format fasta > mouse_45S_rDNA.fa`
+- GtRNAdb mouse tRNAs (`mm10-tRNAs.fa`)
+- Additional Dfam clade filters: `@Rodentia|@Muridae|@Murinae|@Mus_genus|@Mus_musculus`
+
+**Outputs** (written to `OTHERS/Repeat_Mapping/` per sample):
+
+| File | Description |
+|------|-------------|
+| `{sample}_repeat.bam` | Reads that mapped to the repeat index (sorted, indexed) |
+| `{sample}_repeat_stats.txt` | Bowtie2 alignment summary |
+| `{sample}_repeat_elements.tsv` | Per-element read counts and RPM (element / class / family / raw_reads / rpm) |
+| `{sample}_repeat_families.tsv` | Family-level aggregated counts (class / family / raw_reads / rpm), sorted by read count |
+
+RPM is calculated as `(reads mapped to element / total input reads) × 10⁶`.
 
 ### Recommended annotation directory layout
 
 ```
-/path/to/annotation/
-├── genome.fa                 ← pass to --genome-fasta
+/path/to/star_index/
 ├── Genome                    ← STAR index files
 ├── SA, SAindex, genomeParameters.txt
+├── genome.fa                 ← pass to --genome-fasta
 ├── chrom.sizes               ← optional, for bedgraph
-└── ncRNA/
-    ├── ncrna.1.bt2
-    └── ncrna.*.bt2
+└── Repeat/
+    ├── repeat.1.bt2
+    ├── repeat.2.bt2
+    ├── repeat.3.bt2
+    ├── repeat.4.bt2
+    ├── repeat.rev.1.bt2
+    └── repeat.rev.2.bt2
 ```
 
 ---
@@ -497,6 +549,29 @@ bowtie2-build Homo_sapiens.GRCh38.ncrna.fa /path/to/annotation/ncRNA/ncrna
 ---
 
 ## Changelog
+
+### v3.5.0
+- **Repeat element pre-filter** (`--filter-repeat`): replaces the former ncRNA filter with a dedicated repeat filter targeting truly repetitive sequences that STAR cannot place uniquely
+  - Index composition: NCBI 45S rDNA (U13369.1), GtRNAdb tRNAs, Dfam/RepeatMasker TE consensus sequences filtered to mammal-relevant clades
+  - miRNA, Y RNA, lncRNA, snRNA, and snoRNA pass through to STAR for normal genomic annotation
+  - Off by default (opt-in with `--filter-repeat`); index auto-detected from `{STAR_INDEX}/Repeat/repeat.*.bt2`
+- **`run_repeat_quantify()`**: per-sample repeat quantification immediately after filtering
+  - Per-element TSV (`_repeat_elements.tsv`): element / class / family / raw_reads / RPM
+  - Per-family TSV (`_repeat_families.tsv`): family-level aggregated counts sorted by read depth
+  - Handles three reference name formats: Dfam (`Name#Class/Family`), GtRNAdb tRNA headers, NCBI rDNA
+- Output directory renamed from `ncRNA_Mapping/` to `Repeat_Mapping/`
+
+### v3.4.0
+- **PAR-CLIP mode** (`--parclip`): end-to-end support for 4-thiouridine CLIP data
+  - Read layout: `[UMI][READ][2nt spacer][6mer barcode][adapter]`; requires `-u` (UMI length)
+  - Two-pass fastp: pass 1 extracts UMI and trims barcode+adapter (bundled `lib/parclip_adapters.fa`, 43 MDX-O barcodes); pass 2 removes the 2nt random spacer
+  - `--parclip-adapters`: supply a custom adapter FASTA to override the bundled set
+- **Strand-aware substitution calling** in `pileup.py`: all 12 substitution types now reported on the correct genomic strand (T→C for PAR-CLIP, G→T for eCLIP oxidative damage, etc.)
+- **`--group-peaks`** flag in `PEAKittyPeak.sh` and `CLIPittyClip.sh`: pool per-sample BEDs before peak calling to increase depth for low-replicate experiments
+- **Ensembl/UCSC chromosome naming auto-detection**: `filter_canonical_chromosomes()` detects `chr1` vs `1` naming from the BAM header and applies the correct filter set; portable `awk`-based implementation removes the `grep -P` dependency
+- Suppressed `tag2collapse.pl` verbose EM output in non-debug runs
+- `--clink-multi-map` reverted to single-pass positional assignment (CLAM-style EM removed — too slow for large datasets)
+- Fixed `--ctk-group` flag not recognized by `PEAKittyPeak.sh`
 
 ### v3.3.1
 - **`--clink-multi-map`**: single-pass positional rescue of multi-mapped reads (NH:i:>1) in the Clink collapse step
