@@ -864,30 +864,30 @@ if [[ -n "$INPUT_DIR" ]]; then
     
     # Aggregation - OUTPUT_ROOT was computed centrally at startup.
     
-    DIR_BAM="1_BAM"
-    DIR_BED="2_COLLAPSED_BED"
-    DIR_BG="3_BEDGRAPH"
-    DIR_PEAKS="4_PEAKS"
+    DIR_BAM="01_BAM"
+    DIR_BED="02_COLLAPSED_BED"
+    DIR_BG="03_BEDGRAPH"
+    DIR_PEAKS="04_PEAKS"
     # Folder numbering: 5=CTK (if on), next=Clink (if on), OTHERS bumps accordingly
     _ctk_on=false; _clink_on=false
     { [[ "$RUN_CIMS" == "true" ]] || [[ "$RUN_CITS" == "true" ]]; } && _ctk_on=true
     { [[ "$RUN_CLINK" == "true" ]] || [[ "$CLINK_DEDUP_ONLY" == "true" ]]; } && _clink_on=true
     if [[ "$_ctk_on" == "true" ]] && [[ "$_clink_on" == "true" ]]; then
-        if [[ "$RUN_CIMS" == "true" ]] && [[ "$RUN_CITS" == "true" ]]; then DIR_CTK="5_CTK_Analysis"
-        elif [[ "$RUN_CIMS" == "true" ]]; then DIR_CTK="5_CIMS_Analysis"
-        else DIR_CTK="5_CITS_Analysis"; fi
-        DIR_CLINK="6_Clink"; DIR_OTHERS="7_OTHERS"
+        if [[ "$RUN_CIMS" == "true" ]] && [[ "$RUN_CITS" == "true" ]]; then DIR_CTK="05_CTK_Analysis"
+        elif [[ "$RUN_CIMS" == "true" ]]; then DIR_CTK="05_CIMS_Analysis"
+        else DIR_CTK="05_CITS_Analysis"; fi
+        DIR_CLINK="06_Clink"; DIR_OTHERS="07_OTHERS"
     elif [[ "$_ctk_on" == "true" ]]; then
-        if [[ "$RUN_CIMS" == "true" ]] && [[ "$RUN_CITS" == "true" ]]; then DIR_CTK="5_CTK_Analysis"
-        elif [[ "$RUN_CIMS" == "true" ]]; then DIR_CTK="5_CIMS_Analysis"
-        else DIR_CTK="5_CITS_Analysis"; fi
-        DIR_CLINK=""; DIR_OTHERS="6_OTHERS"
+        if [[ "$RUN_CIMS" == "true" ]] && [[ "$RUN_CITS" == "true" ]]; then DIR_CTK="05_CTK_Analysis"
+        elif [[ "$RUN_CIMS" == "true" ]]; then DIR_CTK="05_CIMS_Analysis"
+        else DIR_CTK="05_CITS_Analysis"; fi
+        DIR_CLINK=""; DIR_OTHERS="06_OTHERS"
     elif [[ "$_clink_on" == "true" ]]; then
-        DIR_CTK=""; DIR_CLINK="5_Clink"; DIR_OTHERS="6_OTHERS"
+        DIR_CTK=""; DIR_CLINK="05_Clink"; DIR_OTHERS="06_OTHERS"
     else
-        DIR_CTK=""; DIR_CLINK=""; DIR_OTHERS="5_OTHERS"
+        DIR_CTK=""; DIR_CLINK=""; DIR_OTHERS="05_OTHERS"
     fi
-    DIR_REPORTS="REPORTS"
+    DIR_REPORTS="00_REPORTS"
     DIR_PEAK_LOGS="REPORTS/PEAK"
     DIR_IND_PEAK_LOGS="$DIR_PEAK_LOGS"
     
@@ -1423,30 +1423,30 @@ if [[ "$DEMUX" == "yes" ]]; then
     # OUTPUT_ROOT is computed centrally at startup — no need to recompute here.
     
     DIR_DEMUX="0_DEMUX_FASTQ"
-    DIR_BAM="1_BAM"
-    DIR_BED="2_COLLAPSED_BED"
-    DIR_BG="3_BEDGRAPH"
-    DIR_PEAKS="4_PEAKS"
+    DIR_BAM="01_BAM"
+    DIR_BED="02_COLLAPSED_BED"
+    DIR_BG="03_BEDGRAPH"
+    DIR_PEAKS="04_PEAKS"
     # Folder numbering: 5=CTK (if on), next=Clink (if on), OTHERS bumps accordingly
     _ctk_on=false; _clink_on=false
     { [[ "$RUN_CIMS" == "true" ]] || [[ "$RUN_CITS" == "true" ]]; } && _ctk_on=true
     { [[ "$RUN_CLINK" == "true" ]] || [[ "$CLINK_DEDUP_ONLY" == "true" ]]; } && _clink_on=true
     if [[ "$_ctk_on" == "true" ]] && [[ "$_clink_on" == "true" ]]; then
-        if [[ "$RUN_CIMS" == "true" ]] && [[ "$RUN_CITS" == "true" ]]; then DIR_CTK="5_CTK_Analysis"
-        elif [[ "$RUN_CIMS" == "true" ]]; then DIR_CTK="5_CIMS_Analysis"
-        else DIR_CTK="5_CITS_Analysis"; fi
-        DIR_CLINK="6_Clink"; DIR_OTHERS="7_OTHERS"
+        if [[ "$RUN_CIMS" == "true" ]] && [[ "$RUN_CITS" == "true" ]]; then DIR_CTK="05_CTK_Analysis"
+        elif [[ "$RUN_CIMS" == "true" ]]; then DIR_CTK="05_CIMS_Analysis"
+        else DIR_CTK="05_CITS_Analysis"; fi
+        DIR_CLINK="06_Clink"; DIR_OTHERS="07_OTHERS"
     elif [[ "$_ctk_on" == "true" ]]; then
-        if [[ "$RUN_CIMS" == "true" ]] && [[ "$RUN_CITS" == "true" ]]; then DIR_CTK="5_CTK_Analysis"
-        elif [[ "$RUN_CIMS" == "true" ]]; then DIR_CTK="5_CIMS_Analysis"
-        else DIR_CTK="5_CITS_Analysis"; fi
-        DIR_CLINK=""; DIR_OTHERS="6_OTHERS"
+        if [[ "$RUN_CIMS" == "true" ]] && [[ "$RUN_CITS" == "true" ]]; then DIR_CTK="05_CTK_Analysis"
+        elif [[ "$RUN_CIMS" == "true" ]]; then DIR_CTK="05_CIMS_Analysis"
+        else DIR_CTK="05_CITS_Analysis"; fi
+        DIR_CLINK=""; DIR_OTHERS="06_OTHERS"
     elif [[ "$_clink_on" == "true" ]]; then
-        DIR_CTK=""; DIR_CLINK="5_Clink"; DIR_OTHERS="6_OTHERS"
+        DIR_CTK=""; DIR_CLINK="05_Clink"; DIR_OTHERS="06_OTHERS"
     else
-        DIR_CTK=""; DIR_CLINK=""; DIR_OTHERS="5_OTHERS"
+        DIR_CTK=""; DIR_CLINK=""; DIR_OTHERS="05_OTHERS"
     fi
-    DIR_REPORTS="REPORTS"
+    DIR_REPORTS="00_REPORTS"
     DIR_PEAK_LOGS="REPORTS/PEAK"
     DIR_IND_PEAK_LOGS="REPORTS/PEAK/INDIVIDUAL_SAMPLES"
     
@@ -1668,11 +1668,11 @@ if [[ "$DEMUX" == "yes" ]]; then
         if [[ "$RUN_CIMS" == "true" ]] || [[ "$RUN_CITS" == "true" ]]; then
             # Determine CTK folder name
             if [[ "$RUN_CIMS" == "true" ]] && [[ "$RUN_CITS" == "true" ]]; then
-                CTK_FOLDER="5_CTK_Analysis"
+                CTK_FOLDER="05_CTK_Analysis"
             elif [[ "$RUN_CIMS" == "true" ]]; then
-                CTK_FOLDER="5_CIMS_Analysis"
+                CTK_FOLDER="05_CIMS_Analysis"
             else
-                CTK_FOLDER="5_CITS_Analysis"
+                CTK_FOLDER="05_CITS_Analysis"
             fi
             PEAK_CMD="$PEAK_CMD --ctk-dir ./$CTK_FOLDER"
             
@@ -1858,7 +1858,7 @@ if [[ "$BASENAME" == "$INPUT_FILE" ]]; then
     BASENAME=$(basename "$INPUT_FILE" .fq.gz)
 fi
 if [[ -n "$EXP_ID" ]]; then
-    BASENAME="$EXP_ID"
+    BASENAME="$(basename "$EXP_ID")"
 fi
 
 # ── Deduplication ────────────────────────────────────────────────────────────────
@@ -2110,16 +2110,18 @@ if [[ "$CHILD_MODE" != "true" ]]; then
     SINGLE_OUTPUT_ROOT="$OUTPUT_ROOT"
     mkdir -p "$SINGLE_OUTPUT_ROOT"
 
-    SF_DIR_BAM="1_BAM"
-    SF_DIR_BED="2_COLLAPSED_BED"
-    SF_DIR_BG="3_BEDGRAPH"
-    SF_DIR_PEAKS="4_PEAKS"
-    if [[ "$RUN_CIMS" == "true" ]] || [[ "$RUN_CITS" == "true" ]]; then
-        SF_DIR_OTHERS="6_OTHERS"
+    SF_DIR_BAM="01_BAM"
+    SF_DIR_BED="02_COLLAPSED_BED"
+    SF_DIR_BG="03_BEDGRAPH"
+    SF_DIR_PEAKS="04_PEAKS"
+    if ([[ "$RUN_CIMS" == "true" ]] || [[ "$RUN_CITS" == "true" ]]) && [[ "$RUN_CLINK" == "true" ]]; then
+        SF_DIR_OTHERS="07_OTHERS"
+    elif [[ "$RUN_CIMS" == "true" ]] || [[ "$RUN_CITS" == "true" ]] || [[ "$RUN_CLINK" == "true" ]]; then
+        SF_DIR_OTHERS="06_OTHERS"
     else
-        SF_DIR_OTHERS="5_OTHERS"
+        SF_DIR_OTHERS="05_OTHERS"
     fi
-    SF_DIR_REPORTS="REPORTS"
+    SF_DIR_REPORTS="00_REPORTS"
 
     mkdir -p "$SINGLE_OUTPUT_ROOT/$SF_DIR_BAM"
     mkdir -p "$SINGLE_OUTPUT_ROOT/$SF_DIR_BED"
@@ -2196,12 +2198,12 @@ if [[ "$CHILD_MODE" != "true" ]]; then
     for ctk_folder in "CTK_Analysis" "CIMS_Analysis" "CITS_Analysis"; do
         if [[ -d "$ctk_folder" ]]; then
             CTK_OUT_DIR=""
-            if [[ "$ctk_folder" == "CTK_Analysis" ]]; then CTK_OUT_DIR="5_CTK_Analysis"; fi
-            if [[ "$ctk_folder" == "CIMS_Analysis" ]]; then CTK_OUT_DIR="5_CIMS_Analysis"; fi
-            if [[ "$ctk_folder" == "CITS_Analysis" ]]; then CTK_OUT_DIR="5_CITS_Analysis"; fi
+            if [[ "$ctk_folder" == "CTK_Analysis" ]]; then CTK_OUT_DIR="05_CTK_Analysis"; fi
+            if [[ "$ctk_folder" == "CIMS_Analysis" ]]; then CTK_OUT_DIR="05_CIMS_Analysis"; fi
+            if [[ "$ctk_folder" == "CITS_Analysis" ]]; then CTK_OUT_DIR="05_CITS_Analysis"; fi
             # If Clink is also running, bump CTK to 5 and Clink to 6
             if [[ "$RUN_CLINK" == "true" ]]; then
-                CLINK_OUT_DIR="6_Clink"
+                CLINK_OUT_DIR="06_Clink"
             else
                 CLINK_OUT_DIR=""
             fi
@@ -2213,12 +2215,12 @@ if [[ "$CHILD_MODE" != "true" ]]; then
 
     # Clink Analysis output
     if [[ -d "Clink_Analysis" ]]; then
-        # Determine folder number: 5_Clink if no CTK, 6_Clink if CTK also ran
-        local _clink_dest
+        # Determine folder number: 05_Clink if no CTK, 06_Clink if CTK also ran
+        _clink_dest=""
         if [[ -n "${SF_DIR_CTK:-}" ]]; then
-            _clink_dest="6_Clink"
+            _clink_dest="06_Clink"
         else
-            _clink_dest="5_Clink"
+            _clink_dest="05_Clink"
         fi
         mkdir -p "$SINGLE_OUTPUT_ROOT/$_clink_dest/$BASENAME"
         cp -r "Clink_Analysis/"* "$SINGLE_OUTPUT_ROOT/$_clink_dest/$BASENAME/" 2>/dev/null

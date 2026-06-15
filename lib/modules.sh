@@ -889,9 +889,10 @@ run_repeat_filter() {
     local bt2_cmd="bowtie2 -x \"${index_dir}/repeat\" \
         -U \"$input_fastq\" \
         --un \"$output_unmapped\" \
+        --local --very-sensitive-local \
         -p $threads \
         2> \"$repeat_stats\" \
-        | samtools view -bS - > \"$repeat_bam\""
+        | samtools sort -@ $threads -o \"$repeat_bam\" -"
 
     log_info "Running repeat filter: $bt2_cmd"
 

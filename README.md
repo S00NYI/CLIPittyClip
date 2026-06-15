@@ -141,19 +141,24 @@ All results land in a single numbered-folder hierarchy next to your input (or at
 
 ```
 {INPUT}_output/
-├── 0_DEMUX_FASTQ/          ← demultiplexed reads (only with -k)
-├── 1_BAM/                  ← sorted, indexed BAM files
-├── 2_COLLAPSED_BED/        ← PCR-deduplicated read BED
-├── 3_BEDGRAPH/             ← RPM-normalized ± strand bedgraphs
+├── 00_REPORTS/
+│   ├── FASTP_REPORT/        ← HTML/JSON QC
+│   ├── ALIGNER_LOGS/        ← STAR/Bowtie2 summaries
+│   ├── PEAK/                ← peak calling logs
+│   └── SAMPLES/             ← per-sample detailed logs
+├── 0_DEMUX_FASTQ/           ← demultiplexed reads (only with -k)
+├── 01_BAM/                  ← sorted, indexed BAM files
+├── 02_COLLAPSED_BED/        ← PCR-deduplicated read BED
+├── 03_BEDGRAPH/             ← RPM-normalized ± strand bedgraphs
 │   └── COMBINED_BEDGRAPH/  ← group-averaged tracks (with -g)
-├── 4_PEAKS/
-│   ├── SAMPLE_PEAKS/       ← per-sample peak calls
-│   └── COMBINED_PEAKS/     ← aggregated peaks + COMBINED_PEAK_MATRIX.txt
+├── 04_PEAKS/
+│   ├── SAMPLE_PEAKS/        ← per-sample peak calls
+│   └── COMBINED_PEAKS/      ← aggregated peaks + COMBINED_PEAK_MATRIX.txt
 │
-├── 5_CTK_Analysis/         ← CTK crosslink sites (--run-cims-cits)
+├── 05_CTK_Analysis/         ← CTK crosslink sites (--run-cims-cits)
 │   └── {sample}/CIMS/ CITS/
 │
-├── 5_Clink/ or 6_Clink/   ← Clink crosslink sites (--run-clink)
+├── 05_Clink/ or 06_Clink/  ← Clink crosslink sites (--run-clink)
 │   └── {sample}/
 │       ├── {sample}_dedup.bam
 │       ├── {sample}_pileup.npz
@@ -161,18 +166,12 @@ All results land in a single numbered-folder hierarchy next to your input (or at
 │       ├── {sample}_deletions.bed
 │       └── {sample}_TtoC.bed  (+ all 12 substitution types)
 │
-├── 6_OTHERS/ or 7_OTHERS/  ← intermediate files; number adjusts automatically
-│   ├── STAR_OUTPUT/
-│   └── Repeat_Mapping/      ← repeat element BAMs, stats, and quantification TSVs (if --filter-repeat)
-│
-└── REPORTS/
-    ├── FASTP_REPORT/        ← HTML/JSON QC
-    ├── ALIGNER_LOGS/        ← STAR/Bowtie2 summaries
-    ├── PEAK/                ← peak calling logs
-    └── SAMPLES/             ← per-sample detailed logs
+└── 05_OTHERS/ → 06_OTHERS/ → 07_OTHERS/  ← number adjusts automatically; always last
+    ├── STAR_OUTPUT/
+    └── Repeat_Mapping/      ← repeat element BAMs, stats, and quantification TSVs (if --filter-repeat)
 ```
 
-> **Folder numbering** adjusts automatically: `5_OTHERS` with no crosslink analysis, `6_OTHERS` with CTK or Clink, `7_OTHERS` with both.
+> **Folder numbering:** `05_OTHERS` with no crosslink analysis; `06_OTHERS` with CTK or Clink; `07_OTHERS` with both. CTK is always `05`, Clink is `05` (no CTK) or `06` (with CTK).
 
 **Output location (`-o`):**
 - No `-o`: created next to input (`/data/reads.fq.gz` → `/data/reads_output/`)
