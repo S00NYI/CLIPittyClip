@@ -1801,18 +1801,18 @@ if [[ "$DEMUX" == "yes" ]]; then
     if [[ "$KEEP_INTERMEDIATE" == "yes" ]]; then
         console_msg "  ├── 0_DEMUX_FASTQ/"
     fi
-    console_msg "  ├── 1_BAM/"
-    console_msg "  ├── 2_COLLAPSED_BED/"
-    console_msg "  ├── 3_BEDGRAPH/"
-    console_msg "  ├── 4_PEAKS/"
+    console_msg "  ├── ${DIR_REPORTS}/"
+    console_msg "  ├── ${DIR_BAM}/"
+    console_msg "  ├── ${DIR_BED}/"
+    console_msg "  ├── ${DIR_BG}/"
+    console_msg "  ├── ${DIR_PEAKS}/"
     if [[ -n "$DIR_CTK" ]]; then
         console_msg "  ├── ${DIR_CTK}/"
     fi
     if [[ -n "$DIR_CLINK" ]]; then
         console_msg "  ├── ${DIR_CLINK}/"
     fi
-    console_msg "  ├── ${DIR_OTHERS}/"
-    console_msg "  └── REPORTS/"
+    console_msg "  └── ${DIR_OTHERS}/"
 
     console_msg "\n[SUCCESS] Pipeline finished."
     
@@ -2334,18 +2334,18 @@ fi
 if [[ "$CHILD_MODE" != "true" ]]; then
     console_msg "\n[OUTPUT]"
     console_msg "  All results saved to: $SINGLE_OUTPUT_ROOT/"
-    console_msg "  ├── 1_BAM/"
-    console_msg "  ├── 2_COLLAPSED_BED/"
-    console_msg "  ├── 3_BEDGRAPH/"
-    console_msg "  ├── 4_PEAKS/"
+    console_msg "  ├── ${SF_DIR_REPORTS}/"
+    console_msg "  ├── ${SF_DIR_BAM}/"
+    console_msg "  ├── ${SF_DIR_BED}/"
+    console_msg "  ├── ${SF_DIR_BG}/"
+    console_msg "  ├── ${SF_DIR_PEAKS}/"
     if [[ -n "${SF_DIR_CTK:-}" ]]; then
         console_msg "  ├── ${SF_DIR_CTK}/"
     fi
     if [[ -n "${SF_DIR_CLINK:-}" ]]; then
         console_msg "  ├── ${SF_DIR_CLINK}/"
     fi
-    console_msg "  ├── ${SF_DIR_OTHERS}/"
-    console_msg "  └── REPORTS/"
+    console_msg "  └── ${SF_DIR_OTHERS}/"
 
     console_msg "\n[SUCCESS] Pipeline finished."
     console_msg "End Time: $(date '+%Y-%m-%d %H:%M:%S')"
