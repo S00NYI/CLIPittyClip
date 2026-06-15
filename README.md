@@ -451,8 +451,6 @@ bowtie2-build genome.fa /path/to/bt2_index/GRCh38
 
 Enable with `--filter-repeat`. Reads mapping to the repeat index are diverted to `OTHERS/Repeat_Mapping/` and excluded from genome alignment; unmapped reads continue to STAR normally.
 
-**Why repeats, not ncRNA?** rRNA, tRNA, and transposable elements are multi-copy: STAR either multi-maps them across hundreds of loci or discards them entirely, polluting alignment stats. Removing them before STAR gives cleaner uniquely-mappable read counts. ncRNAs with defined genomic loci (miRNA, Y RNA, lncRNA, snRNA, snoRNA) are left untouched and annotated normally by STAR.
-
 **Index composition (human GRCh38 example):**
 
 | Source | Contents | URL |
