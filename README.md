@@ -451,50 +451,53 @@ bowtie2-build genome.fa /path/to/bt2_index/GRCh38
 
 Enable with `--filter-repeat`. Reads mapping to the repeat index are diverted to `OTHERS/Repeat_Mapping/` and excluded from genome alignment; unmapped reads continue to STAR normally.
 
-**Index composition (human GRCh38 example):**
+**Index composition (human GRCh38):**
 
-| Source | Contents | URL |
-|--------|----------|-----|
-| NCBI U13369.1 | Human 45S pre-rRNA (rDNA unit) | `https://www.ncbi.nlm.nih.gov/nuccore/U13369` |
-| GtRNAdb | All human tRNA gene sequences | `http://gtrnadb.ucsc.edu/GtRNAdb2/genomes/eukaryota/Hsapi38/` |
-| Dfam / RepeatMasker.lib | TE consensus sequences (mammal-relevant clades) | `https://www.dfam.org/releases/` |
+| Source | Accession / URL | Contents |
+|--------|----------------|----------|
+| NCBI Nucleotide | U13369.1, NR_023363.1 | 45S pre-rRNA (18S + 5.8S + 28S + ITS) and standalone 5S rDNA |
+| GtRNAdb | `gtrnadb.ucsc.edu/GtRNAdb2/genomes/eukaryota/Hsapi38/` | All human tRNA gene sequences (hg38) |
+| Dfam | `dfam.org/releases/current/families/Dfam-RepeatMasker.lib.gz` | TE consensus sequences, filtered to mammal-relevant clades |
 
 **Building the index (human GRCh38):**
 
 ```bash
-# 1. Download and prepare sources
-# rDNA (single 45S rDNA unit — covers 18S, 5.8S, 28S, ITS regions)
-efetch -db nuccore -id U13369.1 -format fasta > human_45S_rDNA.fa
+# 1. rRNA: 45S rDNA unit (18S + 5.8S + 28S) and standalone 5S
+curl -s "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=nuccore&id=U13369.1&rettype=fasta&retmode=text" \
+  > human_45S_rDNA.fa
+curl -s "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=nuccore&id=NR_023363.1&rettype=fasta&retmode=text" \
+  >> human_45S_rDNA.fa
 
-# tRNAs from GtRNAdb (download hg38-tRNAs.fa from http://gtrnadb.ucsc.edu)
+# 2. tRNA from GtRNAdb
+curl -O "https://gtrnadb.ucsc.edu/GtRNAdb2/genomes/eukaryota/Hsapi38/hg38-tRNAs.fa"
 
-# Dfam TE consensus sequences — filter to mammal-relevant clades
-grep -B0 -A0 "^>" Dfam-RepeatMasker.lib | \
-    grep -E "@Vertebrata_vertebrates|@Amniota|@Mammalia|@Theria_mammals|@Eutheria|@Boreoeutheria|@Primates|@Haplorrhini|@Catarrhini|@Hominidae|@Homo_sapiens" \
-    | sed 's/^>//' | sed 's/ .*//' > human_dfam_names.txt
+# 3. Dfam RepeatMasker library
+curl -O "https://dfam.org/releases/current/families/Dfam-RepeatMasker.lib.gz"
+gunzip Dfam-RepeatMasker.lib.gz
 
-python3 - <<'EOF'
-from Bio import SeqIO
-import sys
-keep = set(open("human_dfam_names.txt").read().splitlines())
-with open("Dfam-human.fa", "w") as out:
-    for rec in SeqIO.parse("Dfam-RepeatMasker.lib", "fasta"):
-        if rec.id in keep:
-            SeqIO.write(rec, out, "fasta")
-EOF
+# Inspect headers — format is >Name#Class/Family @Clade [S:scores]
+grep "^>" Dfam-RepeatMasker.lib | head -10
+grep -c "^>" Dfam-RepeatMasker.lib
 
-# 2. Concatenate and build the Bowtie2 index
-mkdir -p /path/to/star_index/Repeat
-cat human_45S_rDNA.fa hg38-tRNAs.fa Dfam-human.fa > repeat_combined.fa
-bowtie2-build --threads 8 repeat_combined.fa /path/to/star_index/Repeat/repeat
+# 4. Extract only human-relevant clades from Dfam
+awk '/^>/{
+    keep=0
+    if(/(@Vertebrata_vertebrates|@Amniota|@Mammalia|@Theria_mammals|@Eutheria|@Boreoeutheria|@Afrotheria|@Primates|@Haplorrhini|@Catarrhini|@Platyrrhini|@Hominidae|@Homo_sapiens)/) keep=1
+} keep{print}' Dfam-RepeatMasker.lib > Dfam-human.fa
+
+# 5. Combine and build the Bowtie2 index
+mkdir -p Repeat
+cat human_45S_rDNA.fa hg38-tRNAs.fa Dfam-human.fa > Repeat/repeat_sequences.fa
+grep -c "^>" Repeat/repeat_sequences.fa   # sanity check total entries
+bowtie2-build --threads 8 Repeat/repeat_sequences.fa Repeat/repeat
 ```
 
 **Building the index (mouse GRCm39):**
 
 Same steps, substituting:
-- Mouse 45S rDNA (BK000964.3): `efetch -db nuccore -id BK000964.3 -format fasta > mouse_45S_rDNA.fa`
-- GtRNAdb mouse tRNAs (`mm10-tRNAs.fa`)
-- Additional Dfam clade filters: `@Rodentia|@Muridae|@Murinae|@Mus_genus|@Mus_musculus`
+- Mouse 45S rDNA: fetch `BK000964.3` and `NR_003279.1` (5S) in place of the human accessions
+- GtRNAdb mouse tRNAs: `mm10-tRNAs.fa` from the `Mmusc10` genome page
+- Additional Dfam clade filter terms: `@Rodentia|@Muridae|@Murinae|@Mus_genus|@Mus_musculus`
 
 **Outputs** (written to `OTHERS/Repeat_Mapping/` per sample):
 
