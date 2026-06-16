@@ -17,6 +17,7 @@ install_log*.txt
 .agents/
 *.swp
 *~
+CLAUDE.md
 
 # Python
 __pycache__/

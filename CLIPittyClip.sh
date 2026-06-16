@@ -109,7 +109,7 @@ function show_usage {
   --group-xlsite           Group crosslink site analysis for CTK + Clink (requires -g).
                              Implies --ctk-group for CTK; also runs group Clink CITS/CIMS."
     echo "  -s, --sample <int>       Test mode: process only first N reads"
-    echo "  --filter-ncrna           Enable ncRNA pre-filtering (off by default)"
+    echo "  --filter-repeat          Enable repeat element pre-filtering (off by default)"
     echo ""
     echo "OUTPUT OPTIONS:"
     echo "  -k, --keep               Keep intermediate files (in OUTPUT/OTHERS/sample_analysis/)"
@@ -146,7 +146,7 @@ CTK_PREPROCESS="false"  # Internal: run parseAlignment.pl without CIMS/CITS (set
 CLINK_DEDUP_ONLY="false"  # Internal: produce dedup BAMs only, skip pileup/CITS/CIMS (set by parent in group mode)
 NOTIFY_MODE="false"
 WIZARD_MODE="false"
-FILTER_NCRNA="false"  # ncRNA filtering is OFF by default; enable with --filter-ncrna
+FILTER_REPEAT="false"  # Repeat element filtering is OFF by default; enable with --filter-repeat
 ALIGNER="star" # Default aligner
 ECLIP_MODE=""       # eCLIP mode: "pe" (paired-end) or "se" (single-end), empty = off
 PARCLIP_MODE="false"    # PAR-CLIP mode: specialized preprocessing for 4SU CLIP
@@ -239,7 +239,7 @@ while [[ $# -gt 0 ]]; do
         --align-mismatches) ALIGN_MISMATCHES="$2"; shift 2 ;;
         --genome-fasta) GENOME_FASTA="$2"; shift 2 ;;
         --no-dedup) DEDUP_MODE="false"; shift ;;
-        --filter-ncrna) FILTER_NCRNA="true"; shift ;;
+        --filter-repeat) FILTER_REPEAT="true"; shift ;;
         --eclip) ECLIP_MODE="$2"; shift 2 ;;
         --parclip) PARCLIP_MODE="true"; shift ;;
         --parclip-adapters) PARCLIP_ADAPTERS="$2"; shift 2 ;;
@@ -809,7 +809,7 @@ if [[ -n "$INPUT_DIR" ]]; then
         EXTRA_FLAGS="$EXTRA_FLAGS --parclip"
         if [[ -n "$PARCLIP_ADAPTERS" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --parclip-adapters $PARCLIP_ADAPTERS"; fi
     fi
-    if [[ "$FILTER_NCRNA" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --filter-ncrna"; fi
+    if [[ "$FILTER_REPEAT" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --filter-repeat"; fi
     if [[ "$DEDUP_MODE" == "false" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --no-dedup"; fi
     EXTRA_FLAGS="$EXTRA_FLAGS --peak-caller $PEAK_CALLER"
     if [[ -n "$ADV_PEAK_CALLER_ARGS" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --peak-caller-args \"$ADV_PEAK_CALLER_ARGS\""; fi
@@ -864,30 +864,30 @@ if [[ -n "$INPUT_DIR" ]]; then
     
     # Aggregation - OUTPUT_ROOT was computed centrally at startup.
     
-    DIR_BAM="1_BAM"
-    DIR_BED="2_COLLAPSED_BED"
-    DIR_BG="3_BEDGRAPH"
-    DIR_PEAKS="4_PEAKS"
+    DIR_BAM="01_BAM"
+    DIR_BED="02_COLLAPSED_BED"
+    DIR_BG="03_BEDGRAPH"
+    DIR_PEAKS="04_PEAKS"
     # Folder numbering: 5=CTK (if on), next=Clink (if on), OTHERS bumps accordingly
     _ctk_on=false; _clink_on=false
     { [[ "$RUN_CIMS" == "true" ]] || [[ "$RUN_CITS" == "true" ]]; } && _ctk_on=true
     { [[ "$RUN_CLINK" == "true" ]] || [[ "$CLINK_DEDUP_ONLY" == "true" ]]; } && _clink_on=true
     if [[ "$_ctk_on" == "true" ]] && [[ "$_clink_on" == "true" ]]; then
-        if [[ "$RUN_CIMS" == "true" ]] && [[ "$RUN_CITS" == "true" ]]; then DIR_CTK="5_CTK_Analysis"
-        elif [[ "$RUN_CIMS" == "true" ]]; then DIR_CTK="5_CIMS_Analysis"
-        else DIR_CTK="5_CITS_Analysis"; fi
-        DIR_CLINK="6_Clink"; DIR_OTHERS="7_OTHERS"
+        if [[ "$RUN_CIMS" == "true" ]] && [[ "$RUN_CITS" == "true" ]]; then DIR_CTK="05_CTK_Analysis"
+        elif [[ "$RUN_CIMS" == "true" ]]; then DIR_CTK="05_CIMS_Analysis"
+        else DIR_CTK="05_CITS_Analysis"; fi
+        DIR_CLINK="06_Clink"; DIR_OTHERS="07_OTHERS"
     elif [[ "$_ctk_on" == "true" ]]; then
-        if [[ "$RUN_CIMS" == "true" ]] && [[ "$RUN_CITS" == "true" ]]; then DIR_CTK="5_CTK_Analysis"
-        elif [[ "$RUN_CIMS" == "true" ]]; then DIR_CTK="5_CIMS_Analysis"
-        else DIR_CTK="5_CITS_Analysis"; fi
-        DIR_CLINK=""; DIR_OTHERS="6_OTHERS"
+        if [[ "$RUN_CIMS" == "true" ]] && [[ "$RUN_CITS" == "true" ]]; then DIR_CTK="05_CTK_Analysis"
+        elif [[ "$RUN_CIMS" == "true" ]]; then DIR_CTK="05_CIMS_Analysis"
+        else DIR_CTK="05_CITS_Analysis"; fi
+        DIR_CLINK=""; DIR_OTHERS="06_OTHERS"
     elif [[ "$_clink_on" == "true" ]]; then
-        DIR_CTK=""; DIR_CLINK="5_Clink"; DIR_OTHERS="6_OTHERS"
+        DIR_CTK=""; DIR_CLINK="05_Clink"; DIR_OTHERS="06_OTHERS"
     else
-        DIR_CTK=""; DIR_CLINK=""; DIR_OTHERS="5_OTHERS"
+        DIR_CTK=""; DIR_CLINK=""; DIR_OTHERS="05_OTHERS"
     fi
-    DIR_REPORTS="REPORTS"
+    DIR_REPORTS="00_REPORTS"
     DIR_PEAK_LOGS="REPORTS/PEAK"
     DIR_IND_PEAK_LOGS="$DIR_PEAK_LOGS"
     
@@ -1025,11 +1025,13 @@ if [[ -n "$INPUT_DIR" ]]; then
                 cp "$sample_out"/*Log.out "$OUTPUT_ROOT/$DIR_REPORTS/ALIGNER_LOGS/DETAILED_LOGS_CAN_BE_DELETED/" 2>/dev/null
             fi
             
-            # ncRNA Mapping outputs
-            if [[ -d "$sample_out/OTHERS/ncRNA_Mapping" ]]; then
-                mkdir -p "$OUTPUT_ROOT/$DIR_OTHERS/ncRNA_Mapping"
-                cp "$sample_out"/OTHERS/ncRNA_Mapping/*_ncrna_stats.txt "$OUTPUT_ROOT/$DIR_OTHERS/ncRNA_Mapping/" 2>/dev/null
-                cp "$sample_out"/OTHERS/ncRNA_Mapping/*_ncrna.bam* "$OUTPUT_ROOT/$DIR_OTHERS/ncRNA_Mapping/" 2>/dev/null
+            # Repeat Mapping outputs
+            if [[ -d "$sample_out/OTHERS/Repeat_Mapping" ]]; then
+                mkdir -p "$OUTPUT_ROOT/$DIR_OTHERS/Repeat_Mapping"
+                cp "$sample_out"/OTHERS/Repeat_Mapping/*_repeat_stats.txt "$OUTPUT_ROOT/$DIR_OTHERS/Repeat_Mapping/" 2>/dev/null
+                cp "$sample_out"/OTHERS/Repeat_Mapping/*_repeat.bam* "$OUTPUT_ROOT/$DIR_OTHERS/Repeat_Mapping/" 2>/dev/null
+                cp "$sample_out"/OTHERS/Repeat_Mapping/*_repeat_elements.tsv "$OUTPUT_ROOT/$DIR_OTHERS/Repeat_Mapping/" 2>/dev/null
+                cp "$sample_out"/OTHERS/Repeat_Mapping/*_repeat_families.tsv "$OUTPUT_ROOT/$DIR_OTHERS/Repeat_Mapping/" 2>/dev/null
             fi
             
             # Pipeline log
@@ -1067,10 +1069,10 @@ if [[ -n "$INPUT_DIR" ]]; then
         run_combined_bedgraph "$OUTPUT_ROOT" "$GROUPS_FILE" "$OUTPUT_ROOT/$DIR_BG"
     fi
     
-    # ncRNA Filtering Summary
-    if [[ "$FILTER_NCRNA" == "true" ]]; then
-        console_msg "\n[ncRNA FILTERING SUMMARY]"
-        printf "  %-25s %-15s %-15s %s\n" "Sample" "ncRNA Reads" "Total Reads" "% Filtered"
+    # Repeat Filtering Summary
+    if [[ "$FILTER_REPEAT" == "true" ]]; then
+        console_msg "\n[REPEAT FILTERING SUMMARY]"
+        printf "  %-25s %-15s %-15s %s\n" "Sample" "Repeat Reads" "Total Reads" "% Filtered"
         console_msg "  ----------------------------------------------------------------"
 
         for sample in "${SAMPLE_FILES[@]}"; do
@@ -1081,15 +1083,15 @@ if [[ -n "$INPUT_DIR" ]]; then
                 sample_name="${sample_name%.fastq}"
                 sample_name="${sample_name%.fq}"
                 # Read from aggregated location (sample_out was deleted after collection)
-                ncrna_stats="${OUTPUT_ROOT}/${DIR_OTHERS}/ncRNA_Mapping/${sample_name}_ncrna_stats.txt"
+                repeat_stats="${OUTPUT_ROOT}/${DIR_OTHERS}/Repeat_Mapping/${sample_name}_repeat_stats.txt"
 
-                if [[ -f "$ncrna_stats" ]]; then
-                    align_rate=$(grep "overall alignment rate" "$ncrna_stats" | grep -oE "[0-9]+\.[0-9]+%" || echo "N/A")
-                    total=$(grep "reads; of these:" "$ncrna_stats" | grep -oE "^[0-9]+" || echo "N/A")
-                    aligned=$(grep "aligned exactly 1 time" "$ncrna_stats" | grep -oE "^[[:space:]]*[0-9]+" | tr -d ' ' || echo "0")
-                    multi=$(grep "aligned >1 times" "$ncrna_stats" | grep -oE "^[[:space:]]*[0-9]+" | tr -d ' ' || echo "0")
-                    ncrna=$((aligned + multi))
-                    printf "  %-25s %-15s %-15s %s\n" "$sample_name" "$ncrna" "$total" "$align_rate"
+                if [[ -f "$repeat_stats" ]]; then
+                    align_rate=$(grep "overall alignment rate" "$repeat_stats" | grep -oE "[0-9]+\.[0-9]+%" || echo "N/A")
+                    total=$(grep "reads; of these:" "$repeat_stats" | grep -oE "^[0-9]+" || echo "N/A")
+                    aligned=$(grep "aligned exactly 1 time" "$repeat_stats" | grep -oE "^[[:space:]]*[0-9]+" | tr -d ' ' || echo "0")
+                    multi=$(grep "aligned >1 times" "$repeat_stats" | grep -oE "^[[:space:]]*[0-9]+" | tr -d ' ' || echo "0")
+                    repeat_reads=$((aligned + multi))
+                    printf "  %-25s %-15s %-15s %s\n" "$sample_name" "$repeat_reads" "$total" "$align_rate"
                 else
                     printf "  %-25s %-15s %-15s %s\n" "$sample_name" "-" "-" "SKIPPED"
                 fi
@@ -1353,7 +1355,7 @@ if [[ "$DEMUX" == "yes" ]]; then
         EXTRA_FLAGS="$EXTRA_FLAGS --parclip"
         if [[ -n "$PARCLIP_ADAPTERS" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --parclip-adapters $PARCLIP_ADAPTERS"; fi
     fi
-    if [[ "$FILTER_NCRNA" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --filter-ncrna"; fi
+    if [[ "$FILTER_REPEAT" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --filter-repeat"; fi
     # Pool was already deduped above; tell children to skip dedup
     EXTRA_FLAGS="$EXTRA_FLAGS --no-dedup"
 
@@ -1421,30 +1423,30 @@ if [[ "$DEMUX" == "yes" ]]; then
     # OUTPUT_ROOT is computed centrally at startup — no need to recompute here.
     
     DIR_DEMUX="0_DEMUX_FASTQ"
-    DIR_BAM="1_BAM"
-    DIR_BED="2_COLLAPSED_BED"
-    DIR_BG="3_BEDGRAPH"
-    DIR_PEAKS="4_PEAKS"
+    DIR_BAM="01_BAM"
+    DIR_BED="02_COLLAPSED_BED"
+    DIR_BG="03_BEDGRAPH"
+    DIR_PEAKS="04_PEAKS"
     # Folder numbering: 5=CTK (if on), next=Clink (if on), OTHERS bumps accordingly
     _ctk_on=false; _clink_on=false
     { [[ "$RUN_CIMS" == "true" ]] || [[ "$RUN_CITS" == "true" ]]; } && _ctk_on=true
     { [[ "$RUN_CLINK" == "true" ]] || [[ "$CLINK_DEDUP_ONLY" == "true" ]]; } && _clink_on=true
     if [[ "$_ctk_on" == "true" ]] && [[ "$_clink_on" == "true" ]]; then
-        if [[ "$RUN_CIMS" == "true" ]] && [[ "$RUN_CITS" == "true" ]]; then DIR_CTK="5_CTK_Analysis"
-        elif [[ "$RUN_CIMS" == "true" ]]; then DIR_CTK="5_CIMS_Analysis"
-        else DIR_CTK="5_CITS_Analysis"; fi
-        DIR_CLINK="6_Clink"; DIR_OTHERS="7_OTHERS"
+        if [[ "$RUN_CIMS" == "true" ]] && [[ "$RUN_CITS" == "true" ]]; then DIR_CTK="05_CTK_Analysis"
+        elif [[ "$RUN_CIMS" == "true" ]]; then DIR_CTK="05_CIMS_Analysis"
+        else DIR_CTK="05_CITS_Analysis"; fi
+        DIR_CLINK="06_Clink"; DIR_OTHERS="07_OTHERS"
     elif [[ "$_ctk_on" == "true" ]]; then
-        if [[ "$RUN_CIMS" == "true" ]] && [[ "$RUN_CITS" == "true" ]]; then DIR_CTK="5_CTK_Analysis"
-        elif [[ "$RUN_CIMS" == "true" ]]; then DIR_CTK="5_CIMS_Analysis"
-        else DIR_CTK="5_CITS_Analysis"; fi
-        DIR_CLINK=""; DIR_OTHERS="6_OTHERS"
+        if [[ "$RUN_CIMS" == "true" ]] && [[ "$RUN_CITS" == "true" ]]; then DIR_CTK="05_CTK_Analysis"
+        elif [[ "$RUN_CIMS" == "true" ]]; then DIR_CTK="05_CIMS_Analysis"
+        else DIR_CTK="05_CITS_Analysis"; fi
+        DIR_CLINK=""; DIR_OTHERS="06_OTHERS"
     elif [[ "$_clink_on" == "true" ]]; then
-        DIR_CTK=""; DIR_CLINK="5_Clink"; DIR_OTHERS="6_OTHERS"
+        DIR_CTK=""; DIR_CLINK="05_Clink"; DIR_OTHERS="06_OTHERS"
     else
-        DIR_CTK=""; DIR_CLINK=""; DIR_OTHERS="5_OTHERS"
+        DIR_CTK=""; DIR_CLINK=""; DIR_OTHERS="05_OTHERS"
     fi
-    DIR_REPORTS="REPORTS"
+    DIR_REPORTS="00_REPORTS"
     DIR_PEAK_LOGS="REPORTS/PEAK"
     DIR_IND_PEAK_LOGS="REPORTS/PEAK/INDIVIDUAL_SAMPLES"
     
@@ -1580,11 +1582,13 @@ if [[ "$DEMUX" == "yes" ]]; then
                     cp "$analysis_dir"/*SJ.out.tab "$OUTPUT_ROOT/$DIR_OTHERS/STAR_OUTPUT/" 2>/dev/null
                 fi
                 
-                # ncRNA Mapping outputs
-                if [[ -d "$analysis_dir/OTHERS/ncRNA_Mapping" ]]; then
-                    mkdir -p "$OUTPUT_ROOT/$DIR_OTHERS/ncRNA_Mapping"
-                    cp "$analysis_dir"/OTHERS/ncRNA_Mapping/*_ncrna_stats.txt "$OUTPUT_ROOT/$DIR_OTHERS/ncRNA_Mapping/" 2>/dev/null
-                    cp "$analysis_dir"/OTHERS/ncRNA_Mapping/*_ncrna.bam* "$OUTPUT_ROOT/$DIR_OTHERS/ncRNA_Mapping/" 2>/dev/null
+                # Repeat Mapping outputs
+                if [[ -d "$analysis_dir/OTHERS/Repeat_Mapping" ]]; then
+                    mkdir -p "$OUTPUT_ROOT/$DIR_OTHERS/Repeat_Mapping"
+                    cp "$analysis_dir"/OTHERS/Repeat_Mapping/*_repeat_stats.txt "$OUTPUT_ROOT/$DIR_OTHERS/Repeat_Mapping/" 2>/dev/null
+                    cp "$analysis_dir"/OTHERS/Repeat_Mapping/*_repeat.bam* "$OUTPUT_ROOT/$DIR_OTHERS/Repeat_Mapping/" 2>/dev/null
+                    cp "$analysis_dir"/OTHERS/Repeat_Mapping/*_repeat_elements.tsv "$OUTPUT_ROOT/$DIR_OTHERS/Repeat_Mapping/" 2>/dev/null
+                    cp "$analysis_dir"/OTHERS/Repeat_Mapping/*_repeat_families.tsv "$OUTPUT_ROOT/$DIR_OTHERS/Repeat_Mapping/" 2>/dev/null
                 fi
                 
                 # CTK Analysis outputs
@@ -1664,11 +1668,11 @@ if [[ "$DEMUX" == "yes" ]]; then
         if [[ "$RUN_CIMS" == "true" ]] || [[ "$RUN_CITS" == "true" ]]; then
             # Determine CTK folder name
             if [[ "$RUN_CIMS" == "true" ]] && [[ "$RUN_CITS" == "true" ]]; then
-                CTK_FOLDER="5_CTK_Analysis"
+                CTK_FOLDER="05_CTK_Analysis"
             elif [[ "$RUN_CIMS" == "true" ]]; then
-                CTK_FOLDER="5_CIMS_Analysis"
+                CTK_FOLDER="05_CIMS_Analysis"
             else
-                CTK_FOLDER="5_CITS_Analysis"
+                CTK_FOLDER="05_CITS_Analysis"
             fi
             PEAK_CMD="$PEAK_CMD --ctk-dir ./$CTK_FOLDER"
             
@@ -1726,24 +1730,24 @@ if [[ "$DEMUX" == "yes" ]]; then
               "$PEAKS_BED"
     fi
 
-    # ncRNA Filtering Summary (before cleanup so stats files still exist)
-    if [[ "$FILTER_NCRNA" == "true" ]]; then
-        console_msg "\n[ncRNA FILTERING SUMMARY]"
-        printf "  %-25s %-15s %-15s %s\n" "Sample" "ncRNA Reads" "Total Reads" "% Filtered"
+    # Repeat Filtering Summary (before cleanup so stats files still exist)
+    if [[ "$FILTER_REPEAT" == "true" ]]; then
+        console_msg "\n[REPEAT FILTERING SUMMARY]"
+        printf "  %-25s %-15s %-15s %s\n" "Sample" "Repeat Reads" "Total Reads" "% Filtered"
         console_msg "  ----------------------------------------------------------------"
 
         for f in "$DEMUX_DIR"/*.fastq; do
             [[ -f "$f" ]] || continue
             sample_name=$(basename "$f" .fastq)
             [[ "$sample_name" == "unknown" ]] && continue
-            ncrna_stats="${WORK_DIR}/${sample_name}_analysis/OTHERS/ncRNA_Mapping/${sample_name}_ncrna_stats.txt"
-            if [[ -f "$ncrna_stats" ]]; then
-                align_rate=$(grep "overall alignment rate" "$ncrna_stats" | grep -oE "[0-9]+\.[0-9]+%" || echo "N/A")
-                total=$(grep "reads; of these:" "$ncrna_stats" | grep -oE "^[0-9]+" || echo "N/A")
-                aligned=$(grep "aligned exactly 1 time" "$ncrna_stats" | grep -oE "^[[:space:]]*[0-9]+" | tr -d ' ' || echo "0")
-                multi=$(grep "aligned >1 times" "$ncrna_stats" | grep -oE "^[[:space:]]*[0-9]+" | tr -d ' ' || echo "0")
-                ncrna=$((aligned + multi))
-                printf "  %-25s %-15s %-15s %s\n" "$sample_name" "$ncrna" "$total" "$align_rate"
+            repeat_stats="${WORK_DIR}/${sample_name}_analysis/OTHERS/Repeat_Mapping/${sample_name}_repeat_stats.txt"
+            if [[ -f "$repeat_stats" ]]; then
+                align_rate=$(grep "overall alignment rate" "$repeat_stats" | grep -oE "[0-9]+\.[0-9]+%" || echo "N/A")
+                total=$(grep "reads; of these:" "$repeat_stats" | grep -oE "^[0-9]+" || echo "N/A")
+                aligned=$(grep "aligned exactly 1 time" "$repeat_stats" | grep -oE "^[[:space:]]*[0-9]+" | tr -d ' ' || echo "0")
+                multi=$(grep "aligned >1 times" "$repeat_stats" | grep -oE "^[[:space:]]*[0-9]+" | tr -d ' ' || echo "0")
+                repeat_reads=$((aligned + multi))
+                printf "  %-25s %-15s %-15s %s\n" "$sample_name" "$repeat_reads" "$total" "$align_rate"
             else
                 printf "  %-25s %-15s %-15s %s\n" "$sample_name" "-" "-" "SKIPPED"
             fi
@@ -1797,18 +1801,18 @@ if [[ "$DEMUX" == "yes" ]]; then
     if [[ "$KEEP_INTERMEDIATE" == "yes" ]]; then
         console_msg "  ├── 0_DEMUX_FASTQ/"
     fi
-    console_msg "  ├── 1_BAM/"
-    console_msg "  ├── 2_COLLAPSED_BED/"
-    console_msg "  ├── 3_BEDGRAPH/"
-    console_msg "  ├── 4_PEAKS/"
+    console_msg "  ├── ${DIR_REPORTS}/"
+    console_msg "  ├── ${DIR_BAM}/"
+    console_msg "  ├── ${DIR_BED}/"
+    console_msg "  ├── ${DIR_BG}/"
+    console_msg "  ├── ${DIR_PEAKS}/"
     if [[ -n "$DIR_CTK" ]]; then
         console_msg "  ├── ${DIR_CTK}/"
     fi
     if [[ -n "$DIR_CLINK" ]]; then
         console_msg "  ├── ${DIR_CLINK}/"
     fi
-    console_msg "  ├── ${DIR_OTHERS}/"
-    console_msg "  └── REPORTS/"
+    console_msg "  └── ${DIR_OTHERS}/"
 
     console_msg "\n[SUCCESS] Pipeline finished."
     
@@ -1854,7 +1858,7 @@ if [[ "$BASENAME" == "$INPUT_FILE" ]]; then
     BASENAME=$(basename "$INPUT_FILE" .fq.gz)
 fi
 if [[ -n "$EXP_ID" ]]; then
-    BASENAME="$EXP_ID"
+    BASENAME="$(basename "$EXP_ID")"
 fi
 
 # ── Deduplication ────────────────────────────────────────────────────────────────
@@ -1930,19 +1934,23 @@ if [[ -n "$ECLIP_UMI_LEN" ]] && [[ "$ECLIP_UMI_LEN" -gt 0 ]]; then
     log_info "UMI length updated from eCLIP preprocessing: ${UMI_LEN}nt"
 fi
 
-# 1b. ncRNA Pre-filtering (if enabled and index exists)
+# 1b. Repeat Element Pre-filtering (if enabled and index exists)
 CLEANED_FASTQ="${BASENAME}_cleaned.fastq"
-if [[ "$FILTER_NCRNA" == "true" ]]; then
-    NCRNA_INDEX_DIR=$(check_ncrna_index "$GENOME_INDEX")
-    if [[ -n "$NCRNA_INDEX_DIR" ]]; then
-        NCRNA_OUTPUT_DIR="OTHERS/ncRNA_Mapping"
-        NCRNA_UNMAPPED="${BASENAME}_ncrna_filtered.fastq"
-        run_ncrna_filter "$CLEANED_FASTQ" "$NCRNA_UNMAPPED" "$NCRNA_OUTPUT_DIR" "$NCRNA_INDEX_DIR" "$THREADS" "$BASENAME"
-        # Use filtered reads for genome mapping
-        CLEANED_FASTQ="$NCRNA_UNMAPPED"
+if [[ "$FILTER_REPEAT" == "true" ]]; then
+    REPEAT_INDEX_DIR=$(check_repeat_index "$GENOME_INDEX")
+    if [[ -n "$REPEAT_INDEX_DIR" ]]; then
+        REPEAT_OUTPUT_DIR="OTHERS/Repeat_Mapping"
+        REPEAT_UNMAPPED="${BASENAME}_repeat_filtered.fastq"
+        run_repeat_filter "$CLEANED_FASTQ" "$REPEAT_UNMAPPED" "$REPEAT_OUTPUT_DIR" "$REPEAT_INDEX_DIR" "$THREADS" "$BASENAME"
+        run_repeat_quantify \
+            "${REPEAT_OUTPUT_DIR}/${BASENAME}_repeat.bam" \
+            "${REPEAT_OUTPUT_DIR}/${BASENAME}_repeat_stats.txt" \
+            "$REPEAT_OUTPUT_DIR" "$BASENAME"
+        # Use repeat-filtered reads for genome mapping
+        CLEANED_FASTQ="$REPEAT_UNMAPPED"
     else
-        log_warning "ncRNA index not found in $GENOME_INDEX or $GENOME_INDEX/ncRNA. Skipping ncRNA pre-filtering."
-        log_warning "To build ncRNA index, see README.md for instructions."
+        log_warning "Repeat index not found in $GENOME_INDEX or $GENOME_INDEX/Repeat. Skipping repeat pre-filtering."
+        log_warning "To build repeat index, see README.md for instructions."
     fi
 fi
 
@@ -2015,7 +2023,7 @@ if [[ "$RUN_CIMS" == "true" ]] || [[ "$RUN_CITS" == "true" ]]; then
     fi
     
     # Find reference FASTA for motif analysis
-    # Priority: 0) --genome-fasta flag, 1) *genome*.fa in index, 2) *primary*.fa, 3) any .fa excluding *ncrna*
+    # Priority: 0) --genome-fasta flag, 1) *genome*.fa in index, 2) *primary*.fa, 3) any .fa excluding repeat sequences
     ref_fasta=""
     if [[ -n "${GENOME_FASTA:-}" ]] && [[ -f "$GENOME_FASTA" ]]; then
         ref_fasta="$GENOME_FASTA"
@@ -2028,8 +2036,8 @@ if [[ "$RUN_CIMS" == "true" ]] || [[ "$RUN_CITS" == "true" ]]; then
         ref_fasta=$(find "$GENOME_INDEX" -maxdepth 1 \( -name "*primary*.fa" -o -name "*primary*.fasta" \) 2>/dev/null | head -n 1)
     fi
     if [[ -z "$ref_fasta" ]]; then
-        # Fallback: any .fa/.fasta excluding ncrna
-        ref_fasta=$(find "$GENOME_INDEX" -maxdepth 1 \( -name "*.fa" -o -name "*.fasta" \) ! -name "*ncrna*" 2>/dev/null | head -n 1)
+        # Fallback: any .fa/.fasta excluding repeat sequences
+        ref_fasta=$(find "$GENOME_INDEX" -maxdepth 1 \( -name "*.fa" -o -name "*.fasta" \) ! -name "*repeat*" 2>/dev/null | head -n 1)
     fi
     if [[ -z "$ref_fasta" ]]; then
         log_warning "Reference FASTA not found. Motif analysis may be skipped."
@@ -2102,16 +2110,18 @@ if [[ "$CHILD_MODE" != "true" ]]; then
     SINGLE_OUTPUT_ROOT="$OUTPUT_ROOT"
     mkdir -p "$SINGLE_OUTPUT_ROOT"
 
-    SF_DIR_BAM="1_BAM"
-    SF_DIR_BED="2_COLLAPSED_BED"
-    SF_DIR_BG="3_BEDGRAPH"
-    SF_DIR_PEAKS="4_PEAKS"
-    if [[ "$RUN_CIMS" == "true" ]] || [[ "$RUN_CITS" == "true" ]]; then
-        SF_DIR_OTHERS="6_OTHERS"
+    SF_DIR_BAM="01_BAM"
+    SF_DIR_BED="02_COLLAPSED_BED"
+    SF_DIR_BG="03_BEDGRAPH"
+    SF_DIR_PEAKS="04_PEAKS"
+    if ([[ "$RUN_CIMS" == "true" ]] || [[ "$RUN_CITS" == "true" ]]) && [[ "$RUN_CLINK" == "true" ]]; then
+        SF_DIR_OTHERS="07_OTHERS"
+    elif [[ "$RUN_CIMS" == "true" ]] || [[ "$RUN_CITS" == "true" ]] || [[ "$RUN_CLINK" == "true" ]]; then
+        SF_DIR_OTHERS="06_OTHERS"
     else
-        SF_DIR_OTHERS="5_OTHERS"
+        SF_DIR_OTHERS="05_OTHERS"
     fi
-    SF_DIR_REPORTS="REPORTS"
+    SF_DIR_REPORTS="00_REPORTS"
 
     mkdir -p "$SINGLE_OUTPUT_ROOT/$SF_DIR_BAM"
     mkdir -p "$SINGLE_OUTPUT_ROOT/$SF_DIR_BED"
@@ -2188,12 +2198,12 @@ if [[ "$CHILD_MODE" != "true" ]]; then
     for ctk_folder in "CTK_Analysis" "CIMS_Analysis" "CITS_Analysis"; do
         if [[ -d "$ctk_folder" ]]; then
             CTK_OUT_DIR=""
-            if [[ "$ctk_folder" == "CTK_Analysis" ]]; then CTK_OUT_DIR="5_CTK_Analysis"; fi
-            if [[ "$ctk_folder" == "CIMS_Analysis" ]]; then CTK_OUT_DIR="5_CIMS_Analysis"; fi
-            if [[ "$ctk_folder" == "CITS_Analysis" ]]; then CTK_OUT_DIR="5_CITS_Analysis"; fi
+            if [[ "$ctk_folder" == "CTK_Analysis" ]]; then CTK_OUT_DIR="05_CTK_Analysis"; fi
+            if [[ "$ctk_folder" == "CIMS_Analysis" ]]; then CTK_OUT_DIR="05_CIMS_Analysis"; fi
+            if [[ "$ctk_folder" == "CITS_Analysis" ]]; then CTK_OUT_DIR="05_CITS_Analysis"; fi
             # If Clink is also running, bump CTK to 5 and Clink to 6
             if [[ "$RUN_CLINK" == "true" ]]; then
-                CLINK_OUT_DIR="6_Clink"
+                CLINK_OUT_DIR="06_Clink"
             else
                 CLINK_OUT_DIR=""
             fi
@@ -2205,22 +2215,22 @@ if [[ "$CHILD_MODE" != "true" ]]; then
 
     # Clink Analysis output
     if [[ -d "Clink_Analysis" ]]; then
-        # Determine folder number: 5_Clink if no CTK, 6_Clink if CTK also ran
-        local _clink_dest
+        # Determine folder number: 05_Clink if no CTK, 06_Clink if CTK also ran
+        _clink_dest=""
         if [[ -n "${SF_DIR_CTK:-}" ]]; then
-            _clink_dest="6_Clink"
+            _clink_dest="06_Clink"
         else
-            _clink_dest="5_Clink"
+            _clink_dest="05_Clink"
         fi
         mkdir -p "$SINGLE_OUTPUT_ROOT/$_clink_dest/$BASENAME"
         cp -r "Clink_Analysis/"* "$SINGLE_OUTPUT_ROOT/$_clink_dest/$BASENAME/" 2>/dev/null
         SF_DIR_CLINK="$_clink_dest"
     fi
 
-    # ncRNA mapping output
-    if [[ -d "OTHERS/ncRNA_Mapping" ]]; then
-        mkdir -p "$SINGLE_OUTPUT_ROOT/$SF_DIR_OTHERS/ncRNA_Mapping"
-        mv "OTHERS/ncRNA_Mapping/"* "$SINGLE_OUTPUT_ROOT/$SF_DIR_OTHERS/ncRNA_Mapping/" 2>/dev/null
+    # Repeat mapping output
+    if [[ -d "OTHERS/Repeat_Mapping" ]]; then
+        mkdir -p "$SINGLE_OUTPUT_ROOT/$SF_DIR_OTHERS/Repeat_Mapping"
+        mv "OTHERS/Repeat_Mapping/"* "$SINGLE_OUTPUT_ROOT/$SF_DIR_OTHERS/Repeat_Mapping/" 2>/dev/null
     fi
 
     # Reports: fastp, aligner logs, analysis log
@@ -2289,19 +2299,19 @@ S=$((DURATION%60))
 log_info "End Time: $(date '+%Y-%m-%d %H:%M:%S')"
 log_info "Total Duration: ${H}h ${M}m ${S}s"
 
-# ncRNA Filtering Summary (non-child mode, single-file only)
-if [[ "$CHILD_MODE" != "true" ]] && [[ "$FILTER_NCRNA" == "true" ]]; then
-    ncrna_stats_sf="${SINGLE_OUTPUT_ROOT}/${SF_DIR_OTHERS}/ncRNA_Mapping/${BASENAME}_ncrna_stats.txt"
-    if [[ -f "$ncrna_stats_sf" ]]; then
-        console_msg "\n[ncRNA FILTERING SUMMARY]"
-        printf "  %-25s %-15s %-15s %s\n" "Sample" "ncRNA Reads" "Total Reads" "% Filtered"
+# Repeat Filtering Summary (non-child mode, single-file only)
+if [[ "$CHILD_MODE" != "true" ]] && [[ "$FILTER_REPEAT" == "true" ]]; then
+    repeat_stats_sf="${SINGLE_OUTPUT_ROOT}/${SF_DIR_OTHERS}/Repeat_Mapping/${BASENAME}_repeat_stats.txt"
+    if [[ -f "$repeat_stats_sf" ]]; then
+        console_msg "\n[REPEAT FILTERING SUMMARY]"
+        printf "  %-25s %-15s %-15s %s\n" "Sample" "Repeat Reads" "Total Reads" "% Filtered"
         console_msg "  ----------------------------------------------------------------"
-        align_rate=$(grep "overall alignment rate" "$ncrna_stats_sf" | grep -oE "[0-9]+\.[0-9]+%" || echo "N/A")
-        total=$(grep "reads; of these:" "$ncrna_stats_sf" | grep -oE "^[0-9]+" || echo "N/A")
-        aligned=$(grep "aligned exactly 1 time" "$ncrna_stats_sf" | grep -oE "^[[:space:]]*[0-9]+" | tr -d ' ' || echo "0")
-        multi=$(grep "aligned >1 times" "$ncrna_stats_sf" | grep -oE "^[[:space:]]*[0-9]+" | tr -d ' ' || echo "0")
-        ncrna_reads=$(( ${aligned:-0} + ${multi:-0} ))
-        printf "  %-25s %-15s %-15s %s\n" "$BASENAME" "$ncrna_reads" "${total:-N/A}" "${align_rate:-N/A}"
+        align_rate=$(grep "overall alignment rate" "$repeat_stats_sf" | grep -oE "[0-9]+\.[0-9]+%" || echo "N/A")
+        total=$(grep "reads; of these:" "$repeat_stats_sf" | grep -oE "^[0-9]+" || echo "N/A")
+        aligned=$(grep "aligned exactly 1 time" "$repeat_stats_sf" | grep -oE "^[[:space:]]*[0-9]+" | tr -d ' ' || echo "0")
+        multi=$(grep "aligned >1 times" "$repeat_stats_sf" | grep -oE "^[[:space:]]*[0-9]+" | tr -d ' ' || echo "0")
+        repeat_reads=$(( ${aligned:-0} + ${multi:-0} ))
+        printf "  %-25s %-15s %-15s %s\n" "$BASENAME" "$repeat_reads" "${total:-N/A}" "${align_rate:-N/A}"
         console_msg "  ----------------------------------------------------------------"
     fi
 fi
@@ -2324,18 +2334,18 @@ fi
 if [[ "$CHILD_MODE" != "true" ]]; then
     console_msg "\n[OUTPUT]"
     console_msg "  All results saved to: $SINGLE_OUTPUT_ROOT/"
-    console_msg "  ├── 1_BAM/"
-    console_msg "  ├── 2_COLLAPSED_BED/"
-    console_msg "  ├── 3_BEDGRAPH/"
-    console_msg "  ├── 4_PEAKS/"
+    console_msg "  ├── ${SF_DIR_REPORTS}/"
+    console_msg "  ├── ${SF_DIR_BAM}/"
+    console_msg "  ├── ${SF_DIR_BED}/"
+    console_msg "  ├── ${SF_DIR_BG}/"
+    console_msg "  ├── ${SF_DIR_PEAKS}/"
     if [[ -n "${SF_DIR_CTK:-}" ]]; then
         console_msg "  ├── ${SF_DIR_CTK}/"
     fi
     if [[ -n "${SF_DIR_CLINK:-}" ]]; then
         console_msg "  ├── ${SF_DIR_CLINK}/"
     fi
-    console_msg "  ├── ${SF_DIR_OTHERS}/"
-    console_msg "  └── REPORTS/"
+    console_msg "  └── ${SF_DIR_OTHERS}/"
 
     console_msg "\n[SUCCESS] Pipeline finished."
     console_msg "End Time: $(date '+%Y-%m-%d %H:%M:%S')"
