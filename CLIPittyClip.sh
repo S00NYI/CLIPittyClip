@@ -1179,45 +1179,43 @@ if [[ -n "$INPUT_DIR" ]]; then
         fi
     fi
 
-    # Final Summary (print BEFORE moving logs so messages get captured)
+    # Add enhanced columns to combined peak matrix (before [COMPLETE] so log order is correct)
+    PEAK_MATRIX="$OUTPUT_ROOT/$DIR_PEAKS/COMBINED_PEAKS/COMBINED_PEAK_MATRIX.txt"
+    PEAKS_BED="$OUTPUT_ROOT/$DIR_PEAKS/COMBINED_PEAKS/peaks_Sorted.bed"
+
+    if [[ -f "$PEAK_MATRIX" && -f "$PEAKS_BED" ]]; then
+        console_msg "  > Adding enhanced matrix columns to combined peak matrix..."
+        add_matrix_columns "$PEAK_MATRIX" "$PEAKS_BED" \
+            "$OUTPUT_ROOT/$DIR_BG" "$OUTPUT_ROOT/$DIR_BG/scale_factors.tsv" \
+            "$GROUPS_FILE"
+        console_msg "  > Enhanced matrix: COMBINED_PEAKS/COMBINED_PEAK_MATRIX.txt"
+
+        # Promote sorted peak bed to clearly named FINAL target
+        mv "$PEAKS_BED" "$OUTPUT_ROOT/$DIR_PEAKS/COMBINED_PEAKS/FINAL_COMBINED_PEAKS.bed" 2>/dev/null
+
+        # Cleanup intermediate peak files to save disk space
+        rm -f "$OUTPUT_ROOT/$DIR_PEAKS/COMBINED_PEAKS/COMBINED.bed" \
+              "$OUTPUT_ROOT/$DIR_PEAKS/COMBINED_PEAKS/peaks.bed"
+    fi
+
+    # Final Summary
     PIPELINE_END=$(date +%s)
     DURATION=$((PIPELINE_END - PIPELINE_START))
     H=$((DURATION/3600))
     M=$(( (DURATION%3600)/60 ))
     S=$((DURATION%60))
-    
+
     console_msg "\n[COMPLETE]"
     console_msg "  > Duration: ${H}h ${M}m ${S}s"
     console_msg "  > Output: $OUTPUT_ROOT/"
     console_msg "  > Console log: $TEMP_CONSOLE_LOG"
-    
 
-    
     # Remove sampled input if it was created
     if [[ -n "$SAMPLED_INPUT" && -f "$SAMPLED_INPUT" ]]; then rm -f "$SAMPLED_INPUT"; fi
 
     # Remove CTK temp dirs/files that may have landed in OUTPUT_ROOT
     rm -rf "${OUTPUT_ROOT}"/CITS.pl_* "${OUTPUT_ROOT}"/tag2profile.pl_* 2>/dev/null
     rm -f "${OUTPUT_ROOT}"/*.tmp 2>/dev/null
-
-    # Logs are already at OUTPUT_ROOT/REPORTS/ — created there at startup.
-    # console_output.log is live-captured by tee into that location.
-    PEAK_MATRIX="$OUTPUT_ROOT/$DIR_PEAKS/COMBINED_PEAKS/COMBINED_PEAK_MATRIX.txt"
-    PEAKS_BED="$OUTPUT_ROOT/$DIR_PEAKS/COMBINED_PEAKS/peaks_Sorted.bed"
-    
-    if [[ -f "$PEAK_MATRIX" && -f "$PEAKS_BED" ]]; then
-        console_msg "  > Adding enhanced matrix columns..."
-        add_matrix_columns "$PEAK_MATRIX" "$PEAKS_BED" \
-            "$OUTPUT_ROOT/$DIR_BG" "$OUTPUT_ROOT/$DIR_BG/scale_factors.tsv" \
-            "$GROUPS_FILE"
-        
-        # Promote sorted peak bed to clearly named FINAL target
-        mv "$PEAKS_BED" "$OUTPUT_ROOT/$DIR_PEAKS/COMBINED_PEAKS/FINAL_COMBINED_PEAKS.bed" 2>/dev/null
-        
-        # Cleanup intermediate peak files to save disk space
-        rm -f "$OUTPUT_ROOT/$DIR_PEAKS/COMBINED_PEAKS/COMBINED.bed" \
-              "$OUTPUT_ROOT/$DIR_PEAKS/COMBINED_PEAKS/peaks.bed"
-    fi
 
     send_notification "CLIPittyClip Batch" "Analysis complete for $total_samples samples in $(basename "$INPUT_DIR")"
     exit 0
