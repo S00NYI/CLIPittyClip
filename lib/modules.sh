@@ -3100,6 +3100,42 @@ run_clink_cits() {
 }
 
 # ---------------------------------------------------------------------------
+# run_clink_extract_crosslinks — export all crosslink positions from pileup NPZ
+#
+# Writes a BED6 of every position with truncations >= min_truncations (default 1),
+# with no significance filtering. Required by tools such as PEKA.
+#
+# Args:
+#   $1  pileup .npz
+#   $2  output prefix
+#   $3  min truncations (default 1)
+# ---------------------------------------------------------------------------
+run_clink_extract_crosslinks() {
+    local npz_in="$1"
+    local prefix="$2"
+    local min_trunc="${3:-1}"
+    local clink_dir
+    clink_dir=$(_clink_dir)
+
+    log_info "Clink extract_crosslinks: exporting all crosslink positions"
+
+    _clink_exec python3 "$clink_dir/extract_crosslinks.py" \
+        --pileup           "$npz_in" \
+        --prefix           "$prefix" \
+        --min-truncations  "$min_trunc"
+
+    if [[ $? -ne 0 ]]; then
+        log_error "Clink extract_crosslinks failed. Check log for details."
+        return 1
+    fi
+
+    local out_bed="${prefix}_all_crosslinks.bed"
+    local n=0
+    [[ -f "$out_bed" ]] && n=$(grep -c '' "$out_bed" 2>/dev/null || echo 0)
+    log_info "Clink extract_crosslinks complete: ${n} sites → $out_bed"
+}
+
+# ---------------------------------------------------------------------------
 # run_clink_cims — deletion + substitution site calling from NPZ
 #
 # Args:
@@ -3188,6 +3224,9 @@ run_clink_full() {
 
     update_status "Clink pileup"
     run_clink_pileup "$dedup_bam" "$npz" "$threads" || return 1
+
+    update_status "Clink crosslinks"
+    run_clink_extract_crosslinks "$npz" "$prefix" || true
 
     if [[ "$run_cits" == "true" ]]; then
         update_status "Clink CITS"
@@ -3337,6 +3376,10 @@ run_group_clink_analysis() {
         fi
 
         local prefix="$group_dir/${group}"
+
+        # --- All crosslinks (unfiltered, for PEKA and similar tools) ---
+        update_status "Clink group $group crosslinks"
+        run_clink_extract_crosslinks "$npz" "$prefix" || true
 
         # --- CITS ---
         if [[ "$run_cits" == "true" ]]; then
