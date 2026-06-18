@@ -1059,16 +1059,19 @@ if [[ -n "$INPUT_DIR" ]]; then
 
     # Per-sample crosslink bigWig generation (--xl-bigwig)
     if [[ "$XL_BIGWIG" == "true" ]] && [[ -n "$DIR_CLINK" ]]; then
-        local _chrom_sizes="$OUTPUT_ROOT/$DIR_BG/chrom.sizes"
+        _chrom_sizes="$OUTPUT_ROOT/$DIR_BG/chrom.sizes"
+        # Fallback: look for any .sizes file in the STAR index directory
+        if [[ ! -f "$_chrom_sizes" ]] && [[ -n "$GENOME_INDEX" ]]; then
+            _chrom_sizes="$(find "$GENOME_INDEX" -maxdepth 1 -name "*.sizes" 2>/dev/null | head -n 1)"
+        fi
         if [[ -f "$_chrom_sizes" ]]; then
             console_msg "  > Generating per-sample crosslink bigWigs..."
             mkdir -p "$OUTPUT_ROOT/$DIR_BG/BigWig"
             for _sample_dir in "$OUTPUT_ROOT/$DIR_CLINK"/*/; do
                 [[ ! -d "$_sample_dir" ]] && continue
-                local _sname
                 _sname="$(basename "$_sample_dir")"
                 [[ "$_sname" == GROUP_* ]] && continue
-                local _sbam="$_sample_dir/${_sname}_dedup.bam"
+                _sbam="$_sample_dir/${_sname}_dedup.bam"
                 if [[ -f "$_sbam" ]]; then
                     run_crosslink_bigwig "$_sbam" "$OUTPUT_ROOT/$DIR_BG/BigWig" \
                         "$_sname" "$_chrom_sizes"
@@ -1076,7 +1079,7 @@ if [[ -n "$INPUT_DIR" ]]; then
             done
             console_msg "  > Crosslink bigWigs → $OUTPUT_ROOT/$DIR_BG/BigWig/"
         else
-            log_warning "--xl-bigwig: chrom.sizes not found at $_chrom_sizes — skipping bigWig generation"
+            log_warning "--xl-bigwig: chrom.sizes not found in output or index dir — skipping bigWig generation"
         fi
     fi
 
@@ -1667,16 +1670,19 @@ if [[ "$DEMUX" == "yes" ]]; then
 
     # Per-sample crosslink bigWig generation (--xl-bigwig)
     if [[ "$XL_BIGWIG" == "true" ]] && [[ -n "$DIR_CLINK" ]]; then
-        local _chrom_sizes="$OUTPUT_ROOT/$DIR_BG/chrom.sizes"
+        _chrom_sizes="$OUTPUT_ROOT/$DIR_BG/chrom.sizes"
+        # Fallback: look for any .sizes file in the STAR index directory
+        if [[ ! -f "$_chrom_sizes" ]] && [[ -n "$GENOME_INDEX" ]]; then
+            _chrom_sizes="$(find "$GENOME_INDEX" -maxdepth 1 -name "*.sizes" 2>/dev/null | head -n 1)"
+        fi
         if [[ -f "$_chrom_sizes" ]]; then
             console_msg "  > Generating per-sample crosslink bigWigs..."
             mkdir -p "$OUTPUT_ROOT/$DIR_BG/BigWig"
             for _sample_dir in "$OUTPUT_ROOT/$DIR_CLINK"/*/; do
                 [[ ! -d "$_sample_dir" ]] && continue
-                local _sname
                 _sname="$(basename "$_sample_dir")"
                 [[ "$_sname" == GROUP_* ]] && continue
-                local _sbam="$_sample_dir/${_sname}_dedup.bam"
+                _sbam="$_sample_dir/${_sname}_dedup.bam"
                 if [[ -f "$_sbam" ]]; then
                     run_crosslink_bigwig "$_sbam" "$OUTPUT_ROOT/$DIR_BG/BigWig" \
                         "$_sname" "$_chrom_sizes"
@@ -1684,7 +1690,7 @@ if [[ "$DEMUX" == "yes" ]]; then
             done
             console_msg "  > Crosslink bigWigs → $OUTPUT_ROOT/$DIR_BG/BigWig/"
         else
-            log_warning "--xl-bigwig: chrom.sizes not found — skipping bigWig generation"
+            log_warning "--xl-bigwig: chrom.sizes not found in output or index dir — skipping bigWig generation"
         fi
     fi
 

@@ -3141,10 +3141,7 @@ run_crosslink_bigwig() {
 
     # Extract 5' crosslink position per read, preserve strand
     bedtools bamtobed -i "$bam_in" 2>/dev/null \
-      | awk 'BEGIN{OFS="\t"} {
-            if ($6 == "+") print $1, $2,   $2+1, ".", 1, "+"
-            else            print $1, $3-1, $3,   ".", 1, "-"
-        }' \
+      | awk 'BEGIN{OFS="\t"} $6=="+" {print $1,$2,$2+1,".",1,"+"} $6=="-" {print $1,$3-1,$3,".",1,"-"}' \
       | sort -k1,1 -k2,2n > "$tmp_xl"
 
     # Plus strand → bedgraph → bigWig
