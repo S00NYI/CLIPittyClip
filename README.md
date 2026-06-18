@@ -51,7 +51,7 @@ CLIPittyClip runs the complete CLIP-seq stack in a single command. All three sta
 ### 1. Clone
 
 ```bash
-git clone -b v3.3 https://github.com/LunaRNALab/CLIPittyClip.git
+git clone https://github.com/LunaRNALab/CLIPittyClip.git
 cd CLIPittyClip
 ```
 
@@ -67,7 +67,7 @@ cd CLIPittyClip
 ./install_linux.sh --env clipittyclip --tools-dir ~/Tools
 ```
 
-The scripts create a `clipittyclip` conda environment with all dependencies: STAR, Bowtie2, samtools, fastp, CTK, HOMER, Perl modules (Math::CDF, Bio::SeqIO), and Python packages (pysam, numpy, scipy, umi_tools).
+The scripts create a `clipittyclip` conda environment with all dependencies: STAR, Bowtie2, samtools, fastp, bedtools, ucsc-bedgraphtobigwig, CTK, HOMER, Perl modules (Math::CDF, Bio::SeqIO), and Python packages (pysam, numpy, scipy, umi_tools).
 
 | Option | Default | Description |
 |--------|---------|-------------|
