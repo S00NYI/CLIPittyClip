@@ -108,6 +108,8 @@ function show_usage {
     echo "  --ctk-group              Enable group CTK analysis (pools samples in groups.txt)
   --group-xlsite           Group crosslink site analysis for CTK + Clink (requires -g).
                              Implies --ctk-group for CTK; also runs group Clink CITS/CIMS."
+    echo "  --xl-bigwig              Generate per-sample crosslink-site bigWig files (03_COVERAGE/BigWig/)."
+    echo "                             Requires bedGraphToBigWig in PATH. Suitable for BindingSiteFinder."
     echo "  -s, --sample <int>       Test mode: process only first N reads"
     echo "  --filter-repeat          Enable repeat element pre-filtering (off by default)"
     echo ""
@@ -155,6 +157,7 @@ FILTER_CHR="true"   # Filter to canonical chromosomes (chr1-22, X, Y, M) - defau
 DEMUX_MISMATCHES="1"   # Default for barcode demultiplexing
 ALIGN_MISMATCHES="2"   # Default for STAR --outFilterMismatchNmax
 GENOME_FASTA=""        # Path to reference FASTA (optional; strongly recommended for CIMS)
+XL_BIGWIG="false"      # --xl-bigwig: generate per-sample crosslink-site bigWigs (for BindingSiteFinder etc.)
 
 # Clink Parameters (with defaults)
 CLINK_UMI_LEN="-1"     # UMI length for umi_tools (-1 = auto-detect from read names)
@@ -238,6 +241,7 @@ while [[ $# -gt 0 ]]; do
         --demux-mismatches) DEMUX_MISMATCHES="$2"; shift 2 ;;
         --align-mismatches) ALIGN_MISMATCHES="$2"; shift 2 ;;
         --genome-fasta) GENOME_FASTA="$2"; shift 2 ;;
+        --xl-bigwig) XL_BIGWIG="true"; shift ;;
         --no-dedup) DEDUP_MODE="false"; shift ;;
         --filter-repeat) FILTER_REPEAT="true"; shift ;;
         --eclip) ECLIP_MODE="$2"; shift 2 ;;
@@ -863,10 +867,11 @@ if [[ -n "$INPUT_DIR" ]]; then
     done
     
     # Aggregation - OUTPUT_ROOT was computed centrally at startup.
-    
+
     DIR_BAM="01_BAM"
     DIR_BED="02_COLLAPSED_BED"
-    DIR_BG="03_BEDGRAPH"
+    DIR_BG="03_COVERAGE"
+
     DIR_PEAKS="04_PEAKS"
     # Folder numbering: 5=CTK (if on), next=Clink (if on), OTHERS bumps accordingly
     _ctk_on=false; _clink_on=false
@@ -1050,6 +1055,29 @@ if [[ -n "$INPUT_DIR" ]]; then
         run_group_clink_analysis "$GROUPS_FILE" "$OUTPUT_ROOT/$DIR_CLINK" "$THREADS" \
             "$CLINK_RUN_CITS" "$CLINK_RUN_CIMS" \
             "$CLINK_MIN_COV" "$CLINK_MIN_FRAC" "$CLINK_FDR"
+    fi
+
+    # Per-sample crosslink bigWig generation (--xl-bigwig)
+    if [[ "$XL_BIGWIG" == "true" ]] && [[ -n "$DIR_CLINK" ]]; then
+        local _chrom_sizes="$OUTPUT_ROOT/$DIR_BG/chrom.sizes"
+        if [[ -f "$_chrom_sizes" ]]; then
+            console_msg "  > Generating per-sample crosslink bigWigs..."
+            mkdir -p "$OUTPUT_ROOT/$DIR_BG/BigWig"
+            for _sample_dir in "$OUTPUT_ROOT/$DIR_CLINK"/*/; do
+                [[ ! -d "$_sample_dir" ]] && continue
+                local _sname
+                _sname="$(basename "$_sample_dir")"
+                [[ "$_sname" == GROUP_* ]] && continue
+                local _sbam="$_sample_dir/${_sname}_dedup.bam"
+                if [[ -f "$_sbam" ]]; then
+                    run_crosslink_bigwig "$_sbam" "$OUTPUT_ROOT/$DIR_BG/BigWig" \
+                        "$_sname" "$_chrom_sizes"
+                fi
+            done
+            console_msg "  > Crosslink bigWigs → $OUTPUT_ROOT/$DIR_BG/BigWig/"
+        else
+            log_warning "--xl-bigwig: chrom.sizes not found at $_chrom_sizes — skipping bigWig generation"
+        fi
     fi
 
     # Batch WORK_DIR cleanup
@@ -1423,7 +1451,8 @@ if [[ "$DEMUX" == "yes" ]]; then
     DIR_DEMUX="0_DEMUX_FASTQ"
     DIR_BAM="01_BAM"
     DIR_BED="02_COLLAPSED_BED"
-    DIR_BG="03_BEDGRAPH"
+    DIR_BG="03_COVERAGE"
+
     DIR_PEAKS="04_PEAKS"
     # Folder numbering: 5=CTK (if on), next=Clink (if on), OTHERS bumps accordingly
     _ctk_on=false; _clink_on=false
@@ -1591,7 +1620,7 @@ if [[ "$DEMUX" == "yes" ]]; then
                 
                 # CTK Analysis outputs
                 if [[ "$RUN_CIMS" == "true" ]] || [[ "$RUN_CITS" == "true" ]]; then
-                    CTK_DEST="$OUTPUT_ROOT/5_CTK_Analysis"
+                    CTK_DEST="$OUTPUT_ROOT/$DIR_CTK"
                     mkdir -p "$CTK_DEST"
                     for ctk_dir in CTK_Analysis CIMS_Analysis CITS_Analysis; do
                         if [[ -d "$analysis_dir/$ctk_dir" ]]; then
@@ -1635,7 +1664,30 @@ if [[ "$DEMUX" == "yes" ]]; then
             "$CLINK_RUN_CITS" "$CLINK_RUN_CIMS" \
             "$CLINK_MIN_COV" "$CLINK_MIN_FRAC" "$CLINK_FDR"
     fi
-    
+
+    # Per-sample crosslink bigWig generation (--xl-bigwig)
+    if [[ "$XL_BIGWIG" == "true" ]] && [[ -n "$DIR_CLINK" ]]; then
+        local _chrom_sizes="$OUTPUT_ROOT/$DIR_BG/chrom.sizes"
+        if [[ -f "$_chrom_sizes" ]]; then
+            console_msg "  > Generating per-sample crosslink bigWigs..."
+            mkdir -p "$OUTPUT_ROOT/$DIR_BG/BigWig"
+            for _sample_dir in "$OUTPUT_ROOT/$DIR_CLINK"/*/; do
+                [[ ! -d "$_sample_dir" ]] && continue
+                local _sname
+                _sname="$(basename "$_sample_dir")"
+                [[ "$_sname" == GROUP_* ]] && continue
+                local _sbam="$_sample_dir/${_sname}_dedup.bam"
+                if [[ -f "$_sbam" ]]; then
+                    run_crosslink_bigwig "$_sbam" "$OUTPUT_ROOT/$DIR_BG/BigWig" \
+                        "$_sname" "$_chrom_sizes"
+                fi
+            done
+            console_msg "  > Crosslink bigWigs → $OUTPUT_ROOT/$DIR_BG/BigWig/"
+        else
+            log_warning "--xl-bigwig: chrom.sizes not found — skipping bigWig generation"
+        fi
+    fi
+
     if [[ "$count" -eq 0 ]]; then
         log_error "No collapsed BED files collected. Skipping Peak Calling."
         exit 1
@@ -2110,7 +2162,7 @@ if [[ "$CHILD_MODE" != "true" ]]; then
 
     SF_DIR_BAM="01_BAM"
     SF_DIR_BED="02_COLLAPSED_BED"
-    SF_DIR_BG="03_BEDGRAPH"
+    SF_DIR_BG="03_COVERAGE"
     SF_DIR_PEAKS="04_PEAKS"
     if ([[ "$RUN_CIMS" == "true" ]] || [[ "$RUN_CITS" == "true" ]]) && [[ "$RUN_CLINK" == "true" ]]; then
         SF_DIR_OTHERS="07_OTHERS"

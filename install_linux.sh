@@ -260,6 +260,7 @@ dependencies:
 
   # Alignment & Processing
   - bedtools
+  - ucsc-bedgraphtobigwig
   - samtools>=1.15
   - htslib
   - bowtie2

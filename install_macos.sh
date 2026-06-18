@@ -261,6 +261,7 @@ if [[ -z "$SKIP_CONDA" ]]; then
         perl-threaded \
         perl-yaml \
         bedtools \
+        ucsc-bedgraphtobigwig \
         samtools \
         htslib \
         bowtie2 \
