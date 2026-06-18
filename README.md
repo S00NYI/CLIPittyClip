@@ -3,7 +3,7 @@
 </p>
 
 # CLIPittyClip: Modern CLIP-seq Analysis Pipeline
-**Version 3.3.0**
+**Version 3.5.0**
 
 A comprehensive, single-command CLIP-seq analysis pipeline from raw FASTQ to peaks and crosslink sites. Supports iCLIP, irCLIP, eCLIP, PAR-CLIP, and related variant protocols.
 
@@ -51,7 +51,7 @@ CLIPittyClip runs the complete CLIP-seq stack in a single command. All three sta
 ### 1. Clone
 
 ```bash
-git clone -b v3.3 https://github.com/LunaRNALab/CLIPittyClip.git
+git clone https://github.com/LunaRNALab/CLIPittyClip.git
 cd CLIPittyClip
 ```
 
@@ -67,7 +67,7 @@ cd CLIPittyClip
 ./install_linux.sh --env clipittyclip --tools-dir ~/Tools
 ```
 
-The scripts create a `clipittyclip` conda environment with all dependencies: STAR, Bowtie2, samtools, fastp, CTK, HOMER, Perl modules (Math::CDF, Bio::SeqIO), and Python packages (pysam, numpy, scipy, umi_tools).
+The scripts create a `clipittyclip` conda environment with all dependencies: STAR, Bowtie2, samtools, fastp, bedtools, ucsc-bedgraphtobigwig, CTK, HOMER, Perl modules (Math::CDF, Bio::SeqIO), and Python packages (pysam, numpy, scipy, umi_tools).
 
 | Option | Default | Description |
 |--------|---------|-------------|
@@ -106,7 +106,7 @@ CLIPittyClip.sh -i pool.fastq.gz -b barcodes.txt -x /path/to/star_index -t 8
 # Pre-demultiplexed folder — batch mode
 CLIPittyClip.sh -d /path/to/samples/ -x /path/to/star_index -t 8
 
-# Crosslink sites with Clink (recommended, v3.3)
+# Crosslink sites with Clink (recommended, v3.5)
 CLIPittyClip.sh -i reads.fastq.gz -x /path/to/star_index \
     --genome-fasta /path/to/genome.fa -t 8 --run-clink
 
@@ -149,22 +149,32 @@ All results land in a single numbered-folder hierarchy next to your input (or at
 ├── 0_DEMUX_FASTQ/           ← demultiplexed reads (only with -k)
 ├── 01_BAM/                  ← sorted, indexed BAM files
 ├── 02_COLLAPSED_BED/        ← PCR-deduplicated read BED
-├── 03_BEDGRAPH/             ← RPM-normalized ± strand bedgraphs
-│   └── COMBINED_BEDGRAPH/  ← group-averaged tracks (with -g)
+├── 03_COVERAGE/             ← RPM-normalized ± strand bedgraphs
+│   ├── COMBINED_BEDGRAPH/  ← group-averaged tracks (with -g)
+│   └── BigWig/              ← per-sample crosslink-site bigWigs (with --xl-bigwig)
+│       ├── {sample}_xl_pos.bw  ← + strand crosslink counts
+│       └── {sample}_xl_neg.bw  ← - strand crosslink counts
 ├── 04_PEAKS/
 │   ├── SAMPLE_PEAKS/        ← per-sample peak calls
 │   └── COMBINED_PEAKS/      ← aggregated peaks + COMBINED_PEAK_MATRIX.txt
 │
 ├── 05_CTK_Analysis/         ← CTK crosslink sites (--run-cims-cits)
-│   └── {sample}/CIMS/ CITS/
+│   ├── {sample}/CIMS/ CITS/
+│   └── GROUP_{group}/CIMS/ CITS/  ← group-pooled results (--ctk-group)
 │
 ├── 05_Clink/ or 06_Clink/  ← Clink crosslink sites (--run-clink)
-│   └── {sample}/
-│       ├── {sample}_dedup.bam
-│       ├── {sample}_pileup.npz
-│       ├── {sample}_truncations.bed
-│       ├── {sample}_deletions.bed
-│       └── {sample}_TtoC.bed  (+ all 12 substitution types)
+│   ├── {sample}/
+│   │   ├── {sample}_dedup.bam
+│   │   ├── {sample}_pileup.npz
+│   │   ├── {sample}_all_crosslinks.bed  ← all positions with ≥1 truncation (unfiltered)
+│   │   ├── {sample}_truncations.bed     ← CITS: truncation sites passing BH FDR cutoff (--clink-fdr)
+│   │   ├── {sample}_deletions.bed
+│   │   └── {sample}_TtoC.bed  (+ all 12 substitution types)
+│   └── GROUP_{group}/               ← group-pooled results (--group-xlsite)
+│       ├── GROUP_{group}_pileup.npz
+│       ├── GROUP_{group}_all_crosslinks.bed
+│       ├── GROUP_{group}_truncations.bed
+│       └── GROUP_{group}_deletions.bed  (+ substitution types)
 │
 └── 05_OTHERS/ → 06_OTHERS/ → 07_OTHERS/  ← number adjusts automatically; always last
     ├── STAR_OUTPUT/
@@ -198,7 +208,7 @@ Run `CLIPittyClip.sh --help` for full usage.
 
 | Long | Default | Description |
 |------|---------|-------------|
-| `-m` / `--mapper` | `star` | Aligner: `star` or `bowtie2` |
+| `-m` / `--mapper` | `star` | Aligner: `star` (default) or `bowtie2` |
 | `-t` / `--threads` | `1` | Number of threads |
 | `--genome-fasta` | — | Reference FASTA — enables `samtools calmd` for accurate MD tags; strongly recommended for crosslink site analysis |
 | `--align-mismatches` | `2` | Absolute mismatch backstop (STAR; primary filter is fractional 10% of read length) |
@@ -250,7 +260,7 @@ Run `CLIPittyClip.sh --help` for full usage.
 | `--cits-pval` | `0.05` | CITS p-value threshold |
 | `--cits-gap` | `25` | CITS clustering gap (`-1` disables) |
 
-#### Clink (v3.3)
+#### Clink (v3.5)
 
 | Long | Default | Description |
 |------|---------|-------------|
@@ -259,6 +269,7 @@ Run `CLIPittyClip.sh --help` for full usage.
 | `--clink-fdr` | `0.05` | Benjamini-Hochberg FDR threshold |
 | `--clink-min-cov` | `5` | Minimum coverage to test a position |
 | `--clink-multi-map` | off | Rescue multi-mapped reads (NH:i:>1) via single-pass positional assignment before deduplication. Requires `pysam`. See note below. |
+| `--xl-bigwig` | off | Generate per-sample strand-specific crosslink-site bigWig files in `03_COVERAGE/BigWig/`. Each file records per-nucleotide truncation event counts (read 5′ ends), **not** RPM read coverage — suitable for BindingSiteFinder and similar tools. Requires `bedGraphToBigWig` in PATH (`ucsc-bedgraphtobigwig` conda package). |
 
 > **Grouped Clink analysis:** combine `--run-clink --group-xlsite -g groups.txt` to produce per-sample dedup BAMs first, then merge by group for pileup → CITS/CIMS. Group results land in `GROUP_<name>/` inside the Clink output directory.
 
@@ -282,7 +293,7 @@ CLIPittyClip supports two crosslink site callers that can run in parallel on the
 
 **CTK** (`--run-cims-cits`) uses Perl tools from the Chaolin Zhang lab: `tag2collapse.pl` deduplication, `parseAlignment.pl` signal extraction, and permutation-based FDR.
 
-**Clink** (`--run-clink`, v3.3) is CLIPittyClip's Python-native caller: `umi_tools` deduplication, a single-pass `pileup.py` scan shared by both CITS and CIMS, and Benjamini-Hochberg FDR.
+**Clink** (`--run-clink`, v3.5) is CLIPittyClip's Python-native caller: `umi_tools` deduplication, a single-pass `pileup.py` scan shared by both CITS and CIMS, and Benjamini-Hochberg FDR.
 
 ```bash
 # CTK only
@@ -298,7 +309,7 @@ CLIPittyClip.sh -i reads.fastq.gz -x /path/to/star_index \
     --genome-fasta /path/to/genome.fa -t 8 --run-cims-cits --run-clink
 ```
 
-**Clink output** (`5_Clink/{sample}/`): `_dedup.bam`, `_pileup.npz`, `_truncations.bed`, `_deletions.bed`, `_TtoC.bed` (+ all 12 substitution types).
+**Clink output** (`5_Clink/{sample}/`): `_dedup.bam`, `_pileup.npz`, `_all_crosslinks.bed` (every position with ≥1 truncation, unfiltered — suitable for PEKA and BindingSiteFinder), `_truncations.bed` (FDR-filtered CITS), `_deletions.bed`, `_TtoC.bed` (+ all 12 substitution types).
 
 > [!NOTE]
 > `--genome-fasta` is strongly recommended for crosslink site analysis. STAR index directories don't store the source FASTA; without it, `samtools calmd` can't recalculate MD tags and crosslink deletions near homopolymers may be missed.
@@ -560,6 +571,14 @@ RPM is calculated as `(reads mapped to element / total input reads) × 10⁶`.
   - Per-family TSV (`_repeat_families.tsv`): family-level aggregated counts sorted by read depth
   - Handles three reference name formats: Dfam (`Name#Class/Family`), GtRNAdb tRNA headers, NCBI rDNA
 - Output directory renamed from `ncRNA_Mapping/` to `Repeat_Mapping/`
+- **`03_BEDGRAPH` renamed to `03_COVERAGE`**: directory name now reflects that it holds all coverage-format outputs, including bedgraphs and bigWigs
+- **`--xl-bigwig` flag**: generates per-sample strand-specific crosslink-site bigWig files in `03_COVERAGE/BigWig/`
+  - Extracts read 5′ ends from dedup BAMs by strand (truncation-event counts, not RPM read coverage)
+  - `{sample}_xl_pos.bw` (+ strand) and `{sample}_xl_neg.bw` (− strand) per sample
+  - Requires `bedGraphToBigWig` in PATH (`ucsc-bedgraphtobigwig` added to install scripts); skips gracefully if absent
+  - Suitable as direct input for BindingSiteFinder and similar nucleotide-resolution tools
+- **`all_crosslinks.bed` output from Clink**: every position with ≥1 truncation event written to `{sample}_all_crosslinks.bed` alongside the FDR-filtered `_truncations.bed`; no significance threshold applied — suitable for PEKA and BindingSiteFinder
+- Fixed CTK output directory using hardcoded path `5_CTK_Analysis` instead of the `DIR_CTK` variable (broke numbering when other crosslink modules shifted folder numbers)
 
 ### v3.4.0
 - **PAR-CLIP mode** (`--parclip`): end-to-end support for 4-thiouridine CLIP data

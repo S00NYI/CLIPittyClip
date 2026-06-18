@@ -3100,6 +3100,111 @@ run_clink_cits() {
 }
 
 # ---------------------------------------------------------------------------
+# run_crosslink_bigwig — generate strand-specific crosslink-site bigWigs from BAM
+#
+# Extracts the 5' end (crosslink position) of each deduplicated read, separated
+# by strand, and converts to bigWig format. Suitable as per-replicate input for
+# tools such as BindingSiteFinder that require crosslink-count coverage tracks.
+#
+# Convention (matches CLIPittyClip/CTK):
+#   + strand read: crosslink = read start (leftmost mapped base)
+#   - strand read: crosslink = read end   (rightmost mapped base)
+#
+# Args:
+#   $1  input BAM (sorted, deduplicated)
+#   $2  output directory
+#   $3  sample name (used as file prefix)
+#   $4  chrom.sizes file
+# ---------------------------------------------------------------------------
+run_crosslink_bigwig() {
+    local bam_in="$1"
+    local out_dir="$2"
+    local sample_name="$3"
+    local chrom_sizes="$4"
+
+    mkdir -p "$out_dir"
+
+    if ! command -v bedGraphToBigWig &>/dev/null; then
+        log_warning "bedGraphToBigWig not found — skipping crosslink bigWig for $sample_name"
+        log_warning "Install with: conda install -c bioconda ucsc-bedgraphtobigwig"
+        return 0
+    fi
+
+    local tmp_xl
+    tmp_xl=$(mktemp /tmp/${sample_name}_xl_XXXXXX.bed)
+    local pos_bg="$out_dir/${sample_name}_xl_pos.bedgraph"
+    local neg_bg="$out_dir/${sample_name}_xl_neg.bedgraph"
+    local pos_bw="$out_dir/${sample_name}_xl_pos.bw"
+    local neg_bw="$out_dir/${sample_name}_xl_neg.bw"
+
+    log_info "Crosslink bigWig: extracting 5' crosslink positions for $sample_name"
+
+    # Extract 5' crosslink position per read, preserve strand
+    bedtools bamtobed -i "$bam_in" 2>/dev/null \
+      | awk 'BEGIN{OFS="\t"} {
+            if ($6 == "+") print $1, $2,   $2+1, ".", 1, "+"
+            else            print $1, $3-1, $3,   ".", 1, "-"
+        }' \
+      | sort -k1,1 -k2,2n > "$tmp_xl"
+
+    # Plus strand → bedgraph → bigWig
+    awk 'BEGIN{OFS="\t"} $6=="+"' "$tmp_xl" | cut -f1-3,5 \
+      | bedtools genomecov -i - -g "$chrom_sizes" -bg \
+      | sort -k1,1 -k2,2n > "$pos_bg"
+    bedGraphToBigWig "$pos_bg" "$chrom_sizes" "$pos_bw" 2>/dev/null
+
+    # Minus strand → bedgraph → bigWig
+    awk 'BEGIN{OFS="\t"} $6=="-"' "$tmp_xl" | cut -f1-3,5 \
+      | bedtools genomecov -i - -g "$chrom_sizes" -bg \
+      | sort -k1,1 -k2,2n > "$neg_bg"
+    bedGraphToBigWig "$neg_bg" "$chrom_sizes" "$neg_bw" 2>/dev/null
+
+    rm -f "$tmp_xl" "$pos_bg" "$neg_bg"
+
+    if [[ -s "$pos_bw" && -s "$neg_bw" ]]; then
+        log_info "Crosslink bigWig complete → $pos_bw  $neg_bw"
+    else
+        log_warning "Crosslink bigWig: output empty for $sample_name — check BAM and chrom.sizes"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# run_clink_extract_crosslinks — export all crosslink positions from pileup NPZ
+#
+# Writes a BED6 of every position with truncations >= min_truncations (default 1),
+# with no significance filtering. Required by tools such as PEKA.
+#
+# Args:
+#   $1  pileup .npz
+#   $2  output prefix
+#   $3  min truncations (default 1)
+# ---------------------------------------------------------------------------
+run_clink_extract_crosslinks() {
+    local npz_in="$1"
+    local prefix="$2"
+    local min_trunc="${3:-1}"
+    local clink_dir
+    clink_dir=$(_clink_dir)
+
+    log_info "Clink extract_crosslinks: exporting all crosslink positions"
+
+    _clink_exec python3 "$clink_dir/extract_crosslinks.py" \
+        --pileup           "$npz_in" \
+        --prefix           "$prefix" \
+        --min-truncations  "$min_trunc"
+
+    if [[ $? -ne 0 ]]; then
+        log_error "Clink extract_crosslinks failed. Check log for details."
+        return 1
+    fi
+
+    local out_bed="${prefix}_all_crosslinks.bed"
+    local n=0
+    [[ -f "$out_bed" ]] && n=$(grep -c '' "$out_bed" 2>/dev/null || echo 0)
+    log_info "Clink extract_crosslinks complete: ${n} sites → $out_bed"
+}
+
+# ---------------------------------------------------------------------------
 # run_clink_cims — deletion + substitution site calling from NPZ
 #
 # Args:
@@ -3188,6 +3293,9 @@ run_clink_full() {
 
     update_status "Clink pileup"
     run_clink_pileup "$dedup_bam" "$npz" "$threads" || return 1
+
+    update_status "Clink crosslinks"
+    run_clink_extract_crosslinks "$npz" "$prefix" || true
 
     if [[ "$run_cits" == "true" ]]; then
         update_status "Clink CITS"
@@ -3337,6 +3445,10 @@ run_group_clink_analysis() {
         fi
 
         local prefix="$group_dir/${group}"
+
+        # --- All crosslinks (unfiltered, for PEKA and similar tools) ---
+        update_status "Clink group $group crosslinks"
+        run_clink_extract_crosslinks "$npz" "$prefix" || true
 
         # --- CITS ---
         if [[ "$run_cits" == "true" ]]; then
