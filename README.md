@@ -159,16 +159,22 @@ All results land in a single numbered-folder hierarchy next to your input (or at
 │   └── COMBINED_PEAKS/      ← aggregated peaks + COMBINED_PEAK_MATRIX.txt
 │
 ├── 05_CTK_Analysis/         ← CTK crosslink sites (--run-cims-cits)
-│   └── {sample}/CIMS/ CITS/
+│   ├── {sample}/CIMS/ CITS/
+│   └── GROUP_{group}/CIMS/ CITS/  ← group-pooled results (--ctk-group)
 │
 ├── 05_Clink/ or 06_Clink/  ← Clink crosslink sites (--run-clink)
-│   └── {sample}/
-│       ├── {sample}_dedup.bam
-│       ├── {sample}_pileup.npz
-│       ├── {sample}_all_crosslinks.bed  ← all positions with ≥1 truncation (unfiltered)
-│       ├── {sample}_truncations.bed     ← CITS: truncation sites passing BH FDR cutoff (--clink-fdr)
-│       ├── {sample}_deletions.bed
-│       └── {sample}_TtoC.bed  (+ all 12 substitution types)
+│   ├── {sample}/
+│   │   ├── {sample}_dedup.bam
+│   │   ├── {sample}_pileup.npz
+│   │   ├── {sample}_all_crosslinks.bed  ← all positions with ≥1 truncation (unfiltered)
+│   │   ├── {sample}_truncations.bed     ← CITS: truncation sites passing BH FDR cutoff (--clink-fdr)
+│   │   ├── {sample}_deletions.bed
+│   │   └── {sample}_TtoC.bed  (+ all 12 substitution types)
+│   └── GROUP_{group}/               ← group-pooled results (--group-xlsite)
+│       ├── GROUP_{group}_pileup.npz
+│       ├── GROUP_{group}_all_crosslinks.bed
+│       ├── GROUP_{group}_truncations.bed
+│       └── GROUP_{group}_deletions.bed  (+ substitution types)
 │
 └── 05_OTHERS/ → 06_OTHERS/ → 07_OTHERS/  ← number adjusts automatically; always last
     ├── STAR_OUTPUT/
