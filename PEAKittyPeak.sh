@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# PEAKittyPeak.sh - Peak Calling Module for CLIPittyClip (v3.0)
+# PEAKittyPeak.sh - Peak Calling Module for CLIPittyClip (v3.5)
 # Uses the unified lib/utils.sh for logging
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -31,7 +31,7 @@ function show_usage {
     echo ""
     echo "Usage: PEAKittyPeak.sh [options]"
     echo ""
-    echo "PEAKittyPeak v3.0 - Peak Calling Module for CLIPittyClip"
+    echo "PEAKittyPeak v3.5 - Peak Calling Module for CLIPittyClip"
     echo ""
     echo "CONTEXT:"
     echo "  Run this in a directory containing a 'BED' folder with collapsed .bed files."
@@ -105,23 +105,21 @@ done
 
 # Run Wizard if requested
 if [[ "$WIZARD_MODE" == "true" ]]; then
-    run_wizard_peakittypeak
-    if [[ $? -ne 0 ]]; then exit 1; fi
+    run_wizard_peakittypeak || exit 1
+
     [[ -n "$WIZ_WORK_DIR" ]] && cd "$WIZ_WORK_DIR"
+    PEAK_CALLER="$WIZ_PEAK_CALLER"
     PEAK_DIST="$WIZ_PEAK_DIST"
     PEAK_SIZE="$WIZ_PEAK_SIZE"
     FRAG_LEN="$WIZ_FRAG_LEN"
     BASE_NAME="$WIZ_OUTPUT_NAME"
-    ADV_PEAK_CALLER_ARGS="$WIZ_HOMER_ARGS"
-    
-    if [[ -n "$WIZ_PEAK_CALLER" ]]; then
-        PEAK_CALLER="$WIZ_PEAK_CALLER"
-    fi
-    
-    if [[ -n "$WIZ_CTK_PEAK_ARGS" ]]; then
-        ADV_PEAK_CALLER_ARGS="$WIZ_CTK_PEAK_ARGS"
-    fi
-    # Wizard currently assumes CWD/BED, can be updated later if needed
+    [[ -n "$WIZ_PEAK_CALLER_ARGS" ]] && ADV_PEAK_CALLER_ARGS="$WIZ_PEAK_CALLER_ARGS"
+    [[ "$WIZ_AGGREGATE" == "true" ]] && AGGREGATE="true"
+    [[ -n "$WIZ_GROUPS_FILE" ]] && GROUPS_FILE="$WIZ_GROUPS_FILE"
+    [[ -n "$WIZ_GROUP_PEAKS_FILE" ]] && GROUP_PEAKS_FILE="$WIZ_GROUP_PEAKS_FILE"
+    [[ -n "$WIZ_CTK_DIR" ]] && CTK_DIR="$WIZ_CTK_DIR"
+    [[ -n "$WIZ_CIMS_FDR" ]] && CIMS_FDR="$WIZ_CIMS_FDR"
+    [[ -n "$WIZ_CITS_PVAL" ]] && CITS_PVALUE="$WIZ_CITS_PVAL"
 fi
 
 # Check Requirements

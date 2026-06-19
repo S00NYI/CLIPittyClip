@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # CLIPittyClip.sh - Modernized CLIP-seq Analysis Pipeline
-# Version 3.1.0
+# Version 3.5.0
 
 # ------------------------------------------------------------------
 # Initialization & Setup
@@ -46,7 +46,7 @@ function show_usage {
     echo ""
     echo "Usage: $0 [-i <input.fastq.gz> | -d <input_dir>] -x <index_dir> [options]"
     echo ""
-    echo "CLIPittyClip v3.3 - Modern CLIP-seq Analysis Pipeline"
+    echo "CLIPittyClip v3.5 - Modern CLIP-seq Analysis Pipeline"
     echo ""
     echo "REQUIRED INPUT (Choose one):"
     echo "  -i, --input-file <path>  Input FASTQ file (gzipped supported)"
@@ -186,7 +186,7 @@ if [[ $# -eq 0 ]]; then
     # Only show header if we are going to exit anyway
     echo "$separator_line"
     echo -e "${BLUE}CLIPittyClip: Modern CLIP-seq Analysis Pipeline${NC}"
-    echo "Version 3.1.0"
+    echo "Version 3.5.0"
     echo "Author: Soon Yi (Updated by Antigravity)"
     echo "Last updated: $(date +'%Y-%m-%d')"
     echo "$separator_line"
@@ -283,49 +283,81 @@ if [[ "$WIZARD_MODE" == "true" ]]; then
     fi
     
     # Apply wizard settings to main script variables
+    # Input mode
     if [[ "$WIZ_MODE" == "pooled" ]]; then
         INPUT_FILE="$WIZ_INPUT_FILE"
         BARCODE_FILE="$WIZ_BARCODE_FILE"
+        DEMUX="yes"
     elif [[ "$WIZ_MODE" == "single" ]]; then
         INPUT_FILE="$WIZ_INPUT_FILE"
     elif [[ "$WIZ_MODE" == "directory" ]]; then
         INPUT_DIR="$WIZ_INPUT_DIR"
     fi
-    
+
+    # Protocol
+    [[ -n "$WIZ_ECLIP_MODE" ]]            && ECLIP_MODE="$WIZ_ECLIP_MODE"
+    [[ "$WIZ_PARCLIP_MODE" == "true" ]]   && PARCLIP_MODE="true"
+
+    # Genome
     GENOME_INDEX="$WIZ_GENOME_INDEX"
+    [[ -n "$WIZ_GENOME_FASTA" ]]          && GENOME_FASTA="$WIZ_GENOME_FASTA"
+
+    # Aligner / preprocessing
     ALIGNER="$WIZ_ALIGNER"
     THREADS="$WIZ_THREADS"
     UMI_LEN="$WIZ_UMI_LEN"
     ADAPTER_3="$WIZ_ADAPTER"
-    [[ "$WIZ_CIMS" == "y" ]] && RUN_CIMS="true"
-    [[ "$WIZ_CITS" == "y" ]] && RUN_CITS="true"
+    [[ -n "$WIZ_BC_LEN" ]]                && BC_LEN="$WIZ_BC_LEN"
+    SPACER_LEN="$WIZ_SPACER_LEN"
+    [[ "$WIZ_BC_FIRST" == "true" ]]       && BC_FIRST="true"
+    FASTP_MIN_QUAL="$WIZ_MIN_QUAL"
+    [[ "$WIZ_NO_DEDUP" == "true" ]]       && DEDUP_MODE="false"
+    ALIGN_MISMATCHES="$WIZ_ALIGN_MISMATCHES"
+    DEMUX_MISMATCHES="$WIZ_DEMUX_MISMATCHES"
+
+    # Filters
+    [[ "$WIZ_FILTER_REPEAT" == "true" ]]  && FILTER_REPEAT="true"
+    [[ "$WIZ_NO_CHR_FILTER" == "true" ]]  && FILTER_CHR="false"
+
+    # Peak calling
+    PEAK_CALLER="$WIZ_PEAK_CALLER"
     PEAK_DIST="$WIZ_PEAK_DIST"
     PEAK_SIZE="$WIZ_PEAK_SIZE"
     FRAG_LEN="$WIZ_FRAG_LEN"
-    ADV_PEAK_CALLER_ARGS="$WIZ_HOMER_ARGS"
-    
-    if [[ -n "$WIZ_PEAK_CALLER" ]]; then
-        PEAK_CALLER="$WIZ_PEAK_CALLER"
-    fi
-    
-    if [[ -n "$WIZ_CTK_PEAK_ARGS" ]]; then
-        # Prefix the arguments so they append properly to default CTK args
-        ADV_PEAK_CALLER_ARGS="$WIZ_CTK_PEAK_ARGS"
-    fi
-    
-    # Important bugfix: fastp arguments from advanced wizard
-    # We map WIZ_FASTP_ARGS so the standard CLI loop can process it
-    if [[ -n "$WIZ_FASTP_ARGS" ]]; then
-        ADV_FASTP_ARGS="$WIZ_FASTP_ARGS"
-    fi
-    
-    if [[ -n "$WIZ_ALIGNER_ARGS" ]]; then
-        ADV_ALIGNER_ARGS="$WIZ_ALIGNER_ARGS"
-    fi
-    
-    if [[ -n "$WIZ_CTK_ARGS" ]]; then
-        ADV_CTK_ARGS="$WIZ_CTK_ARGS"
-    fi
+    [[ -n "$WIZ_PEAK_CALLER_ARGS" ]]      && ADV_PEAK_CALLER_ARGS="$WIZ_PEAK_CALLER_ARGS"
+    [[ -n "$WIZ_FASTP_ARGS" ]]            && ADV_FASTP_ARGS="$WIZ_FASTP_ARGS"
+    [[ -n "$WIZ_ALIGNER_ARGS" ]]          && ADV_ALIGNER_ARGS="$WIZ_ALIGNER_ARGS"
+
+    # CTK CIMS/CITS track
+    if [[ "$WIZ_RUN_CIMS" == "true" ]];  then RUN_CIMS=true; RUN_CTK="yes"; fi
+    if [[ "$WIZ_RUN_CITS" == "true" ]];  then RUN_CITS=true; RUN_CTK="yes"; fi
+    [[ -n "$WIZ_CIMS_ITER" ]]             && CIMS_ITERATIONS="$WIZ_CIMS_ITER"
+    [[ -n "$WIZ_CIMS_FDR" ]]              && CIMS_FDR="$WIZ_CIMS_FDR"
+    [[ -n "$WIZ_CITS_PVAL" ]]             && CITS_PVALUE="$WIZ_CITS_PVAL"
+    [[ -n "$WIZ_CITS_GAP" ]]              && CITS_GAP="$WIZ_CITS_GAP"
+
+    # Clink track
+    [[ "$WIZ_RUN_CLINK" == "true" ]]      && RUN_CLINK=true
+    [[ -n "$WIZ_CLINK_UMI_LEN" ]]         && CLINK_UMI_LEN="$WIZ_CLINK_UMI_LEN"
+    [[ -n "$WIZ_CLINK_FDR" ]]             && CLINK_FDR="$WIZ_CLINK_FDR"
+    [[ -n "$WIZ_CLINK_MIN_COV" ]]         && CLINK_MIN_COV="$WIZ_CLINK_MIN_COV"
+    [[ "$WIZ_CLINK_MULTI_MAP" == "true" ]] && CLINK_MULTI_MAP=true
+
+    # Motif / flanked BED
+    [[ "$WIZ_NO_MOTIF" == "true" ]]       && RUN_MOTIF="no"
+    [[ -n "$WIZ_FLANK" ]]                 && MOTIF_FLANK="$WIZ_FLANK"
+
+    # Grouping
+    [[ -n "$WIZ_GROUPS_FILE" ]]           && GROUPS_FILE="$WIZ_GROUPS_FILE"
+    [[ "$WIZ_CTK_GROUP" == "true" ]]      && CTK_GROUP_MODE="true"
+    [[ "$WIZ_GROUP_XLSITE" == "true" ]]   && GROUP_XLSITE="true"
+
+    # Output / runtime
+    [[ -n "$WIZ_OUTPUT" ]]                && EXP_ID="$WIZ_OUTPUT"
+    [[ "$WIZ_KEEP" == "true" ]]           && KEEP_INTERMEDIATE="yes"
+    [[ -n "$WIZ_SAMPLE_SIZE" ]]           && SAMPLE_SIZE="$WIZ_SAMPLE_SIZE"
+    [[ "$WIZ_NOTIFICATION" == "true" ]]   && NOTIFY_MODE="true"
+    [[ "$WIZ_XL_BIGWIG" == "true" ]]      && XL_BIGWIG="true"
 fi
 
 # ------------------------------------------------------------------
@@ -632,7 +664,7 @@ ulimit -n 2048 2>/dev/null || true
 if [[ "$CHILD_MODE" != "true" ]]; then
     # Print Clean Banner to Console
     console_msg "********************************************************************************"
-    console_msg "CLIPittyClip Standard Pipeline v3.3"
+    console_msg "CLIPittyClip Standard Pipeline v3.5"
     console_msg "Started: $(date '+%Y-%m-%d %H:%M:%S')"
     if [[ -n "$INPUT_DIR" ]]; then
         console_msg "Input Directory: $INPUT_DIR"

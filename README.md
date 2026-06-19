@@ -119,6 +119,9 @@ CLIPittyClip.sh --eclip pe -d /path/to/eclip_r2s/ -x /path/to/star_index -t 8 --
 
 # PAR-CLIP (T>C crosslink sites)
 CLIPittyClip.sh --parclip -i reads.fastq.gz -u 4 -x /path/to/star_index -t 8 --run-clink
+
+# Interactive wizard (guided setup; emits the equivalent CLI for next time)
+CLIPittyClip.sh -w
 ```
 
 ---
@@ -388,13 +391,16 @@ PREPittyPrep.sh -d /path/to/samples/ -u 7 -t 8
 
 # GEO deposit: raw barcode split, no modification, MD5 checksums
 PREPittyPrep.sh -i pool.fastq.gz -b barcodes.txt --geo -o my_GEO
+
+# Interactive wizard
+PREPittyPrep.sh -w
 ```
 
 Output: `{INPUT}_prepped/PREPPED_FASTQ/*_prepped.fastq.gz` + `REPORTS/`
 
 GEO output: `{INPUT}_GEO/{sample}.fastq.gz` + `md5sums.txt`
 
-Key options: `-u` (UMI length), `-b` (barcodes), `-a` (adapter), `--bc-len`, `--spacer-len`, `--no-dedup`, `--geo`, `--filter-repeat`, `-k`
+Key options: `-u` (UMI length), `-b` (barcodes), `-a` (adapter), `--bc-len`, `--spacer-len`, `--no-dedup`, `--geo`, `--filter-repeat`, `-k`, `-w`
 
 ---
 
@@ -562,6 +568,7 @@ RPM is calculated as `(reads mapped to element / total input reads) × 10⁶`.
 ## Changelog
 
 ### v3.5.0
+- **Wizard overhaul**: per-tool interactive wizards (`-w` flag) for CLIPittyClip, PREPittyPrep, MAPittyMap, and PEAKittyPeak. New top-level launcher `CLIPittyClip_wizard.sh` provides a tool-triage entry point. Wizards collect inputs, ask for analysis tracks (HOMER / CTK CIMS-CITS / Clink), let you spot-edit defaults by category, show a diff-vs-defaults view + the equivalent CLI command at the end, and launch the chosen tool automatically.
 - **Repeat element pre-filter** (`--filter-repeat`): replaces the former ncRNA filter with a dedicated repeat filter targeting truly repetitive sequences that STAR cannot place uniquely
   - Index composition: NCBI 45S rDNA (U13369.1), GtRNAdb tRNAs, Dfam/RepeatMasker TE consensus sequences filtered to mammal-relevant clades
   - miRNA, Y RNA, lncRNA, snRNA, and snoRNA pass through to STAR for normal genomic annotation
