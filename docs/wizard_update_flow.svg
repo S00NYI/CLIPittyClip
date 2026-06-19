@@ -1,24 +1,24 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg viewBox="0 0 1340 1620" xmlns="http://www.w3.org/2000/svg" role="img" font-family="ui-sans-serif, system-ui, -apple-system, sans-serif">
-  <title>CLIPittyClip Suite v3.5 — wizard flow</title>
-  <desc>Two entry points (top-level launcher or per-tool -w flag) feed a tool-triage dispatcher and four per-tool wizards, each ending in a final confirmation step that emits an equivalent CLI command and launches the chosen pipeline.</desc>
+<svg viewBox="0 0 1320 1480" xmlns="http://www.w3.org/2000/svg" role="img" font-family="ui-sans-serif, system-ui, -apple-system, sans-serif">
+  <title>CLIPittyClip Suite — wizard flow with tool triage</title>
+  <desc>Top-level triage selects the tool, then routes to a per-tool wizard. Each lane shows existing prompts (gray) and proposed additions (red).</desc>
 
   <style>
     .title { font-size: 22px; font-weight: 700; fill: #111; }
     .sub { font-size: 11px; fill: #555; }
     .lane-h { font-size: 14px; font-weight: 700; fill: #111; }
-    .lane-sub { font-size: 10px; font-weight: 600; fill: #555; }
+    .lane-status { font-size: 10px; font-weight: 600; fill: #555; }
+    .lane-status-new { font-size: 10px; font-weight: 700; fill: #c62828; }
     .step-num { font-size: 9px; font-weight: 700; letter-spacing: 0.4px; fill: #777; }
+    .step-num-new { font-size: 9px; font-weight: 700; letter-spacing: 0.4px; fill: #c62828; }
     .box-title { font-size: 12px; font-weight: 600; fill: #111; }
-    .box-title-blue { font-size: 12px; font-weight: 600; fill: #1f4e8c; }
-    .box-title-green { font-size: 12px; font-weight: 600; fill: #1c6b3a; }
+    .box-title-new { font-size: 12px; font-weight: 600; fill: #c62828; }
     .box-body { font-size: 10px; fill: #222; }
-    .box-body-mono { font-size: 10px; fill: #222; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .box-body-new { font-size: 10px; fill: #c62828; }
     .legend-label { font-size: 11px; fill: #444; }
     .arrow { stroke: #888; stroke-width: 1.4; fill: none; }
+    .arrow-new { stroke: #c62828; stroke-width: 1.6; fill: none; }
     .arrow-thick { stroke: #444; stroke-width: 2; fill: none; }
-    .arrow-blue { stroke: #1f4e8c; stroke-width: 1.6; fill: none; }
-    .arrow-green { stroke: #1c6b3a; stroke-width: 1.6; fill: none; }
     .footer { font-size: 11px; fill: #555; }
   </style>
 
@@ -26,379 +26,328 @@
     <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
       <path d="M0,0 L10,5 L0,10 z" fill="#888"/>
     </marker>
-    <marker id="ahb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-      <path d="M0,0 L10,5 L0,10 z" fill="#1f4e8c"/>
+    <marker id="ahnew" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#c62828"/>
     </marker>
-    <marker id="ahg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-      <path d="M0,0 L10,5 L0,10 z" fill="#1c6b3a"/>
-    </marker>
-    <marker id="aht" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+    <marker id="ahthick" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
       <path d="M0,0 L10,5 L0,10 z" fill="#444"/>
     </marker>
   </defs>
 
-  <rect x="0" y="0" width="1340" height="1620" fill="#ffffff"/>
+  <rect x="0" y="0" width="1320" height="1480" fill="#ffffff"/>
 
-  <text x="670" y="32" class="title" text-anchor="middle">CLIPittyClip Suite v3.5 — Wizard Flow</text>
-  <text x="670" y="52" class="sub" text-anchor="middle">Two entry points → tool triage → per-tool wizard → final confirmation → auto-launch</text>
+  <text x="660" y="32" class="title" text-anchor="middle">CLIPittyClip Suite — proposed wizard with tool triage</text>
+  <text x="660" y="52" class="sub" text-anchor="middle">User picks a tool first, then routes into a tool-specific wizard. Red = new prompt, corrected default, or renamed flag.</text>
 
-  <!-- Legend -->
-  <g transform="translate(420,68)">
+  <g transform="translate(440,68)">
     <rect x="0" y="0" width="14" height="14" rx="3" fill="#fff" stroke="#888"/>
-    <text x="22" y="11" class="legend-label">Step / prompt</text>
-    <rect x="120" y="0" width="14" height="14" rx="3" fill="#fff" stroke="#1f4e8c" stroke-width="2"/>
-    <text x="142" y="11" class="legend-label">Entry / dispatch</text>
-    <rect x="260" y="0" width="14" height="14" rx="3" fill="#fff" stroke="#1c6b3a" stroke-width="2"/>
-    <text x="282" y="11" class="legend-label">Final confirmation / launch</text>
-    <line x1="450" y1="7" x2="480" y2="7" class="arrow" marker-end="url(#ah)" stroke-dasharray="3 3"/>
-    <text x="488" y="11" class="legend-label">Conditional</text>
+    <text x="22" y="11" class="legend-label">Existing prompt</text>
+    <rect x="140" y="0" width="14" height="14" rx="3" fill="#fff" stroke="#c62828" stroke-width="2"/>
+    <text x="162" y="11" class="legend-label">New / changed</text>
+    <line x1="300" y1="7" x2="330" y2="7" class="arrow-new" marker-end="url(#ahnew)"/>
+    <text x="338" y="11" class="legend-label">New flow edge</text>
   </g>
 
-  <!-- ─────────── TOP: TWO ENTRY POINTS ─────────── -->
-  <g transform="translate(150,100)">
-    <rect width="380" height="56" rx="8" fill="#fff" stroke="#1f4e8c" stroke-width="2"/>
-    <text x="190" y="22" class="box-title-blue" text-anchor="middle">Entry A · CLIPittyClip_wizard.sh</text>
-    <text x="190" y="40" class="box-body" text-anchor="middle">Top-level launcher. Opens triage,</text>
-    <text x="190" y="52" class="box-body" text-anchor="middle">runs chosen wizard, eval's the equivalent CLI.</text>
+  <g transform="translate(440,100)">
+    <rect width="440" height="80" rx="8" fill="#fff" stroke="#c62828" stroke-width="2.5"/>
+    <text x="220" y="22" class="box-title-new" text-anchor="middle">◆ NEW: Tool Triage (top of wizard.sh entry)</text>
+    <text x="220" y="42" class="box-body-new" text-anchor="middle">"Which tool do you want to configure?"</text>
+    <text x="220" y="60" class="box-body-new" text-anchor="middle">[1] CLIPittyClip   [2] PREPittyPrep   [3] MAPittyMap   [4] PEAKittyPeak</text>
+    <text x="220" y="74" class="box-body" text-anchor="middle">Dispatches to run_wizard_&lt;tool&gt;</text>
   </g>
 
-  <g transform="translate(810,100)">
-    <rect width="380" height="56" rx="8" fill="#fff" stroke="#1f4e8c" stroke-width="2"/>
-    <text x="190" y="22" class="box-title-blue" text-anchor="middle">Entry B · &lt;Tool&gt;.sh -w</text>
-    <text x="190" y="40" class="box-body" text-anchor="middle">Per-tool direct entry. Skips triage and</text>
-    <text x="190" y="52" class="box-body" text-anchor="middle">goes straight to that tool's wizard.</text>
+  <line x1="660" y1="180" x2="170" y2="240" class="arrow-new" marker-end="url(#ahnew)"/>
+  <line x1="660" y1="180" x2="495" y2="240" class="arrow-new" marker-end="url(#ahnew)"/>
+  <line x1="660" y1="180" x2="825" y2="240" class="arrow-new" marker-end="url(#ahnew)"/>
+  <line x1="660" y1="180" x2="1150" y2="240" class="arrow-new" marker-end="url(#ahnew)"/>
+
+  <!-- LANE 1: CLIPittyClip -->
+  <g transform="translate(20,250)">
+    <rect width="305" height="32" rx="6" fill="#f4f4f4" stroke="#888"/>
+    <text x="152" y="14" class="lane-h" text-anchor="middle">CLIPittyClip</text>
+    <text x="152" y="27" class="lane-status">existing wizard · major overhaul</text>
   </g>
 
-  <!-- Arrows down to triage / lanes -->
-  <line x1="340" y1="156" x2="670" y2="200" class="arrow-blue" marker-end="url(#ahb)"/>
-  <line x1="1000" y1="156" x2="1000" y2="305" class="arrow-blue" marker-end="url(#ahb)" stroke-dasharray="4 3"/>
-
-  <!-- ─────────── TRIAGE DISPATCHER ─────────── -->
-  <g transform="translate(450,205)">
-    <rect width="440" height="80" rx="8" fill="#fff" stroke="#1f4e8c" stroke-width="2"/>
-    <text x="220" y="22" class="box-title-blue" text-anchor="middle">run_wizard_dispatcher (Tool Triage)</text>
-    <text x="220" y="42" class="box-body" text-anchor="middle">"Which tool would you like to configure?"</text>
-    <text x="220" y="58" class="box-body" text-anchor="middle">[1] CLIPittyClip   [2] PREPittyPrep   [3] MAPittyMap   [4] PEAKittyPeak</text>
-    <text x="220" y="74" class="box-body" text-anchor="middle">Invalid input re-prompted by prompt_select</text>
-  </g>
-
-  <!-- Fan out to four lanes -->
-  <line x1="670" y1="285" x2="170" y2="345" class="arrow-blue" marker-end="url(#ahb)"/>
-  <line x1="670" y1="285" x2="495" y2="345" class="arrow-blue" marker-end="url(#ahb)"/>
-  <line x1="670" y1="285" x2="845" y2="345" class="arrow-blue" marker-end="url(#ahb)"/>
-  <line x1="670" y1="285" x2="1170" y2="345" class="arrow-blue" marker-end="url(#ahb)"/>
-
-  <!-- ─────────── LANE 1: CLIPittyClip ─────────── -->
-  <g transform="translate(20,355)">
-    <rect width="305" height="34" rx="6" fill="#f4f4f4" stroke="#888"/>
-    <text x="152" y="14" class="lane-h" text-anchor="middle">CLIPittyClip.sh</text>
-    <text x="152" y="28" class="lane-sub" text-anchor="middle">full pipeline · 8 steps + review</text>
-  </g>
-
-  <g transform="translate(20,400)">
+  <g transform="translate(20,295)">
     <text x="0" y="0" class="step-num">1 · INPUT</text>
-    <rect y="6" width="305" height="56" rx="5" fill="#fff" stroke="#888"/>
-    <text x="10" y="22" class="box-title">Input type + output name</text>
-    <text x="10" y="38" class="box-body">Pooled / single / directory + barcodes</text>
-    <text x="10" y="52" class="box-body">Output folder (blank = INPUT_output)</text>
-  </g>
-  <line x1="172" y1="462" x2="172" y2="480" class="arrow" marker-end="url(#ah)"/>
-
-  <g transform="translate(20,483)">
-    <text x="0" y="0" class="step-num">2 · PROTOCOL</text>
     <rect y="6" width="305" height="50" rx="5" fill="#fff" stroke="#888"/>
-    <text x="10" y="22" class="box-title">Protocol selection</text>
-    <text x="10" y="38" class="box-body">Standard · eCLIP-pe · eCLIP-se · PAR-CLIP</text>
-    <text x="10" y="52" class="box-body">PAR-CLIP hints: enable Clink, --sub-types TC</text>
+    <text x="10" y="22" class="box-title">Input Type</text>
+    <text x="10" y="38" class="box-body">Pooled / single / directory</text>
+    <text x="10" y="51" class="box-body">+ barcode file if pooled</text>
   </g>
-  <line x1="172" y1="539" x2="172" y2="557" class="arrow" marker-end="url(#ah)"/>
+  <line x1="172" y1="357" x2="172" y2="375" class="arrow" marker-end="url(#ah)"/>
 
-  <g transform="translate(20,560)">
+  <g transform="translate(20,378)">
+    <text x="0" y="0" class="step-num-new">2 · PROTOCOL  ◆ NEW</text>
+    <rect y="6" width="305" height="56" rx="5" fill="#fff" stroke="#c62828" stroke-width="2"/>
+    <text x="10" y="22" class="box-title-new">Protocol</text>
+    <text x="10" y="38" class="box-body-new">Standard · eCLIP-pe · eCLIP-se · PAR-CLIP</text>
+    <text x="10" y="51" class="box-body-new">PAR-CLIP hint: T&gt;C, suggest --run-clink</text>
+  </g>
+  <line x1="172" y1="446" x2="172" y2="464" class="arrow-new" marker-end="url(#ahnew)"/>
+
+  <g transform="translate(20,467)">
     <text x="0" y="0" class="step-num">3 · GENOME</text>
-    <rect y="6" width="305" height="32" rx="5" fill="#fff" stroke="#888"/>
-    <text x="10" y="22" class="box-title">Genome index directory</text>
-  </g>
-  <line x1="172" y1="598" x2="172" y2="616" class="arrow" marker-end="url(#ah)"/>
-
-  <g transform="translate(20,619)">
-    <text x="0" y="0" class="step-num">4 · ANALYSIS PLAN</text>
-    <rect y="6" width="305" height="64" rx="5" fill="#fff" stroke="#888"/>
-    <text x="10" y="22" class="box-title">Pick tracks (HOMER always on)</text>
-    <text x="10" y="38" class="box-body">+ CTK CIMS (y/n)</text>
-    <text x="10" y="52" class="box-body">+ CTK CITS (y/n)</text>
-    <text x="10" y="66" class="box-body">+ Clink (y/n)</text>
-  </g>
-  <line x1="172" y1="689" x2="172" y2="707" class="arrow" marker-end="url(#ah)"/>
-
-  <g transform="translate(20,710)">
-    <text x="0" y="0" class="step-num">5 · SETTINGS</text>
     <rect y="6" width="305" height="44" rx="5" fill="#fff" stroke="#888"/>
-    <text x="10" y="22" class="box-title">Defaults · OR · Advanced</text>
-    <text x="10" y="38" class="box-body">[1] use defaults  ·  [2] step-by-step</text>
+    <text x="10" y="22" class="box-title">Genome Index</text>
+    <text x="10" y="38" class="box-body">Index dir; <tspan fill="#c62828">+ --genome-fasta (opt)</tspan></text>
   </g>
-  <!-- Branch out -->
-  <line x1="100" y1="762" x2="60" y2="780" class="arrow" marker-end="url(#ah)"/>
-  <line x1="240" y1="762" x2="280" y2="780" class="arrow" marker-end="url(#ah)" stroke-dasharray="3 3"/>
-  <text x="55" y="775" class="box-body" text-anchor="end" fill="#444">[1]</text>
-  <text x="290" y="775" class="box-body" fill="#444">[2]</text>
+  <line x1="172" y1="517" x2="172" y2="535" class="arrow" marker-end="url(#ah)"/>
 
-  <g transform="translate(20,783)">
-    <text x="0" y="0" class="step-num">5.5 · REVIEW (defaults path)</text>
-    <rect y="6" width="305" height="118" rx="5" fill="#fff" stroke="#888"/>
-    <text x="10" y="22" class="box-title">Categorized default-review</text>
-    <text x="10" y="38" class="box-body">[1] Preprocessing  [2] Filters</text>
-    <text x="10" y="52" class="box-body">[3] Peak Calling   [4] CTK CIMS/CITS*</text>
-    <text x="10" y="66" class="box-body">[5] Clink*  [6] Motif</text>
-    <text x="10" y="80" class="box-body">[7] Grouping*  [8] Output / Runtime</text>
-    <text x="10" y="98" class="box-body-mono">[t] re-pick tracks  [a] → advanced</text>
-    <text x="10" y="112" class="box-body-mono">[Enter] continue to confirmation</text>
+  <g transform="translate(20,538)">
+    <text x="0" y="0" class="step-num">4 · PREPROCESSING</text>
+    <rect y="6" width="305" height="70" rx="5" fill="#fff" stroke="#888"/>
+    <text x="10" y="22" class="box-title">UMI / adapter + advanced</text>
+    <text x="10" y="38" class="box-body">UMI len, adapter (existing)</text>
+    <text x="10" y="51" class="box-body-new">+ --bc-len, --spacer-len, --bc-first</text>
+    <text x="10" y="64" class="box-body-new">+ --min-qual, --no-dedup, mismatches</text>
   </g>
-  <line x1="172" y1="909" x2="172" y2="922" class="arrow" marker-end="url(#ah)"/>
-  <!-- [a] escape arrow back to advanced path -->
-  <path d="M 325 842 Q 360 842 360 802 Q 360 783 325 783" class="arrow" fill="none" stroke-dasharray="3 3" marker-end="url(#ah)"/>
-  <text x="328" y="805" class="box-body" fill="#444">[a]</text>
+  <line x1="172" y1="611" x2="172" y2="629" class="arrow-new" marker-end="url(#ahnew)"/>
 
-  <g transform="translate(20,924)">
-    <text x="0" y="0" class="step-num">FINAL CONFIRMATION</text>
-    <rect y="6" width="305" height="74" rx="5" fill="#fff" stroke="#1c6b3a" stroke-width="2"/>
-    <text x="10" y="22" class="box-title-green">Summary · diff · cmdline · confirm</text>
-    <text x="10" y="38" class="box-body">• Inputs box  • Diff vs defaults</text>
-    <text x="10" y="52" class="box-body">• Full equivalent CLI command</text>
-    <text x="10" y="66" class="box-body">• "Start analysis? [Y/n]"</text>
+  <g transform="translate(20,632)">
+    <text x="0" y="0" class="step-num-new">5 · FILTERS  ◆ NEW</text>
+    <rect y="6" width="305" height="44" rx="5" fill="#fff" stroke="#c62828" stroke-width="2"/>
+    <text x="10" y="22" class="box-title-new">Filters</text>
+    <text x="10" y="38" class="box-body-new">--filter-repeat · --no-chr-filter</text>
   </g>
-  <line x1="172" y1="1006" x2="172" y2="1016" class="arrow-green" marker-end="url(#ahg)"/>
+  <line x1="172" y1="682" x2="172" y2="700" class="arrow" marker-end="url(#ah)"/>
 
-  <g transform="translate(20,1019)">
-    <rect width="305" height="32" rx="5" fill="#fff" stroke="#1c6b3a" stroke-width="2"/>
-    <text x="152" y="20" class="box-title-green" text-anchor="middle">Pipeline launches (CLIPittyClip.sh)</text>
+  <g transform="translate(20,703)">
+    <text x="0" y="0" class="step-num">6 · ANALYSIS  <tspan fill="#c62828">(restructured)</tspan></text>
+    <rect y="6" width="305" height="90" rx="5" fill="#fff" stroke="#888"/>
+    <text x="10" y="22" class="box-title">3 tracks: HOMER · CTK · Clink</text>
+    <text x="10" y="38" class="box-body">Peak caller, args (rename)</text>
+    <text x="10" y="51" class="box-body-new">CTK CIMS/CITS: defaults 5/0.05/0.05</text>
+    <text x="10" y="64" class="box-body-new">Clink: --run-clink, --clink-multi-map…</text>
+    <text x="10" y="77" class="box-body">Motif: --no-motif · --flank</text>
+  </g>
+  <line x1="172" y1="799" x2="172" y2="817" class="arrow-new" marker-end="url(#ahnew)"/>
+
+  <g transform="translate(20,820)">
+    <text x="0" y="0" class="step-num-new">7 · GROUPING  ◆ NEW</text>
+    <rect y="6" width="305" height="50" rx="5" fill="#fff" stroke="#c62828" stroke-width="2"/>
+    <text x="10" y="22" class="box-title-new">Group analysis (conditional)</text>
+    <text x="10" y="38" class="box-body-new">-g, --ctk-group, --group-xlsite</text>
+    <text x="10" y="51" class="box-body">only when input mode = directory/pooled</text>
+  </g>
+  <line x1="172" y1="876" x2="172" y2="894" class="arrow-new" marker-end="url(#ahnew)"/>
+
+  <g transform="translate(20,897)">
+    <text x="0" y="0" class="step-num-new">8 · OUTPUT / RUNTIME  ◆ NEW</text>
+    <rect y="6" width="305" height="44" rx="5" fill="#fff" stroke="#c62828" stroke-width="2"/>
+    <text x="10" y="22" class="box-title-new">Output &amp; runtime</text>
+    <text x="10" y="38" class="box-body-new">-o · -t · -k · -s · --notification</text>
+  </g>
+  <line x1="172" y1="947" x2="172" y2="965" class="arrow" marker-end="url(#ah)"/>
+
+  <g transform="translate(20,968)">
+    <rect width="305" height="36" rx="5" fill="#f4f4f4" stroke="#888"/>
+    <text x="152" y="22" class="box-title" text-anchor="middle">Summary &amp; Confirm</text>
   </g>
 
-  <!-- Advanced walkthrough side branch (right of lane) -->
-  <g transform="translate(20,1075)">
-    <rect width="305" height="48" rx="5" fill="#fff" stroke="#888" stroke-dasharray="3 3"/>
-    <text x="10" y="20" class="box-title">Advanced walkthrough (path [2] or [a])</text>
-    <text x="10" y="36" class="box-body">Sequential prompts: preprocessing → filters →</text>
-    <text x="10" y="48" class="box-body">peak calling → CTK* → Clink* → motif → grouping*</text>
+  <!-- LANE 2: PREPittyPrep -->
+  <g transform="translate(345,250)">
+    <rect width="305" height="32" rx="6" fill="#fff" stroke="#c62828" stroke-width="2"/>
+    <text x="152" y="14" class="lane-h" text-anchor="middle" fill="#c62828">PREPittyPrep</text>
+    <text x="152" y="27" class="lane-status-new" text-anchor="middle">◆ NEW WIZARD — entire pipeline greenfield</text>
   </g>
 
-  <!-- ─────────── LANE 2: PREPittyPrep ─────────── -->
-  <g transform="translate(345,355)">
-    <rect width="305" height="34" rx="6" fill="#f4f4f4" stroke="#888"/>
-    <text x="152" y="14" class="lane-h" text-anchor="middle">PREPittyPrep.sh</text>
-    <text x="152" y="28" class="lane-sub" text-anchor="middle">preprocessing only · 5 steps</text>
+  <g transform="translate(345,295)">
+    <text x="0" y="0" class="step-num-new">1 · INPUT  ◆ NEW</text>
+    <rect y="6" width="305" height="56" rx="5" fill="#fff" stroke="#c62828" stroke-width="2"/>
+    <text x="10" y="22" class="box-title-new">Input Type</text>
+    <text x="10" y="38" class="box-body-new">Single FASTQ (-i) · Directory (-d)</text>
+    <text x="10" y="51" class="box-body-new">+ optional barcodes (-b) → demux mode</text>
+  </g>
+  <line x1="497" y1="357" x2="497" y2="375" class="arrow-new" marker-end="url(#ahnew)"/>
+
+  <g transform="translate(345,378)">
+    <text x="0" y="0" class="step-num-new">2 · MODE  ◆ NEW</text>
+    <rect y="6" width="305" height="56" rx="5" fill="#fff" stroke="#c62828" stroke-width="2"/>
+    <text x="10" y="22" class="box-title-new">Standard prep  ·OR·  GEO deposit</text>
+    <text x="10" y="38" class="box-body-new">--geo skips dedup &amp; fastp (raw demux)</text>
+    <text x="10" y="51" class="box-body-new">GEO branch short-circuits to step 5</text>
+  </g>
+  <line x1="497" y1="440" x2="497" y2="458" class="arrow-new" marker-end="url(#ahnew)"/>
+
+  <g transform="translate(345,461)">
+    <text x="0" y="0" class="step-num-new">3 · PREPROCESSING  ◆ NEW</text>
+    <rect y="6" width="305" height="76" rx="5" fill="#fff" stroke="#c62828" stroke-width="2"/>
+    <text x="10" y="22" class="box-title-new">UMI / adapter / dedup</text>
+    <text x="10" y="38" class="box-body-new">-u UMI · -a adapter</text>
+    <text x="10" y="51" class="box-body-new">--bc-len, --spacer-len if demuxing</text>
+    <text x="10" y="64" class="box-body-new">--no-dedup, --eclip, --demux-mismatches</text>
+  </g>
+  <line x1="497" y1="543" x2="497" y2="561" class="arrow-new" marker-end="url(#ahnew)"/>
+
+  <g transform="translate(345,564)">
+    <text x="0" y="0" class="step-num-new">4 · ncRNA FILTER  ◆ NEW</text>
+    <rect y="6" width="305" height="50" rx="5" fill="#fff" stroke="#c62828" stroke-width="2"/>
+    <text x="10" y="22" class="box-title-new">Optional --filter-ncrna</text>
+    <text x="10" y="38" class="box-body-new">If yes → ask for -x genome index</text>
+    <text x="10" y="51" class="box-body">(skipped in GEO mode)</text>
+  </g>
+  <line x1="497" y1="620" x2="497" y2="638" class="arrow-new" marker-end="url(#ahnew)"/>
+
+  <g transform="translate(345,641)">
+    <text x="0" y="0" class="step-num-new">5 · OUTPUT / RUNTIME  ◆ NEW</text>
+    <rect y="6" width="305" height="50" rx="5" fill="#fff" stroke="#c62828" stroke-width="2"/>
+    <text x="10" y="22" class="box-title-new">Output &amp; runtime</text>
+    <text x="10" y="38" class="box-body-new">-o · -t · -k · -s sample test</text>
+    <text x="10" y="51" class="box-body-new">(GEO mode lands here from step 2)</text>
+  </g>
+  <line x1="497" y1="697" x2="497" y2="715" class="arrow-new" marker-end="url(#ahnew)"/>
+
+  <g transform="translate(345,718)">
+    <rect width="305" height="36" rx="5" fill="#fff" stroke="#c62828" stroke-width="2"/>
+    <text x="152" y="22" class="box-title-new" text-anchor="middle">Summary &amp; Confirm</text>
   </g>
 
-  <g transform="translate(345,400)">
+  <g transform="translate(345,778)">
+    <rect width="305" height="100" rx="5" fill="#fdf3f3" stroke="#c62828" stroke-dasharray="4 3"/>
+    <text x="10" y="20" class="box-title-new">Host-script wiring  ◆ NEW</text>
+    <text x="10" y="38" class="box-body">PREPittyPrep.sh needs:</text>
+    <text x="10" y="52" class="box-body-new">• `-w/--wizard` flag parsing</text>
+    <text x="10" y="66" class="box-body-new">• `run_wizard_prepittyprep` call site</text>
+    <text x="10" y="80" class="box-body-new">• WIZ_* → script var consumption block</text>
+    <text x="10" y="94" class="box-body">(pattern: see CLIPittyClip.sh:222-256)</text>
+  </g>
+
+  <!-- LANE 3: MAPittyMap -->
+  <g transform="translate(670,250)">
+    <rect width="305" height="32" rx="6" fill="#f4f4f4" stroke="#888"/>
+    <text x="152" y="14" class="lane-h" text-anchor="middle">MAPittyMap</text>
+    <text x="152" y="27" class="lane-status" text-anchor="middle">minimal wizard exists · small extension</text>
+  </g>
+
+  <g transform="translate(670,295)">
     <text x="0" y="0" class="step-num">1 · INPUT</text>
-    <rect y="6" width="305" height="56" rx="5" fill="#fff" stroke="#888"/>
-    <text x="10" y="22" class="box-title">Input + optional barcodes</text>
-    <text x="10" y="38" class="box-body">Single FASTQ (-i) or directory (-d)</text>
-    <text x="10" y="52" class="box-body">+ optional -b barcodes → demux mode</text>
-  </g>
-  <line x1="497" y1="462" x2="497" y2="480" class="arrow" marker-end="url(#ah)"/>
-
-  <g transform="translate(345,483)">
-    <text x="0" y="0" class="step-num">2 · MODE</text>
-    <rect y="6" width="305" height="50" rx="5" fill="#fff" stroke="#888"/>
-    <text x="10" y="22" class="box-title">Standard prep · OR · GEO</text>
-    <text x="10" y="38" class="box-body">GEO: raw demux only (skip steps 3/4)</text>
-    <text x="10" y="52" class="box-body">requires single -i + barcodes</text>
-  </g>
-  <line x1="497" y1="539" x2="497" y2="557" class="arrow" marker-end="url(#ah)"/>
-
-  <g transform="translate(345,560)">
-    <text x="0" y="0" class="step-num">3 · PREPROCESSING</text>
-    <rect y="6" width="305" height="62" rx="5" fill="#fff" stroke="#888"/>
-    <text x="10" y="22" class="box-title">UMI · adapter · dedup · eCLIP</text>
-    <text x="10" y="38" class="box-body">+ --bc-len / --spacer-len if demuxing</text>
-    <text x="10" y="52" class="box-body">--no-dedup · --eclip · --demux-mismatches</text>
-  </g>
-  <line x1="497" y1="630" x2="497" y2="642" class="arrow" marker-end="url(#ah)"/>
-
-  <g transform="translate(345,645)">
-    <text x="0" y="0" class="step-num">4 · ncRNA FILTER</text>
-    <rect y="6" width="305" height="44" rx="5" fill="#fff" stroke="#888"/>
-    <text x="10" y="22" class="box-title">Optional --filter-ncrna</text>
-    <text x="10" y="38" class="box-body">If yes → genome index path</text>
-  </g>
-  <line x1="497" y1="697" x2="497" y2="709" class="arrow" marker-end="url(#ah)"/>
-
-  <g transform="translate(345,712)">
-    <text x="0" y="0" class="step-num">5 · OUTPUT / RUNTIME</text>
     <rect y="6" width="305" height="38" rx="5" fill="#fff" stroke="#888"/>
-    <text x="10" y="22" class="box-title">-o name · -t threads · -k · -s</text>
+    <text x="10" y="22" class="box-title">Input FASTQ (-i)</text>
+    <text x="10" y="36" class="box-body">single file only</text>
   </g>
-  <line x1="497" y1="758" x2="497" y2="770" class="arrow" marker-end="url(#ah)"/>
+  <line x1="822" y1="345" x2="822" y2="363" class="arrow" marker-end="url(#ah)"/>
 
-  <g transform="translate(345,773)">
-    <text x="0" y="0" class="step-num">FINAL CONFIRMATION</text>
-    <rect y="6" width="305" height="56" rx="5" fill="#fff" stroke="#1c6b3a" stroke-width="2"/>
-    <text x="10" y="22" class="box-title-green">Summary · cmdline · confirm</text>
-    <text x="10" y="38" class="box-body">• Full equivalent CLI</text>
-    <text x="10" y="52" class="box-body">• "Start preprocessing? [Y/n]"</text>
-  </g>
-  <line x1="497" y1="837" x2="497" y2="847" class="arrow-green" marker-end="url(#ahg)"/>
-
-  <g transform="translate(345,850)">
-    <rect width="305" height="32" rx="5" fill="#fff" stroke="#1c6b3a" stroke-width="2"/>
-    <text x="152" y="20" class="box-title-green" text-anchor="middle">Pipeline launches (PREPittyPrep.sh)</text>
-  </g>
-
-  <!-- GEO short-circuit dashed arrow from step 2 to step 5 -->
-  <path d="M 650 510 Q 685 510 685 670 Q 685 720 660 720" class="arrow" fill="none" stroke-dasharray="3 3" marker-end="url(#ah)"/>
-  <text x="690" y="600" class="box-body" fill="#444">--geo</text>
-  <text x="690" y="615" class="box-body" fill="#444">skip</text>
-
-  <!-- ─────────── LANE 3: MAPittyMap ─────────── -->
-  <g transform="translate(695,355)">
-    <rect width="305" height="34" rx="6" fill="#f4f4f4" stroke="#888"/>
-    <text x="152" y="14" class="lane-h" text-anchor="middle">MAPittyMap.sh</text>
-    <text x="152" y="28" class="lane-sub" text-anchor="middle">map + crosslink sites · 6 steps</text>
-  </g>
-
-  <g transform="translate(695,400)">
-    <text x="0" y="0" class="step-num">1 · INPUT</text>
-    <rect y="6" width="305" height="32" rx="5" fill="#fff" stroke="#888"/>
-    <text x="10" y="22" class="box-title">Single FASTQ file</text>
-  </g>
-  <line x1="847" y1="442" x2="847" y2="457" class="arrow" marker-end="url(#ah)"/>
-
-  <g transform="translate(695,461)">
+  <g transform="translate(670,366)">
     <text x="0" y="0" class="step-num">2 · GENOME</text>
-    <rect y="6" width="305" height="44" rx="5" fill="#fff" stroke="#888"/>
-    <text x="10" y="22" class="box-title">Index dir + optional FASTA</text>
-    <text x="10" y="38" class="box-body">--genome-fasta (CIMS uses calmd)</text>
+    <rect y="6" width="305" height="38" rx="5" fill="#fff" stroke="#888"/>
+    <text x="10" y="22" class="box-title">Genome Index (-x)</text>
+    <text x="10" y="36" class="box-body-new">+ optional --genome-fasta</text>
   </g>
-  <line x1="847" y1="515" x2="847" y2="530" class="arrow" marker-end="url(#ah)"/>
+  <line x1="822" y1="416" x2="822" y2="434" class="arrow" marker-end="url(#ah)"/>
 
-  <g transform="translate(695,534)">
-    <text x="0" y="0" class="step-num">3 · FILTERS</text>
-    <rect y="6" width="305" height="44" rx="5" fill="#fff" stroke="#888"/>
-    <text x="10" y="22" class="box-title">--filter-repeat / --no-chr-filter</text>
-    <text x="10" y="38" class="box-body">Repeat off · canonical-chr on (default)</text>
-  </g>
-  <line x1="847" y1="588" x2="847" y2="603" class="arrow" marker-end="url(#ah)"/>
-
-  <g transform="translate(695,607)">
-    <text x="0" y="0" class="step-num">4 · ANALYSIS PLAN</text>
-    <rect y="6" width="305" height="76" rx="5" fill="#fff" stroke="#888"/>
-    <text x="10" y="24" class="box-title">Pick crosslink-site tracks</text>
-    <text x="10" y="42" class="box-body">+ CTK CIMS (y/n)</text>
-    <text x="10" y="58" class="box-body">+ CTK CITS (y/n)</text>
-    <text x="10" y="74" class="box-body">+ Clink (y/n)</text>
-  </g>
-  <line x1="847" y1="691" x2="847" y2="704" class="arrow" marker-end="url(#ah)"/>
-
-  <g transform="translate(695,708)">
-    <text x="0" y="0" class="step-num">5 · SETTINGS</text>
+  <g transform="translate(670,437)">
+    <text x="0" y="0" class="step-num">3 · ALIGNER</text>
     <rect y="6" width="305" height="50" rx="5" fill="#fff" stroke="#888"/>
-    <text x="10" y="22" class="box-title">Defaults · OR · Advanced</text>
-    <text x="10" y="38" class="box-body">Advanced: aligner, threads, UMI,</text>
-    <text x="10" y="52" class="box-body">track-conditional knobs, motif</text>
+    <text x="10" y="22" class="box-title">STAR / Bowtie2, threads</text>
+    <text x="10" y="38" class="box-body">--align-mismatches, output name</text>
+    <text x="10" y="51" class="box-body">(existing)</text>
   </g>
-  <line x1="847" y1="766" x2="847" y2="778" class="arrow" marker-end="url(#ah)"/>
+  <line x1="822" y1="499" x2="822" y2="517" class="arrow-new" marker-end="url(#ahnew)"/>
 
-  <g transform="translate(695,781)">
-    <text x="0" y="0" class="step-num">FINAL CONFIRMATION</text>
-    <rect y="6" width="305" height="56" rx="5" fill="#fff" stroke="#1c6b3a" stroke-width="2"/>
-    <text x="10" y="22" class="box-title-green">Summary · cmdline · confirm</text>
-    <text x="10" y="38" class="box-body">• Full equivalent CLI</text>
-    <text x="10" y="52" class="box-body">• "Start mapping? [Y/n]"</text>
+  <g transform="translate(670,520)">
+    <text x="0" y="0" class="step-num-new">4 · FILTERS  ◆ NEW</text>
+    <rect y="6" width="305" height="38" rx="5" fill="#fff" stroke="#c62828" stroke-width="2"/>
+    <text x="10" y="22" class="box-title-new">--filter-repeat (opt-in)</text>
+    <text x="10" y="36" class="box-body-new">repeat-element filter (off by default)</text>
   </g>
-  <line x1="847" y1="845" x2="847" y2="858" class="arrow-green" marker-end="url(#ahg)"/>
+  <line x1="822" y1="570" x2="822" y2="588" class="arrow" marker-end="url(#ah)"/>
 
-  <g transform="translate(695,862)">
-    <rect width="305" height="62" rx="5" fill="#fff" stroke="#1c6b3a" stroke-width="2"/>
-    <text x="152" y="18" class="box-title-green" text-anchor="middle">MAPittyMap.sh launches</text>
-    <text x="152" y="36" class="box-body" text-anchor="middle">1_BAM/ · 2_BED/ · 3_COVERAGE/</text>
-    <text x="152" y="52" class="box-body" text-anchor="middle">+ 4_CTK_Analysis/ · 5_Clink_Analysis/ (if opted in)</text>
+  <g transform="translate(670,591)">
+    <text x="0" y="0" class="step-num">5 · ADVANCED args</text>
+    <rect y="6" width="305" height="44" rx="5" fill="#fff" stroke="#888"/>
+    <text x="10" y="22" class="box-title">Free-text aligner pass-through</text>
+    <text x="10" y="38" class="box-body">(existing)</text>
   </g>
+  <line x1="822" y1="647" x2="822" y2="665" class="arrow" marker-end="url(#ah)"/>
 
-  <!-- ─────────── LANE 4: PEAKittyPeak ─────────── -->
-  <g transform="translate(1020,355)">
-    <rect width="305" height="34" rx="6" fill="#f4f4f4" stroke="#888"/>
-    <text x="152" y="14" class="lane-h" text-anchor="middle">PEAKittyPeak.sh</text>
-    <text x="152" y="28" class="lane-sub" text-anchor="middle">peak calling only · 6 steps</text>
+  <g transform="translate(670,668)">
+    <rect width="305" height="36" rx="5" fill="#f4f4f4" stroke="#888"/>
+    <text x="152" y="22" class="box-title" text-anchor="middle">Summary &amp; Confirm</text>
   </g>
 
-  <g transform="translate(1020,400)">
+  <g transform="translate(670,728)">
+    <rect width="305" height="68" rx="5" fill="#fdf3f3" stroke="#c62828" stroke-dasharray="4 3"/>
+    <text x="10" y="20" class="box-title-new">Net delta</text>
+    <text x="10" y="38" class="box-body-new">+ --filter-repeat prompt (new section)</text>
+    <text x="10" y="52" class="box-body-new">+ --genome-fasta hint (existing GENOME box)</text>
+    <text x="10" y="64" class="box-body">No structural change to existing flow</text>
+  </g>
+
+  <!-- LANE 4: PEAKittyPeak -->
+  <g transform="translate(995,250)">
+    <rect width="305" height="32" rx="6" fill="#f4f4f4" stroke="#888"/>
+    <text x="152" y="14" class="lane-h" text-anchor="middle">PEAKittyPeak</text>
+    <text x="152" y="27" class="lane-status" text-anchor="middle">minimal wizard exists · moderate extension</text>
+  </g>
+
+  <g transform="translate(995,295)">
     <text x="0" y="0" class="step-num">1 · INPUT</text>
     <rect y="6" width="305" height="44" rx="5" fill="#fff" stroke="#888"/>
     <text x="10" y="22" class="box-title">Working dir (BED/ folder)</text>
     <text x="10" y="38" class="box-body">validates .bed file count</text>
   </g>
-  <line x1="1172" y1="450" x2="1172" y2="468" class="arrow" marker-end="url(#ah)"/>
+  <line x1="1147" y1="351" x2="1147" y2="369" class="arrow-new" marker-end="url(#ahnew)"/>
 
-  <g transform="translate(1020,471)">
-    <text x="0" y="0" class="step-num">2 · AGGREGATION</text>
-    <rect y="6" width="305" height="32" rx="5" fill="#fff" stroke="#888"/>
-    <text x="10" y="22" class="box-title">--aggregate · --no-aggregate</text>
+  <g transform="translate(995,372)">
+    <text x="0" y="0" class="step-num-new">2 · AGGREGATION MODE  ◆ NEW</text>
+    <rect y="6" width="305" height="44" rx="5" fill="#fff" stroke="#c62828" stroke-width="2"/>
+    <text x="10" y="22" class="box-title-new">--aggregate · --no-aggregate</text>
+    <text x="10" y="38" class="box-body-new">combine all BEDs vs per-sample</text>
   </g>
-  <line x1="1172" y1="509" x2="1172" y2="527" class="arrow" marker-end="url(#ah)"/>
+  <line x1="1147" y1="422" x2="1147" y2="440" class="arrow" marker-end="url(#ah)"/>
 
-  <g transform="translate(1020,530)">
+  <g transform="translate(995,443)">
     <text x="0" y="0" class="step-num">3 · PEAK CALLER</text>
-    <rect y="6" width="305" height="50" rx="5" fill="#fff" stroke="#888"/>
+    <rect y="6" width="305" height="64" rx="5" fill="#fff" stroke="#888"/>
     <text x="10" y="22" class="box-title">HOMER (default) or CTK</text>
-    <text x="10" y="38" class="box-body">peak-dist · size · fragLen (HOMER)</text>
-    <text x="10" y="52" class="box-body">--peak-caller-args</text>
+    <text x="10" y="38" class="box-body">peak-dist, peak-size, fragLength</text>
+    <text x="10" y="51" class="box-body-new">localSize 1000 (was 10000); rename args</text>
   </g>
-  <line x1="1172" y1="586" x2="1172" y2="604" class="arrow" marker-end="url(#ah)"/>
+  <line x1="1147" y1="513" x2="1147" y2="531" class="arrow-new" marker-end="url(#ahnew)"/>
 
-  <g transform="translate(1020,607)">
-    <text x="0" y="0" class="step-num">4 · GROUPING</text>
-    <rect y="6" width="305" height="44" rx="5" fill="#fff" stroke="#888"/>
-    <text x="10" y="22" class="box-title">Groups file + --group-peaks</text>
-    <text x="10" y="38" class="box-body">optional aggregation metrics</text>
+  <g transform="translate(995,534)">
+    <text x="0" y="0" class="step-num-new">4 · GROUPING  ◆ NEW</text>
+    <rect y="6" width="305" height="50" rx="5" fill="#fff" stroke="#c62828" stroke-width="2"/>
+    <text x="10" y="22" class="box-title-new">Groups file + --group-peaks</text>
+    <text x="10" y="38" class="box-body-new">aggregation metrics across samples</text>
+    <text x="10" y="51" class="box-body-new">--group-peaks for peak-level grouping</text>
   </g>
-  <line x1="1172" y1="659" x2="1172" y2="671" class="arrow" marker-end="url(#ah)"/>
+  <line x1="1147" y1="590" x2="1147" y2="608" class="arrow-new" marker-end="url(#ahnew)"/>
 
-  <g transform="translate(1020,674)">
-    <text x="0" y="0" class="step-num">5 · CTK ANNOTATION</text>
-    <rect y="6" width="305" height="44" rx="5" fill="#fff" stroke="#888"/>
-    <text x="10" y="22" class="box-title">--ctk-dir (optional)</text>
-    <text x="10" y="38" class="box-body">+ --cims-fdr · --cits-pval</text>
+  <g transform="translate(995,611)">
+    <text x="0" y="0" class="step-num-new">5 · CTK ANNOTATION  ◆ NEW</text>
+    <rect y="6" width="305" height="44" rx="5" fill="#fff" stroke="#c62828" stroke-width="2"/>
+    <text x="10" y="22" class="box-title-new">--ctk-dir (optional)</text>
+    <text x="10" y="38" class="box-body-new">+ --cims-fdr · --cits-pval thresholds</text>
   </g>
-  <line x1="1172" y1="726" x2="1172" y2="738" class="arrow" marker-end="url(#ah)"/>
+  <line x1="1147" y1="661" x2="1147" y2="679" class="arrow" marker-end="url(#ah)"/>
 
-  <g transform="translate(1020,741)">
-    <text x="0" y="0" class="step-num">6 · OUTPUT</text>
-    <rect y="6" width="305" height="32" rx="5" fill="#fff" stroke="#888"/>
+  <g transform="translate(995,682)">
+    <text x="0" y="0" class="step-num">6 · OUTPUT name</text>
+    <rect y="6" width="305" height="38" rx="5" fill="#fff" stroke="#888"/>
     <text x="10" y="22" class="box-title">Base name (-n)</text>
+    <text x="10" y="36" class="box-body">(existing)</text>
   </g>
-  <line x1="1172" y1="779" x2="1172" y2="797" class="arrow" marker-end="url(#ah)"/>
+  <line x1="1147" y1="726" x2="1147" y2="744" class="arrow" marker-end="url(#ah)"/>
 
-  <g transform="translate(1020,800)">
-    <text x="0" y="0" class="step-num">FINAL CONFIRMATION</text>
-    <rect y="6" width="305" height="56" rx="5" fill="#fff" stroke="#1c6b3a" stroke-width="2"/>
-    <text x="10" y="22" class="box-title-green">Summary · cmdline · confirm</text>
-    <text x="10" y="38" class="box-body">• Full equivalent CLI</text>
-    <text x="10" y="52" class="box-body">• "Start peak calling? [Y/n]"</text>
-  </g>
-  <line x1="1172" y1="864" x2="1172" y2="874" class="arrow-green" marker-end="url(#ahg)"/>
-
-  <g transform="translate(1020,877)">
-    <rect width="305" height="32" rx="5" fill="#fff" stroke="#1c6b3a" stroke-width="2"/>
-    <text x="152" y="20" class="box-title-green" text-anchor="middle">Pipeline launches (PEAKittyPeak.sh)</text>
+  <g transform="translate(995,747)">
+    <rect width="305" height="36" rx="5" fill="#f4f4f4" stroke="#888"/>
+    <text x="152" y="22" class="box-title" text-anchor="middle">Summary &amp; Confirm</text>
   </g>
 
-  <!-- Lane separators -->
-  <line x1="335" y1="345" x2="335" y2="1170" class="arrow" stroke-dasharray="3 4" stroke="#ddd"/>
-  <line x1="685" y1="345" x2="685" y2="1170" class="arrow" stroke-dasharray="3 4" stroke="#ddd"/>
-  <line x1="1010" y1="345" x2="1010" y2="1170" class="arrow" stroke-dasharray="3 4" stroke="#ddd"/>
-
-  <!-- ─────────── BOTTOM: auto-launch detail (only for Entry A) ─────────── -->
-  <g transform="translate(220,1240)">
-    <rect width="900" height="120" rx="8" fill="#fff" stroke="#1c6b3a" stroke-width="2"/>
-    <text x="450" y="22" class="box-title-green" text-anchor="middle">After "Start? [Y/n]" — auto-launch (Entry A) or hand-back (Entry B)</text>
-    <text x="20" y="46" class="box-body">• Each wizard exports <tspan font-family="ui-monospace, monospace">CLIPITTY_EQUIV_CMD</tspan> — the full equivalent CLI command for the run.</text>
-    <text x="20" y="62" class="box-body">• <tspan font-weight="600">Entry A</tspan> (CLIPittyClip_wizard.sh): prepends repo dir to PATH, then <tspan font-family="ui-monospace, monospace">eval "$CLIPITTY_EQUIV_CMD"</tspan> → real tool runs immediately.</text>
-    <text x="20" y="78" class="box-body">• <tspan font-weight="600">Entry B</tspan> (&lt;Tool&gt;.sh -w): wizard returns to its host script, WIZ_* env vars feed the existing flag-parsing block, host runs.</text>
-    <text x="20" y="98" class="box-body">• Equivalent CLI is also printed to terminal and to the run's log file — copy-paste to reproduce non-interactively next time.</text>
-    <text x="20" y="114" class="box-body">• All <tspan font-family="ui-monospace, monospace">read -p</tspan> calls are EOF-guarded: closed stdin aborts with a clear message instead of spinning.</text>
+  <g transform="translate(995,807)">
+    <rect width="305" height="68" rx="5" fill="#fdf3f3" stroke="#c62828" stroke-dasharray="4 3"/>
+    <text x="10" y="20" class="box-title-new">Net delta</text>
+    <text x="10" y="38" class="box-body-new">+ aggregation toggle, grouping, CTK annot</text>
+    <text x="10" y="52" class="box-body-new">+ rename --ctk-args → --peak-caller-args</text>
+    <text x="10" y="66" class="box-body-new">+ corrected HOMER localSize default</text>
   </g>
 
-  <!-- Footer -->
-  <text x="670" y="1400" class="footer" text-anchor="middle">CLIPittyClip Suite v3.5 — wizard implementation as merged on v3-wizard-update.</text>
-  <text x="670" y="1418" class="footer" text-anchor="middle">Categories marked * in lane 1 are track-conditional (CTK requires --run-cims/--run-cits; Clink requires --run-clink; Grouping requires multi-sample input).</text>
+  <line x1="335" y1="240" x2="335" y2="1020" class="arrow" stroke-dasharray="3 4" stroke="#ddd"/>
+  <line x1="660" y1="240" x2="660" y2="1020" class="arrow" stroke-dasharray="3 4" stroke="#ddd"/>
+  <line x1="985" y1="240" x2="985" y2="1020" class="arrow" stroke-dasharray="3 4" stroke="#ddd"/>
+
+  <text x="660" y="1080" class="footer" text-anchor="middle">Triage selects the tool, then each tool's wizard runs in isolation. CLIPittyClip gets the biggest overhaul; PREPittyPrep is built from scratch.</text>
+  <text x="660" y="1098" class="footer" text-anchor="middle">MAPittyMap and PEAKittyPeak have skeletal wizards today — they get focused extensions, not rewrites.</text>
 </svg>

@@ -406,39 +406,20 @@ Key options: `-u` (UMI length), `-b` (barcodes), `-a` (adapter), `--bc-len`, `--
 
 ### MAPittyMap.sh
 
-Standalone alignment + crosslink-site analysis — FASTQ in; BAM + collapsed BED + bedgraph by default, plus optional CTK CIMS/CITS and Clink tracks.
-
-Output tree (`{BASENAME}_mapping/`):
-
-```
-1_BAM/                # sorted, indexed BAM
-2_BED/                # PCR-collapsed BED (feeds PEAKittyPeak directly)
-3_COVERAGE/           # strand-specific normalized bedgraphs
-4_CTK_Analysis/       # only with --run-cims / --run-cits
-5_Clink_Analysis/     # only with --run-clink
-REPORTS/              # alignment logs
-```
+Standalone alignment — FASTQ → sorted BAM.
 
 ```bash
-# Default: BAM + collapsed BED + bedgraph
+# STAR
 MAPittyMap.sh -i reads.fastq.gz -x /path/to/star_index -t 8
 
-# Legacy BAM-only behavior
-MAPittyMap.sh -i reads.fastq.gz -x /path/to/star_index --bam-only
+# Bowtie2
+MAPittyMap.sh -i reads.fastq.gz -x /path/to/bt2_index -t 8 -m bowtie2
 
-# Add CTK CIMS + CITS crosslink-site analysis (genome FASTA recommended)
-MAPittyMap.sh -i reads.fastq.gz -x star_index/ --run-cims-cits --genome-fasta ref.fa -t 8
-
-# Add Clink track (Python pileup → CITS/CIMS)
-MAPittyMap.sh -i reads.fastq.gz -x star_index/ --run-clink -u 7 -t 8
-
-# Interactive wizard
-MAPittyMap.sh -i reads.fastq.gz -x star_index/ -w
+# Interactive wizard for custom settings
+MAPittyMap.sh -i reads.fastq.gz -x /path/to/star_index -w
 ```
 
-Key options: `-i`, `-x` (required), `-t`, `-m`, `-o`, `-u`, `--aligner`, `--genome-fasta`, `--filter-repeat`, `--no-chr-filter`, `--bam-only`, `--run-cims`, `--run-cits`, `--run-cims-cits`, `--run-clink`, `--no-motif`, `-w`
-
-The collapsed BED in `2_BED/` is the canonical input to PEAKittyPeak; the CTK output dir is the right argument to PEAKittyPeak's `--ctk-dir` for annotating peaks with CIMS/CITS counts.
+Key options: `-i`, `-x` (required), `-t`, `-m` (star/bowtie2), `-o`, `--genome-fasta`, `-w`
 
 ---
 
@@ -588,7 +569,6 @@ RPM is calculated as `(reads mapped to element / total input reads) × 10⁶`.
 
 ### v3.5.0
 - **Wizard overhaul**: per-tool interactive wizards (`-w` flag) for CLIPittyClip, PREPittyPrep, MAPittyMap, and PEAKittyPeak. New top-level launcher `CLIPittyClip_wizard.sh` provides a tool-triage entry point. Wizards collect inputs, ask for analysis tracks (HOMER / CTK CIMS-CITS / Clink), let you spot-edit defaults by category, show a diff-vs-defaults view + the equivalent CLI command at the end, and launch the chosen tool automatically.
-- **MAPittyMap scope expansion**: alignment module now produces collapsed BED and bedgraphs by default, and optionally runs CTK CIMS/CITS (`--run-cims`, `--run-cits`) and Clink (`--run-clink`) crosslink-site analysis. Output tree mirrors the full pipeline (`1_BAM/`, `2_BED/`, `3_COVERAGE/`, `4_CTK_Analysis/`, `5_Clink_Analysis/`). Legacy BAM-only behavior preserved via `--bam-only`. PEAKittyPeak's role is now purely peak calling; point its `--ctk-dir` at MAPittyMap's `4_CTK_Analysis/` to annotate peaks with crosslink-site counts.
 - **Repeat element pre-filter** (`--filter-repeat`): replaces the former ncRNA filter with a dedicated repeat filter targeting truly repetitive sequences that STAR cannot place uniquely
   - Index composition: NCBI 45S rDNA (U13369.1), GtRNAdb tRNAs, Dfam/RepeatMasker TE consensus sequences filtered to mammal-relevant clades
   - miRNA, Y RNA, lncRNA, snRNA, and snoRNA pass through to STAR for normal genomic annotation

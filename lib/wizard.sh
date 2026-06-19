@@ -1159,7 +1159,7 @@ run_wizard_mapittymap() {
 
     WIZ_GENOME_FASTA=""
     echo ""
-    echo "  Optional: genome FASTA path (recommended for CIMS; leave blank to skip)."
+    echo "  Optional: genome FASTA path (leave blank to skip)."
     read -p "  > " WIZ_GENOME_FASTA || { echo -e "${WIZ_RED}  ✗ Input stream closed — aborting wizard.${WIZ_NC}" >&2; exit 1; }
     WIZ_GENOME_FASTA="${WIZ_GENOME_FASTA/#\~/$HOME}"
 
@@ -1172,34 +1172,13 @@ run_wizard_mapittymap() {
     print_section "STEP 3: Filters"
     echo ""
     WIZ_FILTER_REPEAT="false"
-    WIZ_NO_CHR_FILTER="false"
     prompt_yesno "  Enable repeat-element pre-filter? (default: off)" "n" _yn
     [[ "$_yn" == "y" ]] && WIZ_FILTER_REPEAT="true"
-    prompt_yesno "  Disable canonical-chromosome filter? (kept ON by default)" "n" _yn
-    [[ "$_yn" == "y" ]] && WIZ_NO_CHR_FILTER="true"
 
     # ─────────────────────────────────────────────────────────────────────────
-    # STEP 4: Analysis Plan (crosslink-site tracks)
+    # STEP 4: Default or Advanced
     # ─────────────────────────────────────────────────────────────────────────
-    print_section "STEP 4: Analysis Plan"
-    echo ""
-    echo "  Mapping always produces BAM + collapsed BED + bedgraph."
-    echo "  Optional crosslink-site tracks (each is independent):"
-    echo ""
-    WIZ_RUN_CIMS="false"
-    WIZ_RUN_CITS="false"
-    WIZ_RUN_CLINK="false"
-    prompt_yesno "  Enable CTK CIMS analysis (mutation sites)?" "n" _yn
-    [[ "$_yn" == "y" ]] && WIZ_RUN_CIMS="true"
-    prompt_yesno "  Enable CTK CITS analysis (truncation sites)?" "n" _yn
-    [[ "$_yn" == "y" ]] && WIZ_RUN_CITS="true"
-    prompt_yesno "  Enable Clink pipeline (Python pileup → CITS/CIMS)?" "n" _yn
-    [[ "$_yn" == "y" ]] && WIZ_RUN_CLINK="true"
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # STEP 5: Default or Advanced
-    # ─────────────────────────────────────────────────────────────────────────
-    print_section "STEP 5: Settings"
+    print_section "STEP 4: Settings"
     echo ""
     prompt_select "How would you like to proceed?" WIZ_SETTINGS_MODE \
         "Use default settings" \
@@ -1211,17 +1190,6 @@ run_wizard_mapittymap() {
     WIZ_ALIGN_MISMATCHES="2"
     WIZ_OUTPUT_NAME=""
     WIZ_ALIGNER_ARGS=""
-    WIZ_UMI_LEN="0"
-    WIZ_CIMS_ITER="5"
-    WIZ_CIMS_FDR="0.05"
-    WIZ_CITS_PVAL="0.05"
-    WIZ_CITS_GAP="25"
-    WIZ_CLINK_UMI_LEN=""
-    WIZ_CLINK_FDR="0.05"
-    WIZ_CLINK_MIN_COV="5"
-    WIZ_CLINK_MULTI_MAP="false"
-    WIZ_NO_MOTIF="false"
-    WIZ_FLANK="10"
 
     if [[ "$WIZ_SETTINGS_MODE" == "2" ]]; then
         # ─────────────────────────────────────────────────────────────────────
@@ -1231,54 +1199,51 @@ run_wizard_mapittymap() {
             "MAPittyMap.sh --help" \
             "STAR: https://github.com/alexdobin/STAR" \
             "Bowtie2: https://bowtie-bio.sourceforge.net/bowtie2"
-
+        
         print_section "ALIGNER SETTINGS"
         echo ""
         prompt_select "Select aligner:" WIZ_ALIGNER_SEL "STAR (default)" "Bowtie2"
         if [[ "$WIZ_ALIGNER_SEL" == "2" ]]; then WIZ_ALIGNER="bowtie2"; fi
-
+        
         prompt_value "  Enter number of threads" "1" WIZ_THREADS "int"
         prompt_value "  Enter max alignment mismatches" "2" WIZ_ALIGN_MISMATCHES "int"
-        prompt_value "  Enter UMI length (0 if none)" "0" WIZ_UMI_LEN "int"
-
+        
         local default_name=$(basename "$WIZ_INPUT_FILE" .fastq.gz)
         prompt_value "  Enter output name" "$default_name" WIZ_OUTPUT_NAME
-
+        
         echo ""
-        echo "  Enter additional aligner arguments (optional, blank to skip):"
-        read -p "  > " WIZ_ALIGNER_ARGS || { echo -e "${WIZ_RED}  ✗ Input stream closed — aborting wizard.${WIZ_NC}" >&2; exit 1; }
-
-        # Track-conditional knob prompts
-        if [[ "$WIZ_RUN_CIMS" == "true" || "$WIZ_RUN_CITS" == "true" ]]; then
-            print_section "CTK CIMS/CITS"
-            echo -e "  ${WIZ_YELLOW}Defaults:${WIZ_NC} cims-iter=5, cims-fdr=0.05, cits-pval=0.05, cits-gap=25"
-            prompt_value "  CIMS permutation iterations" "5" WIZ_CIMS_ITER "int"
-            prompt_value "  CIMS FDR threshold" "0.05" WIZ_CIMS_FDR "float"
-            prompt_value "  CITS p-value threshold" "0.05" WIZ_CITS_PVAL "float"
-            prompt_value "  CITS clustering gap (-1 = no clustering)" "25" WIZ_CITS_GAP "int"
-        fi
-
-        if [[ "$WIZ_RUN_CLINK" == "true" ]]; then
-            print_section "CLINK PIPELINE"
-            echo -e "  ${WIZ_YELLOW}Defaults:${WIZ_NC} fdr=0.05, min-cov=5"
-            prompt_value "  Clink UMI length (blank = auto-detect)" "" WIZ_CLINK_UMI_LEN
-            prompt_value "  Clink FDR threshold" "0.05" WIZ_CLINK_FDR "float"
-            prompt_value "  Clink minimum coverage" "5" WIZ_CLINK_MIN_COV "int"
-            prompt_yesno "  Rescue multi-mapped reads via EM (--clink-multi-map)?" "n" _yn
-            [[ "$_yn" == "y" ]] && WIZ_CLINK_MULTI_MAP="true"
-        fi
-
-        if [[ "$WIZ_RUN_CIMS" == "true" || "$WIZ_RUN_CITS" == "true" ]]; then
-            print_section "MOTIF / FLANKED BED"
+        if [[ "$WIZ_ALIGNER" == "star" ]]; then
+            echo -e "  ${WIZ_YELLOW}Current STAR defaults:${WIZ_NC}"
+            echo "    --outFilterMultimapNmax 10"
+            echo "    --outFilterMismatchNmax $WIZ_ALIGN_MISMATCHES"
+            echo "    --alignEndsType EndToEnd"
             echo ""
-            prompt_yesno "  Skip flanked BED generation (--no-motif)?" "n" _yn
-            [[ "$_yn" == "y" ]] && WIZ_NO_MOTIF="true"
-            if [[ "$WIZ_NO_MOTIF" == "false" ]]; then
-                prompt_value "  Flanked BED nucleotides" "10" WIZ_FLANK "int"
-            fi
+            echo -e "  ${WIZ_GREEN}Common STAR options:${WIZ_NC}"
+            echo "    --outFilterMultimapNmax <int>    Max mapped locations (default: 10)"
+            echo "    --outFilterMismatchNmax <int>    Max mismatches"
+            echo "    --alignEndsType <str>            EndToEnd or Local"
+            echo "    --chimSegmentMin <int>           Min chimeric segment length"
+            echo ""
+            echo -e "  ${WIZ_YELLOW}Note:${WIZ_NC} These are examples. See STAR manual for full options."
+            echo "  Enter additional STAR arguments (optional):"
+            read -p "  > " WIZ_ALIGNER_ARGS || { echo -e "${WIZ_RED}  ✗ Input stream closed — aborting wizard.${WIZ_NC}" >&2; exit 1; }
+        else
+            echo -e "  ${WIZ_YELLOW}Current Bowtie2 defaults:${WIZ_NC}"
+            echo "    --end-to-end (Standard sensitivity)"
+            echo "    --md"
+            echo ""
+            echo -e "  ${WIZ_GREEN}Common Bowtie2 options:${WIZ_NC}"
+            echo "    --local                          Local alignment mode"
+            echo "    --very-sensitive                 More accurate alignment"
+            echo "    -N <int>                         Max mismatches in seed (0 or 1)"
+            echo "    -L <int>                         Seed length"
+            echo ""
+            echo -e "  ${WIZ_YELLOW}Note:${WIZ_NC} These are examples. See Bowtie2 manual for full options."
+            echo "  Enter additional Bowtie2 arguments (optional):"
+            read -p "  > " WIZ_ALIGNER_ARGS || { echo -e "${WIZ_RED}  ✗ Input stream closed — aborting wizard.${WIZ_NC}" >&2; exit 1; }
         fi
     fi
-
+    
     # ─────────────────────────────────────────────────────────────────────────
     # CONFIGURATION SUMMARY
     # ─────────────────────────────────────────────────────────────────────────
@@ -1289,23 +1254,13 @@ run_wizard_mapittymap() {
     printf "  │ %-20s %-38s │\n" "Genome Index:" "$(basename "$WIZ_GENOME_INDEX")"
     [[ -n "$WIZ_GENOME_FASTA" ]] && printf "  │ %-20s %-38s │\n" "Genome FASTA:" "$(basename "$WIZ_GENOME_FASTA")"
     local _rf="Disabled"; [[ "$WIZ_FILTER_REPEAT" == "true" ]] && _rf="Enabled"
-    local _cf="Enabled";  [[ "$WIZ_NO_CHR_FILTER" == "true" ]] && _cf="Disabled"
     printf "  │ %-20s %-38s │\n" "Repeat Filter:" "$_rf"
-    printf "  │ %-20s %-38s │\n" "Chr Filter:" "$_cf"
     echo "  ├─────────────────────────────────────────────────────────────┤"
     printf "  │ %-20s %-38s │\n" "Aligner:" "$(echo "$WIZ_ALIGNER" | tr '[:lower:]' '[:upper:]')"
     printf "  │ %-20s %-38s │\n" "Threads:" "$WIZ_THREADS"
     printf "  │ %-20s %-38s │\n" "Max Mismatches:" "$WIZ_ALIGN_MISMATCHES"
-    [[ "$WIZ_UMI_LEN" != "0" ]] && printf "  │ %-20s %-38s │\n" "UMI Length:" "$WIZ_UMI_LEN"
     [[ -n "$WIZ_OUTPUT_NAME" ]] && printf "  │ %-20s %-38s │\n" "Output Name:" "$WIZ_OUTPUT_NAME"
     [[ -n "$WIZ_ALIGNER_ARGS" ]] && printf "  │ %-20s %-38s │\n" "Aligner Args:" "$WIZ_ALIGNER_ARGS"
-    echo "  ├─────────────────────────────────────────────────────────────┤"
-    local _cims="Disabled"; [[ "$WIZ_RUN_CIMS" == "true" ]] && _cims="Enabled"
-    local _cits="Disabled"; [[ "$WIZ_RUN_CITS" == "true" ]] && _cits="Enabled"
-    local _clink="Disabled"; [[ "$WIZ_RUN_CLINK" == "true" ]] && _clink="Enabled"
-    printf "  │ %-20s %-38s │\n" "CTK CIMS:" "$_cims"
-    printf "  │ %-20s %-38s │\n" "CTK CITS:" "$_cits"
-    printf "  │ %-20s %-38s │\n" "Clink:" "$_clink"
     echo "  └─────────────────────────────────────────────────────────────┘"
     echo ""
 
@@ -1315,27 +1270,8 @@ run_wizard_mapittymap() {
     [[ "$WIZ_ALIGNER" != "star" ]] && _cmd="$_cmd --aligner $WIZ_ALIGNER"
     [[ "$WIZ_THREADS" != "1" ]] && _cmd="$_cmd -t $WIZ_THREADS"
     [[ "$WIZ_ALIGN_MISMATCHES" != "2" ]] && _cmd="$_cmd -m $WIZ_ALIGN_MISMATCHES"
-    [[ "$WIZ_UMI_LEN" != "0" ]] && _cmd="$_cmd -u $WIZ_UMI_LEN"
     [[ -n "$WIZ_OUTPUT_NAME" ]] && _cmd="$_cmd -o \"$WIZ_OUTPUT_NAME\""
     [[ "$WIZ_FILTER_REPEAT" == "true" ]] && _cmd="$_cmd --filter-repeat"
-    [[ "$WIZ_NO_CHR_FILTER" == "true" ]] && _cmd="$_cmd --no-chr-filter"
-    if [[ "$WIZ_RUN_CIMS" == "true" && "$WIZ_RUN_CITS" == "true" ]]; then
-        _cmd="$_cmd --run-cims-cits"
-    else
-        [[ "$WIZ_RUN_CIMS" == "true" ]] && _cmd="$_cmd --run-cims"
-        [[ "$WIZ_RUN_CITS" == "true" ]] && _cmd="$_cmd --run-cits"
-    fi
-    [[ "$WIZ_CIMS_ITER" != "5" ]] && _cmd="$_cmd --cims-iter $WIZ_CIMS_ITER"
-    [[ "$WIZ_CIMS_FDR" != "0.05" ]] && _cmd="$_cmd --cims-fdr $WIZ_CIMS_FDR"
-    [[ "$WIZ_CITS_PVAL" != "0.05" ]] && _cmd="$_cmd --cits-pval $WIZ_CITS_PVAL"
-    [[ "$WIZ_CITS_GAP" != "25" ]] && _cmd="$_cmd --cits-gap $WIZ_CITS_GAP"
-    [[ "$WIZ_RUN_CLINK" == "true" ]] && _cmd="$_cmd --run-clink"
-    [[ -n "$WIZ_CLINK_UMI_LEN" ]] && _cmd="$_cmd --clink-umi-len $WIZ_CLINK_UMI_LEN"
-    [[ "$WIZ_CLINK_FDR" != "0.05" ]] && _cmd="$_cmd --clink-fdr $WIZ_CLINK_FDR"
-    [[ "$WIZ_CLINK_MIN_COV" != "5" ]] && _cmd="$_cmd --clink-min-cov $WIZ_CLINK_MIN_COV"
-    [[ "$WIZ_CLINK_MULTI_MAP" == "true" ]] && _cmd="$_cmd --clink-multi-map"
-    [[ "$WIZ_NO_MOTIF" == "true" ]] && _cmd="$_cmd --no-motif"
-    [[ "$WIZ_FLANK" != "10" ]] && _cmd="$_cmd -f $WIZ_FLANK"
     CLIPITTY_EQUIV_CMD="$_cmd"
     echo -e "  ${WIZ_YELLOW}Equivalent command (copy to skip the wizard next time):${WIZ_NC}"
     echo "    $_cmd"
@@ -1349,11 +1285,8 @@ run_wizard_mapittymap() {
     fi
 
     # Export variables for main script
-    export WIZ_INPUT_FILE WIZ_GENOME_INDEX WIZ_GENOME_FASTA WIZ_FILTER_REPEAT WIZ_NO_CHR_FILTER
-    export WIZ_ALIGNER WIZ_THREADS WIZ_ALIGN_MISMATCHES WIZ_OUTPUT_NAME WIZ_ALIGNER_ARGS WIZ_UMI_LEN
-    export WIZ_RUN_CIMS WIZ_RUN_CITS WIZ_CIMS_ITER WIZ_CIMS_FDR WIZ_CITS_PVAL WIZ_CITS_GAP
-    export WIZ_RUN_CLINK WIZ_CLINK_UMI_LEN WIZ_CLINK_FDR WIZ_CLINK_MIN_COV WIZ_CLINK_MULTI_MAP
-    export WIZ_NO_MOTIF WIZ_FLANK
+    export WIZ_INPUT_FILE WIZ_GENOME_INDEX WIZ_GENOME_FASTA WIZ_FILTER_REPEAT
+    export WIZ_ALIGNER WIZ_THREADS WIZ_ALIGN_MISMATCHES WIZ_OUTPUT_NAME WIZ_ALIGNER_ARGS
     export CLIPITTY_EQUIV_CMD
 
     echo -e "${WIZ_GREEN}Starting mapping...${WIZ_NC}"
