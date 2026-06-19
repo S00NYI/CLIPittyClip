@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# MAPittyMap.sh - Mapping-only module for CLIPittyClip (v3.0)
+# MAPittyMap.sh - Mapping-only module for CLIPittyClip (v3.5)
 # Uses the unified lib/modules.sh for consistent behavior
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -24,7 +24,7 @@ function show_usage {
     echo ""
     echo "Usage: $0 -i <input.fastq.gz> -x <index_dir> [options]"
     echo ""
-    echo "MAPittyMap v3.0 - Standalone Mapping Module for CLIPittyClip"
+    echo "MAPittyMap v3.5 - Standalone Mapping Module for CLIPittyClip"
     echo ""
     echo "REQUIRED:"
     echo "  -i <path>      Input FASTQ/FASTA file (gzipped supported)"
@@ -85,6 +85,8 @@ if [[ "$WIZARD_MODE" == "true" ]]; then
     # Apply wizard settings
     INPUT_FILE="$WIZ_INPUT_FILE"
     GENOME_INDEX="$WIZ_GENOME_INDEX"
+    [[ -n "$WIZ_GENOME_FASTA" ]] && GENOME_FASTA="$WIZ_GENOME_FASTA"
+    [[ "$WIZ_FILTER_REPEAT" == "true" ]] && FILTER_REPEAT="true"
     ALIGNER="$WIZ_ALIGNER"
     THREADS="$WIZ_THREADS"
     MISMATCH_MAX="${WIZ_ALIGN_MISMATCHES:-2}"

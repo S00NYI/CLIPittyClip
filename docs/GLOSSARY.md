@@ -1,6 +1,6 @@
 # CLIPittyClip Domain Glossary
 
-> Authoritative vocabulary for CLIPittyClip v3.3.
+> Authoritative vocabulary for CLIPittyClip v3.5.
 > Written following Domain-Driven Design (DDD) principles.
 > All terms are defined as they are used in this codebase. 
 > When a term diverges from how an external tool uses it, that divergence is noted.

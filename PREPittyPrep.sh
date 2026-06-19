@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# PREPittyPrep.sh - Preprocessing Module for CLIPittyClip (v1.0)
+# PREPittyPrep.sh - Preprocessing Module for CLIPittyClip (v3.5)
 #
 # Runs the full CLIP-seq preprocessing stack and stops before alignment:
 #   dedup → [demux] → fastp → *_prepped.fastq.gz (ready to map)
@@ -13,6 +13,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/lib/utils.sh"
 source "${SCRIPT_DIR}/lib/dedup.sh"
 source "${SCRIPT_DIR}/lib/modules.sh"
+source "${SCRIPT_DIR}/lib/wizard.sh"
 
 # ─── Defaults ────────────────────────────────────────────────────────────────
 THREADS=1
@@ -32,13 +33,14 @@ GENOME_INDEX=""
 DEMUX_MISMATCHES="1"
 SAMPLE_SIZE=0
 KEEP_INTERMEDIATE="no"
+WIZARD_MODE="false"
 
 # ─── Usage ───────────────────────────────────────────────────────────────────
 function show_usage {
     echo ""
     echo "Usage: $0 [-i <input.fastq.gz> | -d <dir>] [options]"
     echo ""
-    echo "PREPittyPrep v1.0 - CLIP-seq Preprocessing Module"
+    echo "PREPittyPrep v3.5 - CLIP-seq Preprocessing Module"
     echo "Output: groomed, deduplicated, adapter-trimmed *_prepped.fastq.gz"
     echo ""
     echo "INPUT (choose one):"
@@ -62,6 +64,7 @@ function show_usage {
     echo "  -o <str>               Output folder name / path"
     echo "  -k                     Keep intermediate files (including 0_DEMUX_FASTQ)"
     echo "  -t <int>               Threads (default: 1)"
+    echo "  -w, --wizard           Launch interactive configuration wizard"
     echo "  -h, --help             Show this help"
     echo ""
     echo "MODES:"
@@ -105,10 +108,39 @@ while [[ $# -gt 0 ]]; do
         -s)                   SAMPLE_SIZE="$2"; shift 2 ;;
         -k)                   KEEP_INTERMEDIATE="yes"; shift ;;
         --geo)                GEO_MODE="true"; shift ;;
+        -w|--wizard|--advanced) WIZARD_MODE="true"; shift ;;
         -h|--help)            show_usage; exit 0 ;;
         *)                    log_error "Unknown option: $1"; show_usage; exit 1 ;;
     esac
 done
+
+# ─── Wizard (if requested) ───────────────────────────────────────────────────
+if [[ "$WIZARD_MODE" == "true" ]]; then
+    run_wizard_prepittyprep || exit 1
+
+    # Input mode
+    if [[ "$WIZ_MODE" == "single" ]]; then
+        INPUT_FILE="$WIZ_INPUT_FILE"
+    else
+        INPUT_DIR="$WIZ_INPUT_DIR"
+    fi
+    [[ -n "$WIZ_BARCODE_FILE" ]] && BARCODE_FILE="$WIZ_BARCODE_FILE"
+    [[ "$WIZ_GEO_MODE" == "true" ]] && GEO_MODE="true"
+
+    THREADS="$WIZ_THREADS"
+    UMI_LEN="$WIZ_UMI_LEN"
+    ADAPTER_3="$WIZ_ADAPTER"
+    [[ -n "$WIZ_BC_LEN" ]] && BC_LEN="$WIZ_BC_LEN"
+    SPACER_LEN="$WIZ_SPACER_LEN"
+    [[ "$WIZ_NO_DEDUP" == "true" ]] && DEDUP_MODE="false"
+    [[ "$WIZ_ECLIP" == "true" ]] && ECLIP_MODE="true"
+    DEMUX_MISMATCHES="$WIZ_DEMUX_MISMATCHES"
+    [[ "$WIZ_FILTER_NCRNA" == "true" ]] && FILTER_NCRNA="true"
+    [[ -n "$WIZ_GENOME_INDEX" ]] && GENOME_INDEX="$WIZ_GENOME_INDEX"
+    [[ -n "$WIZ_OUTPUT" ]] && EXP_ID="$WIZ_OUTPUT"
+    [[ "$WIZ_KEEP" == "true" ]] && KEEP_INTERMEDIATE="yes"
+    SAMPLE_SIZE="$WIZ_SAMPLE_SIZE"
+fi
 
 # ─── Validation ──────────────────────────────────────────────────────────────
 if [[ -n "$INPUT_DIR" && -n "$INPUT_FILE" ]]; then
@@ -170,7 +202,7 @@ fi
 
 # ─── Banner ──────────────────────────────────────────────────────────────────
 echo "════════════════════════════════════════════════════════════════════════════════"
-echo "  PREPittyPrep v1.0"
+echo "  PREPittyPrep v3.5"
 echo "  Started: $(date '+%Y-%m-%d %H:%M:%S')"
 if [[ -n "$INPUT_DIR" ]]; then
     echo "  Input:   $INPUT_DIR  [directory mode]"
