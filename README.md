@@ -32,7 +32,7 @@ A comprehensive, single-command CLIP-seq analysis pipeline from raw FASTQ to pea
   <img src="flowchart.png" alt="CLIPittyClip Pipeline Flow" width="800">
 </p>
 
-CLIPittyClip runs the complete CLIP-seq stack in a single command. All three stages run automatically:
+CLIPittyClip runs a complete processing stack for CLIP data in a single command. All three stages run automatically:
 
 1. **Preprocessing** — global sequence dedup, adapter trimming (fastp), optional repeat element pre-filter (rRNA/tRNA/TEs), genome alignment (STAR / Bowtie2)
 2. **Crosslink sites** — two parallel tracks from the same BAM:
