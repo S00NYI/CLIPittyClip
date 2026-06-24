@@ -212,7 +212,7 @@ Run `CLIPittyClip.sh --help` for full usage.
 | Long | Default | Description |
 |------|---------|-------------|
 | `-m` / `--mapper` | `star` | Aligner: `star` (default) or `bowtie2` |
-| `-t` / `--threads` | `1` | Number of threads |
+| `-t` / `--threads` | `1` | Number of threads (we typically use 8 for most analyses) |
 | `--genome-fasta` | — | Reference FASTA — enables `samtools calmd` for accurate MD tags; strongly recommended for crosslink site analysis |
 | `--align-mismatches` | `2` | Absolute mismatch backstop (STAR; primary filter is fractional 10% of read length) |
 
