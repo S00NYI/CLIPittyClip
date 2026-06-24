@@ -251,6 +251,17 @@ Run `CLIPittyClip.sh --help` for full usage.
 
 ### Crosslink Site Analysis
 
+#### Clink (v3.5)
+
+| Long | Default | Description |
+|------|---------|-------------|
+| `--run-clink` | off | Enable Clink crosslink site analysis |
+| `--clink-umi-len` | auto | UMI length for umi_tools (auto-detected if omitted) |
+| `--clink-fdr` | `0.05` | Benjamini-Hochberg FDR threshold |
+| `--clink-min-cov` | `5` | Minimum coverage to test a position |
+| `--clink-multi-map` | off | Rescue multi-mapped reads (NH:i:>1) via single-pass positional assignment before deduplication. Requires `pysam`. See note below. |
+| `--xl-bigwig` | off | Generate per-sample strand-specific crosslink-site bigWig files in `03_COVERAGE/BigWig/`. Each file records per-nucleotide truncation event counts (read 5′ ends), **not** RPM read coverage — suitable for BindingSiteFinder and similar tools. Requires `bedGraphToBigWig` in PATH (`ucsc-bedgraphtobigwig` conda package). |
+
 #### CTK (standard)
 
 | Long | Default | Description |
@@ -262,17 +273,6 @@ Run `CLIPittyClip.sh --help` for full usage.
 | `--cims-fdr` | `0.05` | CIMS FDR threshold |
 | `--cits-pval` | `0.05` | CITS p-value threshold |
 | `--cits-gap` | `25` | CITS clustering gap (`-1` disables) |
-
-#### Clink (v3.5)
-
-| Long | Default | Description |
-|------|---------|-------------|
-| `--run-clink` | off | Enable Clink crosslink site analysis |
-| `--clink-umi-len` | auto | UMI length for umi_tools (auto-detected if omitted) |
-| `--clink-fdr` | `0.05` | Benjamini-Hochberg FDR threshold |
-| `--clink-min-cov` | `5` | Minimum coverage to test a position |
-| `--clink-multi-map` | off | Rescue multi-mapped reads (NH:i:>1) via single-pass positional assignment before deduplication. Requires `pysam`. See note below. |
-| `--xl-bigwig` | off | Generate per-sample strand-specific crosslink-site bigWig files in `03_COVERAGE/BigWig/`. Each file records per-nucleotide truncation event counts (read 5′ ends), **not** RPM read coverage — suitable for BindingSiteFinder and similar tools. Requires `bedGraphToBigWig` in PATH (`ucsc-bedgraphtobigwig` conda package). |
 
 > **Grouped Clink analysis:** combine `--run-clink --group-xlsite -g groups.txt` to produce per-sample dedup BAMs first, then merge by group for pileup → CITS/CIMS. Group results land in `GROUP_<name>/` inside the Clink output directory.
 
