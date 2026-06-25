@@ -252,6 +252,7 @@ if [[ -z "$SKIP_CONDA" ]]; then
     conda config --env --set subdir osx-64
 
     # Install packages (excluding perl-bioperl and perl-math-cdf which aren't available on macOS)
+    # star pinned to 2.7.10b: 2.7.11b breaks subprocess spawning on macOS Tahoe via Rosetta
     print_info "Installing conda packages..."
     $CONDA_CMD install -n "$ENV_NAME" -y \
         -c conda-forge -c bioconda \
@@ -266,7 +267,7 @@ if [[ -z "$SKIP_CONDA" ]]; then
         htslib \
         bowtie2 \
         bwa \
-        "star=2.7.10b" \   # 2.7.11b breaks subprocess spawning on macOS Tahoe via Rosetta
+        "star=2.7.10b" \
         cutadapt \
         fastp \
         seqkit \

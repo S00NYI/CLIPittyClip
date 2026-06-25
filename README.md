@@ -32,7 +32,7 @@ A comprehensive, single-command CLIP-seq analysis pipeline from raw FASTQ to pea
   <img src="flowchart.png" alt="CLIPittyClip Pipeline Flow" width="800">
 </p>
 
-CLIPittyClip runs the complete CLIP-seq stack in a single command. All three stages run automatically:
+CLIPittyClip runs a complete processing stack for CLIP data in a single command. All three stages run automatically:
 
 1. **Preprocessing** — global sequence dedup, adapter trimming (fastp), optional repeat element pre-filter (rRNA/tRNA/TEs), genome alignment (STAR / Bowtie2)
 2. **Crosslink sites** — two parallel tracks from the same BAM:
@@ -212,7 +212,7 @@ Run `CLIPittyClip.sh --help` for full usage.
 | Long | Default | Description |
 |------|---------|-------------|
 | `-m` / `--mapper` | `star` | Aligner: `star` (default) or `bowtie2` |
-| `-t` / `--threads` | `1` | Number of threads |
+| `-t` / `--threads` | `1` | Number of threads (we typically use 8 for most analyses) |
 | `--genome-fasta` | — | Reference FASTA — enables `samtools calmd` for accurate MD tags; strongly recommended for crosslink site analysis |
 | `--align-mismatches` | `2` | Absolute mismatch backstop (STAR; primary filter is fractional 10% of read length) |
 
@@ -251,6 +251,17 @@ Run `CLIPittyClip.sh --help` for full usage.
 
 ### Crosslink Site Analysis
 
+#### Clink (v3.5)
+
+| Long | Default | Description |
+|------|---------|-------------|
+| `--run-clink` | off | Enable Clink crosslink site analysis |
+| `--clink-umi-len` | auto | UMI length for umi_tools (auto-detected if omitted) |
+| `--clink-fdr` | `0.05` | Benjamini-Hochberg FDR threshold |
+| `--clink-min-cov` | `5` | Minimum coverage to test a position |
+| `--clink-multi-map` | off | Rescue multi-mapped reads (NH:i:>1) via single-pass positional assignment before deduplication. Requires `pysam`. See note below. |
+| `--xl-bigwig` | off | Generate per-sample strand-specific crosslink-site bigWig files in `03_COVERAGE/BigWig/`. Each file records per-nucleotide truncation event counts (read 5′ ends), **not** RPM read coverage — suitable for BindingSiteFinder and similar tools. Requires `bedGraphToBigWig` in PATH (`ucsc-bedgraphtobigwig` conda package). |
+
 #### CTK (standard)
 
 | Long | Default | Description |
@@ -262,17 +273,6 @@ Run `CLIPittyClip.sh --help` for full usage.
 | `--cims-fdr` | `0.05` | CIMS FDR threshold |
 | `--cits-pval` | `0.05` | CITS p-value threshold |
 | `--cits-gap` | `25` | CITS clustering gap (`-1` disables) |
-
-#### Clink (v3.5)
-
-| Long | Default | Description |
-|------|---------|-------------|
-| `--run-clink` | off | Enable Clink crosslink site analysis |
-| `--clink-umi-len` | auto | UMI length for umi_tools (auto-detected if omitted) |
-| `--clink-fdr` | `0.05` | Benjamini-Hochberg FDR threshold |
-| `--clink-min-cov` | `5` | Minimum coverage to test a position |
-| `--clink-multi-map` | off | Rescue multi-mapped reads (NH:i:>1) via single-pass positional assignment before deduplication. Requires `pysam`. See note below. |
-| `--xl-bigwig` | off | Generate per-sample strand-specific crosslink-site bigWig files in `03_COVERAGE/BigWig/`. Each file records per-nucleotide truncation event counts (read 5′ ends), **not** RPM read coverage — suitable for BindingSiteFinder and similar tools. Requires `bedGraphToBigWig` in PATH (`ucsc-bedgraphtobigwig` conda package). |
 
 > **Grouped Clink analysis:** combine `--run-clink --group-xlsite -g groups.txt` to produce per-sample dedup BAMs first, then merge by group for pileup → CITS/CIMS. Group results land in `GROUP_<name>/` inside the Clink output directory.
 
