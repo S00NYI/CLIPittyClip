@@ -27,7 +27,7 @@ import sys
 import argparse
 import numpy as np
 from pathlib import Path
-from scipy.stats import binom
+from scipy.stats import binom, false_discovery_control
 
 # ---------------------------------------------------------------------------
 # Background estimation
@@ -82,23 +82,9 @@ def bh_fdr(pvalues: np.ndarray) -> np.ndarray:
 
     A position is significant if qvalue <= desired FDR threshold.
     """
-    m = len(pvalues)
-    if m == 0:
+    if len(pvalues) == 0:
         return np.array([], dtype=np.float64)
-
-    order   = np.argsort(pvalues)
-    ranks   = np.arange(1, m + 1, dtype=np.float64)
-    adjusted = pvalues[order] * m / ranks
-
-    # Enforce monotonicity right-to-left (take cumulative min from right)
-    for i in range(m - 2, -1, -1):
-        adjusted[i] = min(adjusted[i], adjusted[i + 1])
-
-    adjusted = np.minimum(adjusted, 1.0)
-
-    qvalues = np.empty(m, dtype=np.float64)
-    qvalues[order] = adjusted
-    return qvalues
+    return false_discovery_control(pvalues, method='bh')
 
 
 # ---------------------------------------------------------------------------

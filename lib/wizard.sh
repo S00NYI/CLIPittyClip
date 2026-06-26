@@ -1547,25 +1547,3 @@ run_wizard_peakittypeak() {
     echo -e "${WIZ_GREEN}Starting peak calling...${WIZ_NC}"
     return 0
 }
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# LEGACY WIZARD FUNCTIONS (for backward compatibility)
-# ═══════════════════════════════════════════════════════════════════════════════
-
-# Keep old function names for backward compatibility
-print_wiz_header() {
-    print_wizard_header "$1"
-}
-
-run_wizard_mapping() {
-    # Legacy function - redirect to new wizard
-    run_wizard_mapittymap
-}
-
-run_wizard_homer() {
-    # Legacy function - minimal implementation for standalone HOMER config
-    prompt_value "Peak distance" "50" PEAK_DIST "int"
-    prompt_value "Peak size" "20" PEAK_SIZE "int"
-    prompt_value "Fragment length" "25" FRAG_LEN "int"
-    read -p "Additional HOMER arguments: " ADV_HOMER_ARGS || { echo -e "${WIZ_RED}  ✗ Input stream closed — aborting wizard.${WIZ_NC}" >&2; exit 1; }
-}

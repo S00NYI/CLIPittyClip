@@ -104,20 +104,14 @@ class ChromPileup:
     """
     Sparse per-position signal accumulator for one chromosome.
 
-    After the fast CIGAR path, _arrays is set directly so to_arrays()
-    can skip re-conversion.  The raw dict fields are only populated when
-    the legacy extract_signals() path is used (kept for compatibility).
+    _arrays is set directly by the CIGAR scan path so to_arrays() can
+    return it without conversion.
 
     _arrays format (stranded):
         {'fwd': (positions, coverage, truncations, deletions, subs) or None,
          'rev': (positions, coverage, truncations, deletions, subs) or None}
     """
     chrom: str
-    coverage:    Dict[int, int] = field(default_factory=lambda: defaultdict(int))
-    truncations: Dict[int, int] = field(default_factory=lambda: defaultdict(int))
-    deletions:   Dict[int, int] = field(default_factory=lambda: defaultdict(int))
-    subs:        Dict[int, Counter] = field(
-                     default_factory=lambda: defaultdict(Counter))
     n_reads:   int = 0
     n_skipped: int = 0
 
@@ -604,10 +598,7 @@ def scan_bam(
 
 def to_arrays(pileup: ChromPileup):
     """
-    Return pileup arrays for one chromosome.
-
-    Fast path: if _arrays was pre-computed by _scan_single_chrom (the CIGAR
-    path), return it immediately.
+    Return pileup arrays for one chromosome (pre-computed by _scan_single_chrom).
 
     Returns:
         dict {'fwd': (positions, coverage, truncations, deletions, subs) or None,
@@ -621,46 +612,7 @@ def to_arrays(pileup: ChromPileup):
           deletions    : uint32 [N]
           subs         : dict {(ref, alt): uint16 [N]}
     """
-    # Fast path
-    if hasattr(pileup, '_arrays'):
-        return pileup._arrays  # type: ignore[attr-defined]
-
-    # Legacy path (defaultdict → arrays) — wrap everything as fwd (unstranded)
-    all_pos = (set(pileup.coverage) | set(pileup.truncations) |
-               set(pileup.deletions) | set(pileup.subs))
-    if not all_pos:
-        return None
-
-    positions = np.array(sorted(all_pos), dtype=np.int32)
-    n = len(positions)
-    idx = {p: i for i, p in enumerate(positions)}
-
-    coverage          = np.zeros(n, dtype=np.uint32)
-    truncations       = np.zeros(n, dtype=np.uint32)
-    deletions         = np.zeros(n, dtype=np.uint32)
-    clean_truncations = np.zeros(n, dtype=np.uint32)  # legacy: assume all clean
-
-    for pos, v in pileup.coverage.items():
-        coverage[idx[pos]] = v
-    for pos, v in pileup.truncations.items():
-        truncations[idx[pos]] = v
-    for pos, v in pileup.deletions.items():
-        deletions[idx[pos]] = v
-
-    all_sub_types = set()
-    for counter in pileup.subs.values():
-        all_sub_types.update(counter.keys())
-
-    subs = {}
-    for sub_type in sorted(all_sub_types):
-        arr = np.zeros(n, dtype=np.uint16)
-        for pos, counter in pileup.subs.items():
-            if sub_type in counter:
-                arr[idx[pos]] = min(counter[sub_type], 65535)
-        subs[sub_type] = arr
-
-    legacy_arrays = (positions, coverage, truncations, deletions, clean_truncations, subs)
-    return {'fwd': legacy_arrays, 'rev': None}
+    return pileup._arrays  # type: ignore[attr-defined]
 
 
 # ---------------------------------------------------------------------------
