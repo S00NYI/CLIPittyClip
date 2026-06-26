@@ -39,10 +39,10 @@ calculate_optimal_parallel_jobs() {
     
     # Estimate: for files with >1M lines, use more RAM per job
     local ram_per_job=$min_ram_per_job
-    if [[ "$file_lines" -gt 1000000 ]]; then
-        ram_per_job=4  # Large files need 4GB per job
-    elif [[ "$file_lines" -gt 5000000 ]]; then
+    if [[ "$file_lines" -gt 5000000 ]]; then
         ram_per_job=6  # Very large files need 6GB per job
+    elif [[ "$file_lines" -gt 1000000 ]]; then
+        ram_per_job=4  # Large files need 4GB per job
     fi
     
     # Calculate RAM-based job limit
@@ -497,7 +497,7 @@ run_eclip_pe_preprocessing() {
     umi_len="$detected_umi_len"
 
     # Step 2: Move UMI from header to sequence (required before collapse)
-    update_status_first "eCLIP PE Preprocessing"
+    update_status "eCLIP PE Preprocessing"
     echo -ne "(UMI to Sequence"
     local umi_seq_file="${output_prefix}_umi_in_seq.fastq.gz"
     reformat_eclip_umi_to_sequence "$input_file" "$umi_seq_file" "$umi_len"
@@ -579,7 +579,7 @@ run_eclip_se_preprocessing() {
 
     log_info "eCLIP SE mode: Preprocessing workflow (validate → Deduplicate → Extract UMI → Adapter Trim)"
 
-    update_status_first "eCLIP SE Preprocessing"
+    update_status "eCLIP SE Preprocessing"
 
     # Step 1: Deduplicate (UMI is in sequence — collapse on full read including UMI prefix)
     echo -ne "(Deduplicating"
@@ -685,7 +685,7 @@ run_parclip_preprocessing() {
     log_info "PAR-CLIP mode: UMI=${umi_len}nt | Adapters: $(basename "$adapters_fasta")"
     log_info "Flow: UMI extract → barcode+adapter trim → 2nt spacer trim"
 
-    update_status_first "PAR-CLIP Preprocessing"
+    update_status "PAR-CLIP Preprocessing"
     echo -ne "(UMI extract + adapter trim"
 
     # ── Pass 1: UMI extraction + barcode+adapter trimming ────────────────────
@@ -760,7 +760,7 @@ run_fastp() {
 
     local cleaned="${output_prefix}_cleaned.fastq"
 
-    update_status_first "Adapter Trimming"
+    update_status "Adapter Trimming"
 
     # Detect SRA /1 /2 pair suffixes (produced by old fastq-dump, not fasterq-dump).
     # STAR truncates read names at '/', which strips the fastp-appended #count#UMI
@@ -2397,130 +2397,6 @@ generate_flanked_bed() {
     
     local site_count=$(wc -l < "$flanked_bed")
     log_info "Generated flanked BED (±${flank_nt}nt, $site_count sites): $(basename "$flanked_bed")"
-}
-
-# 8. Full CTK Analysis Pipeline
-# Orchestrates the complete CIMS/CITS workflow based on RUN_CIMS and RUN_CITS flags
-run_ctk_full_analysis() {
-    local bam_file="$1"
-    local output_dir="$2"
-    local genome_fasta="$3"
-    local cims_iterations="${4:-10}"
-    local cims_fdr="${5:-1}"
-    local cits_pvalue="${6:-1}"
-    local cits_gap="${7:-25}"
-    local motif_flank="${8:-10}"
-    local run_motif="${9:-yes}"
-    local run_cims="${10:-true}"
-    local run_cits="${11:-true}"
-    # skip_collapse: set to "true" when input BAM is already UMI-deduplicated.
-    # Position-based tag2collapse on pre-dedup data collapses genuine multi-cell
-    # crosslinks to depth=1, making minPH>=2 impossible and CITS yield zero peaks.
-    local skip_collapse="${12:-false}"
-    
-    log_info "═══════════════════════════════════════════════════════════════"
-    log_info "  CTK CIMS/CITS FULL ANALYSIS"
-    log_info "  CIMS: $run_cims | CITS: $run_cits"
-    log_info "═══════════════════════════════════════════════════════════════"
-    
-    # Create directories based on what's enabled
-    mkdir -p "$output_dir/preprocessing"
-    [[ "$run_cims" == "true" ]] && mkdir -p "$output_dir/CIMS"
-    [[ "$run_cits" == "true" ]] && mkdir -p "$output_dir/CITS"
-    [[ "$run_motif" == "yes" ]] && mkdir -p "$output_dir/motif_analysis"
-    
-    local sample_name=$(basename "${bam_file%.bam}" | sed 's/.Aligned.sortedByCoord.out//')
-    
-    # Phase 1: Preprocessing
-    log_info "Phase 1: Parsing alignment..."
-    local tags_bed="${output_dir}/preprocessing/${sample_name}_tags.bed"
-    local mutation_file="${output_dir}/preprocessing/${sample_name}_mutations.txt"
-    
-    # run_parse_alignment handles calmd + parseAlignment.pl
-    run_parse_alignment "$bam_file" "$tags_bed" "$mutation_file" "$(dirname "$genome_fasta")"
-    
-    if [[ ! -s "$tags_bed" ]]; then
-        log_error "parseAlignment.pl failed to produce tags. Aborting CTK analysis."
-        return 1
-    fi
-    
-    # Phase 1b: Collapse tags
-    local collapsed_bed="${output_dir}/preprocessing/${sample_name}_collapsed.bed"
-    if [[ "$skip_collapse" == "true" ]]; then
-        log_info "Phase 1b: Skipping position-based collapse (input is pre-deduplicated)."
-        # Symlink tags_bed so downstream steps find the expected filename
-        ln -sf "$tags_bed" "$collapsed_bed"
-    else
-        log_info "Phase 1b: Collapsing PCR duplicates..."
-        tag2collapse.pl --keep-tag-name "$tags_bed" "$collapsed_bed"
-        if [[ ! -s "$collapsed_bed" ]]; then
-            log_error "tag2collapse.pl failed. Aborting CTK analysis."
-            return 1
-        fi
-    fi
-    
-    # Phase 1c: CTK Preprocessing (selectRow + getMutationType)
-    log_info "Phase 1c: Filtering and extracting mutation types..."
-    run_ctk_preprocessing "$collapsed_bed" "$mutation_file" "${output_dir}/preprocessing"
-    
-    local del_bed="${output_dir}/preprocessing/deletions.bed"
-    local sub_bed="${output_dir}/preprocessing/substitutions.bed"
-    
-    # Phase 2: CIMS Analysis (only if enabled)
-    if [[ "$run_cims" == "true" ]]; then
-        log_info "Phase 2: CIMS Analysis..."
-        
-        if [[ -s "$del_bed" ]]; then
-            log_info "Running CIMS on deletions..."
-            run_cims "$collapsed_bed" "$del_bed" \
-                "${output_dir}/CIMS/${sample_name}_CIMS_del.txt" \
-                "$cims_iterations" "$cims_fdr"
-        fi
-        
-        if [[ -s "$sub_bed" ]]; then
-            log_info "Running CIMS on substitutions..."
-            run_cims "$collapsed_bed" "$sub_bed" \
-                "${output_dir}/CIMS/${sample_name}_CIMS_sub.txt" \
-                "$cims_iterations" "$cims_fdr"
-        fi
-    else
-        log_info "Phase 2: CIMS Analysis... SKIPPED (not enabled)"
-    fi
-    
-    # Phase 3: CITS Analysis (only if enabled)
-    # run_cits handles missing/empty deletion file internally (runs without read-through filter).
-    # For standard iCLIP, deletions at crosslink sites are rare — CITS must still run.
-    # Do NOT gate CITS on [[ -s "$del_bed" ]]: that silently skips all iCLIP samples.
-    if [[ "$run_cits" == "true" ]]; then
-        log_info "Phase 3: CITS Analysis..."
-        run_cits "$collapsed_bed" "$del_bed" \
-            "${output_dir}/CITS/${sample_name}_CITS.bed" \
-            "$cits_pvalue" "$cits_gap"
-    else
-        log_info "Phase 3: CITS Analysis... SKIPPED (not enabled)"
-    fi
-    
-    # Phase 4: Flanked BED Generation (for user's motif analysis)
-    if [[ "$run_motif" == "yes" ]]; then
-        log_info "Phase 4: Generating flanked BED files..."
-        
-        if [[ "$run_cims" == "true" ]]; then
-            local cims_del_sig="${output_dir}/CIMS/${sample_name}_CIMS_del_significant.bed"
-            local cims_sub_sig="${output_dir}/CIMS/${sample_name}_CIMS_sub_significant.bed"
-            [[ -s "$cims_del_sig" ]] && generate_flanked_bed "$cims_del_sig" "$motif_flank"
-            [[ -s "$cims_sub_sig" ]] && generate_flanked_bed "$cims_sub_sig" "$motif_flank"
-        fi
-        
-        if [[ "$run_cits" == "true" ]]; then
-            local cits_file="${output_dir}/CITS/${sample_name}_CITS.bed"
-            [[ -s "$cits_file" ]] && generate_flanked_bed "$cits_file" "$motif_flank"
-        fi
-    fi
-    
-    log_info "═══════════════════════════════════════════════════════════════"
-    log_info "  CTK ANALYSIS COMPLETE"
-    log_info "  Output: $output_dir"
-    log_info "═══════════════════════════════════════════════════════════════"
 }
 
 # 9. CTK Analysis Pipeline (Streamlined - uses pre-existing collapsed.bed and mutations.txt)
