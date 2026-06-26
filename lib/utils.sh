@@ -52,13 +52,6 @@ update_status() {
     echo -e "[STATUS] $msg" >> "${LOG_FILE}"
 }
 
-# First status in a chain (no leading >)
-update_status_first() {
-    local msg="$1"
-    echo -ne "${msg} > "
-    echo -e "[STATUS] $msg" >> "${LOG_FILE}"
-}
-
 # Final status with newline
 update_status_done() {
     echo -e "Done!"
