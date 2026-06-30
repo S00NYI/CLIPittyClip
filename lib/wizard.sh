@@ -11,6 +11,14 @@ WIZ_RED='\033[0;31m'
 WIZ_BOLD='\033[1m'
 WIZ_NC='\033[0m'
 
+WIZ_INTRO_PY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/wizard_intro.py"
+
+_play_wizard_intro() {
+    [[ "$WIZ_INTRO_PLAYED" == "1" ]] && return 0
+    WIZ_INTRO_PLAYED=1
+    python3 "$WIZ_INTRO_PY" || true
+}
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # HELPER FUNCTIONS
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -219,6 +227,7 @@ print_summary_box() {
 # Invalid input is re-prompted by prompt_select. Ctrl-C exits normally.
 
 run_wizard_dispatcher() {
+    _play_wizard_intro
     print_wizard_header "CLIPittyClip Suite Wizard"
 
     echo "  Which tool would you like to configure?"
@@ -614,6 +623,7 @@ _cc_build_cmdline() {
 # ═══════════════════════════════════════════════════════════════════════════════
 
 run_wizard_clipittyclip() {
+    _play_wizard_intro
     print_wizard_header "CLIPittyClip Wizard"
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -961,6 +971,7 @@ run_wizard_clipittyclip() {
 # ═══════════════════════════════════════════════════════════════════════════════
 
 run_wizard_prepittyprep() {
+    _play_wizard_intro
     print_wizard_header "PREPittyPrep Wizard"
     local _yn
 
@@ -1140,6 +1151,7 @@ run_wizard_prepittyprep() {
 # ═══════════════════════════════════════════════════════════════════════════════
 
 run_wizard_mapittymap() {
+    _play_wizard_intro
     print_wizard_header "MAPittyMap Wizard"
     local _yn
 
@@ -1365,6 +1377,7 @@ run_wizard_mapittymap() {
 # ═══════════════════════════════════════════════════════════════════════════════
 
 run_wizard_peakittypeak() {
+    _play_wizard_intro
     print_wizard_header "PEAKittyPeak Wizard"
     local _yn
 
