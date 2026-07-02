@@ -1738,18 +1738,18 @@ if [[ "$DEMUX" == "yes" ]]; then
         console_msg "  > Running HOMER Peak Calling (Aggregated)..."
         
         # Run it inside the output root
-        # We pass "2_COLLAPSED_BED" which is relative to OUTPUT_ROOT
+        # We pass "02_COLLAPSED_BED" which is relative to OUTPUT_ROOT
         curr_dir=$(pwd)
         cd "$OUTPUT_ROOT" || exit 1
-        
+
         # Define separate log for peak calling details
         PEAK_LOG="REPORTS/PEAK/Combined_PeakCalling.log"
         console_msg "  > Detailed Peak Log: $PEAK_LOG"
 
         # Call script (using absolute path or relative to old pwd)
         # Call script with -n COMBINED to create COMBINED_peaks folder
-        # Use -i 2_COLLAPSED_BED (relative to OUTPUT_ROOT) and --aggregate parameter
-        PEAK_CMD="bash $PEAK_SCRIPT -i 2_COLLAPSED_BED --aggregate -n COMBINED -p $PEAK_DIST -z $PEAK_SIZE -f $FRAG_LEN --peak-caller \"$PEAK_CALLER\""
+        # Use -i 02_COLLAPSED_BED (relative to OUTPUT_ROOT) and --aggregate parameter
+        PEAK_CMD="bash $PEAK_SCRIPT -i 02_COLLAPSED_BED --aggregate -n COMBINED -p $PEAK_DIST -z $PEAK_SIZE -f $FRAG_LEN --peak-caller \"$PEAK_CALLER\""
         if [[ -n "$ADV_PEAK_CALLER_ARGS" ]]; then PEAK_CMD="$PEAK_CMD --peak-caller-args \"$ADV_PEAK_CALLER_ARGS\""; fi
         
         # Add --ctk-dir if CTK analysis was enabled
