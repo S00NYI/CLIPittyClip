@@ -449,9 +449,9 @@ def run_dedup(bam_path:   str,
     # Ensure indexed
     check_bam_index(bam_path)
 
-    # Count input reads
+    # Count input alignments (a multi-mapped read contributes one record per locus)
     n_in = bam_read_count(bam_path)
-    print(f"\n  Input reads: {n_in:,}", file=sys.stderr)
+    print(f"\n  Total input alignments: {n_in:,}", file=sys.stderr)
 
     use_tmp = tmp_dir or str(Path(out_path).parent)
     stem    = Path(out_path).stem
@@ -551,11 +551,11 @@ def run_dedup(bam_path:   str,
         print(f"\n{'='*60}", file=sys.stderr)
         print(f"  Deduplication complete (multi-map mode)", file=sys.stderr)
         print(f"{'='*60}", file=sys.stderr)
-        print(f"  Input reads:         {n_in:>10,}", file=sys.stderr)
-        print(f"    Unique (NH:i:1):   {n_unique:>10,}", file=sys.stderr)
-        print(f"    Multi  (NH:i:>1):  {n_multi:>10,}", file=sys.stderr)
-        print(f"  After dedup (total): {n_out:>10,}  ({pct_kept:.1f}% of input retained)", file=sys.stderr)
-        print(f"  Log:                 {log_path}", file=sys.stderr)
+        print(f"  Total input alignments:  {n_in:>10,}", file=sys.stderr)
+        print(f"    Unique (NH:i:1):       {n_unique:>10,}", file=sys.stderr)
+        print(f"    Multi  (NH:i:>1):      {n_multi:>10,}", file=sys.stderr)
+        print(f"  After dedup (total):     {n_out:>10,}  ({pct_kept:.1f}% of input retained)", file=sys.stderr)
+        print(f"  Log:                     {log_path}", file=sys.stderr)
         return   # done
 
     # =========================================================================
@@ -597,12 +597,12 @@ def run_dedup(bam_path:   str,
     print(f"\n{'='*60}", file=sys.stderr)
     print(f"  Deduplication complete", file=sys.stderr)
     print(f"{'='*60}", file=sys.stderr)
-    print(f"  Input reads:       {n_in:>10,}", file=sys.stderr)
+    print(f"  Total input alignments:  {n_in:>10,}", file=sys.stderr)
     if max_nh >= 1:
-        print(f"  After NH filter:   {n_filtered:>10,}  ({n_in - n_filtered:,} multimappers removed)", file=sys.stderr)
-    print(f"  After dedup:       {n_out:>10,}  ({pct_kept:.1f}% of input retained)", file=sys.stderr)
-    print(f"  PCR dups removed:  {n_pcr_dups:>10,}", file=sys.stderr)
-    print(f"  Log:               {log_path}", file=sys.stderr)
+        print(f"  After NH filter:         {n_filtered:>10,}  ({n_in - n_filtered:,} multimappers removed)", file=sys.stderr)
+    print(f"  After dedup:             {n_out:>10,}  ({pct_kept:.1f}% of input retained)", file=sys.stderr)
+    print(f"  PCR dups removed:        {n_pcr_dups:>10,}", file=sys.stderr)
+    print(f"  Log:                     {log_path}", file=sys.stderr)
 
 
 # ---------------------------------------------------------------------------
