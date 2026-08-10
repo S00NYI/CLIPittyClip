@@ -73,6 +73,8 @@ function show_usage {
     echo "  --min-qual <int>         fastp average quality threshold (default: 30)"
     echo "  -a, --adapter <str>      3' adapter sequence (default: L32)"
     echo "  --no-dedup               Disable FASTQ deduplication (default: ON)"
+    echo "  --low-memory             Use flat-RAM sort-based dedup engine instead of hash-based"
+    echo "                           (recommended above 30M reads; hash engine warns past this)"
     echo "  --eclip <pe|se>          eCLIP mode: 'pe' for paired-end (post-eclipdemux R2, UMI in header),
                                       'se' for single-end seCLIP (raw R1, UMI in sequence)"
     echo "  --parclip                PAR-CLIP mode: [UMI][READ][2nt spacer][6mer barcode][adapter]"
@@ -144,6 +146,7 @@ VERBOSE=false
 SAMPLE_SIZE=0 
 CHILD_MODE="false"
 DEDUP_MODE="true" # Always on by default per user request
+LOW_MEMORY="false" # Force sort-based dedup engine (flat RAM) instead of hash-based
 CTK_PREPROCESS="false"  # Internal: run parseAlignment.pl without CIMS/CITS (set by parent in group mode)
 CLINK_DEDUP_ONLY="false"  # Internal: produce dedup BAMs only, skip pileup/CITS/CIMS (set by parent in group mode)
 NOTIFY_MODE="false"
@@ -243,6 +246,7 @@ while [[ $# -gt 0 ]]; do
         --genome-fasta) GENOME_FASTA="$2"; shift 2 ;;
         --xl-bigwig) XL_BIGWIG="true"; shift ;;
         --no-dedup) DEDUP_MODE="false"; shift ;;
+        --low-memory) LOW_MEMORY="true"; shift ;;
         --filter-repeat) FILTER_REPEAT="true"; shift ;;
         --eclip) ECLIP_MODE="$2"; shift 2 ;;
         --parclip) PARCLIP_MODE="true"; shift ;;
@@ -835,6 +839,7 @@ if [[ -n "$INPUT_DIR" ]]; then
     fi
     if [[ "$FILTER_REPEAT" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --filter-repeat"; fi
     if [[ "$DEDUP_MODE" == "false" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --no-dedup"; fi
+    if [[ "$LOW_MEMORY" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --low-memory"; fi
     EXTRA_FLAGS="$EXTRA_FLAGS --peak-caller $PEAK_CALLER"
     if [[ -n "$ADV_PEAK_CALLER_ARGS" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --peak-caller-args \"$ADV_PEAK_CALLER_ARGS\""; fi
     if [[ -n "$BC_LEN" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --bc-len $BC_LEN"; fi

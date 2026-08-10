@@ -19,8 +19,8 @@ Usage:
   output.fastq - plain (uncompressed) FASTQ file; gzip handled by caller
 
 Memory estimate:
-  ~9 GB for 100M unique 30-nt sequences (Counter only)
-  ~12 GB peak (Counter + emitted set)
+  ~9 GB for 100M unique 30-nt sequences (Counter only; pass-2 emitted set eliminated)
+  ~2 GB for 20M reads at 80% unique (typical eCLIP depth)
 
 Exit codes:
   0 - success
@@ -79,21 +79,19 @@ def main():
     # Output format mirrors fastq2collapse.pl exactly:
     #   header stored by awk '{print $1}' includes the leading '@'
     #   output: $2"#"$1 = @original_id#COUNT
+    # ponytail: pop() replaces a separate emitted set — halves peak RAM
     print("[INFO] fastq_collapse_hash.py: Pass 2 — writing deduplicated output...", file=sys.stderr)
-    emitted = set()
 
     with open(output_path, "w") as out:
         for header, seq, plus, qual in fastq_records(input_path):
-            if seq in emitted:
+            count = counts.pop(seq, None)   # None = already emitted
+            if count is None:
                 continue
-            emitted.add(seq)
-
             # header is e.g. "@READ1 comment" — take first whitespace-delimited token
-            id_token = header.split()[0]          # "@READ1"
-            count    = counts[seq]
+            id_token = header.split()[0]    # "@READ1"
             out.write(f"{id_token}#{count}\n{seq}\n+\n{qual}\n")
 
-    written = len(emitted)
+    written = unique_seqs
     print(f"[INFO] fastq_collapse_hash.py: wrote {written:,} deduplicated records to {output_path}",
           file=sys.stderr)
 

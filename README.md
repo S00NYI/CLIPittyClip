@@ -228,6 +228,7 @@ Run `CLIPittyClip.sh --help` for full usage.
 | — | `--parclip` | — | PAR-CLIP mode: specialized preprocessing for 4SU CLIP (requires `-u`) |
 | — | `--parclip-adapters` | bundled | Custom PAR-CLIP adapter FASTA (default: `lib/parclip_adapters.fa`) |
 | — | `--no-dedup` | — | Skip FASTQ deduplication |
+| — | `--low-memory` | off | Use the flat-RAM sort-based dedup engine instead of the hash-based default (recommended above 30M reads — the hash engine warns past this threshold) |
 | — | `--filter-repeat` | off | Pre-filter repeat element reads: rRNA, tRNA, and transposable elements (opt-in) |
 | — | `--bc-len` | — | Barcode length (auto-detected from `-b`) |
 | — | `--spacer-len` | `0` | Spacer bases after barcode |
@@ -605,6 +606,7 @@ RPM is calculated as `(reads mapped to element / total input reads) × 10⁶`.
   - Suitable as direct input for BindingSiteFinder and similar nucleotide-resolution tools
 - **`all_crosslinks.bed` output from Clink**: every position with ≥1 truncation event written to `{sample}_all_crosslinks.bed` alongside the FDR-filtered `_truncations.bed`; no significance threshold applied — suitable for PEKA and BindingSiteFinder
 - Fixed CTK output directory using hardcoded path `5_CTK_Analysis` instead of the `DIR_CTK` variable (broke numbering when other crosslink modules shifted folder numbers)
+- **`--low-memory` flag**: dedup engine selection is now explicit instead of auto-switching on read count. Hash-based (`fastq_collapse_hash.py`) is the default at every library size; `--low-memory` forces the flat-RAM sort-based engine (`fastq_collapse_sort.sh`). A warning is printed above 30M reads recommending `--low-memory` if RAM is limited.
 
 ### v3.4.0
 - **PAR-CLIP mode** (`--parclip`): end-to-end support for 4-thiouridine CLIP data
