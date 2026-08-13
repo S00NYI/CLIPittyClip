@@ -20,8 +20,17 @@
 # ═══════════════════════════════════════════════════════════════════════════
 
 # _fastq_collapse_core — dedup a plain (uncompressed) FASTQ
-# Preferred path: Python hash-based (O(n), no disk spill)
-# Fallback path:  awk | sort | uniq (O(n log n), mirrors fastq2collapse.pl exactly)
+#
+# Engine: hash-based (fastq_collapse_hash.py) by default — fastest, RAM
+# scales ~169MB per 1M reads (measured). Pass LOW_MEMORY="true" (set via
+# CLIPittyClip's --low-memory flag) to force the sort-based engine instead
+# (fastq_collapse_sort.sh) — flat ~30-40MB regardless of size, ~2x faster
+# than CTK's fastq2collapse.pl at every scale tested, but slower than hash.
+# Above 30M reads with the hash engine still selected, a warning is printed
+# suggesting --low-memory (hash RAM use at that size is untested/uncapped).
+# Falls back to the sort engine unconditionally if python3/hash script are
+# unavailable, and to an inline awk|sort|uniq pipeline only if
+# fastq_collapse_sort.sh itself is missing.
 #
 # Args:    $1 = input.fastq (plain, not gzipped)
 #          $2 = output.fastq (plain, not gzipped)
@@ -29,14 +38,30 @@
 _fastq_collapse_core() {
     local input="$1"
     local output="$2"
-    local script
-    script="$(dirname "${BASH_SOURCE[0]}")/fastq_collapse_hash.py"
+    local hash_script sort_script
+    hash_script="$(dirname "${BASH_SOURCE[0]}")/fastq_collapse_hash.py"
+    sort_script="$(dirname "${BASH_SOURCE[0]}")/fastq_collapse_sort.sh"
 
-    if [[ -f "$script" ]] && command -v python3 &>/dev/null; then
-        log_info "Dedup engine: hash-based (fastq_collapse_hash.py)"
-        python3 "$script" "$input" "$output" 2>> "${LOG_FILE:-/dev/null}"
+    local n_reads
+    n_reads=$(( $(wc -l < "$input") / 4 ))
+    local warn_threshold=30000000
+
+    if [[ "$n_reads" -gt "$warn_threshold" && "${LOW_MEMORY:-false}" != "true" ]]; then
+        log_warning "Library has ${n_reads} reads (>${warn_threshold}); hash-based dedup RAM use is unbounded at this scale. Consider re-running with --low-memory."
+        echo -e "\n      [WARNING: ${n_reads} reads > 30M — consider --low-memory to use the flat-RAM sort engine]" >&2
+    fi
+
+    if [[ "${LOW_MEMORY:-false}" != "true" ]] && [[ -f "$hash_script" ]] && command -v python3 &>/dev/null; then
+        log_info "Dedup engine: hash-based (fastq_collapse_hash.py) — ${n_reads} reads"
+        echo -e "\n      [dedup: hash-based engine, ${n_reads} reads]" >&2
+        python3 "$hash_script" "$input" "$output" 2>> "${LOG_FILE:-/dev/null}"
+    elif [[ -x "$sort_script" ]]; then
+        log_info "Dedup engine: sort-based (fastq_collapse_sort.sh) — ${n_reads} reads"
+        echo -e "\n      [dedup: sort-based engine, ${n_reads} reads]" >&2
+        "$sort_script" "$input" "$output" 2>> "${LOG_FILE:-/dev/null}"
     else
-        log_info "Dedup engine: sort-based fallback (awk | sort | uniq)"
+        log_info "Dedup engine: sort-based inline fallback (awk | sort | uniq) — ${n_reads} reads"
+        echo -e "\n      [dedup: sort-based inline fallback, ${n_reads} reads]" >&2
         # Replicates fastq2collapse.pl column order exactly:
         #   paste order: ID | QUAL | SEQ  →  sort -k3 (by SEQ)
         #   uniq -f2 -c  →  fields: $1=count $2=ID $3=QUAL $4=SEQ
