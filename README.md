@@ -232,6 +232,7 @@ Run `CLIPittyClip.sh --help` for full usage.
 | — | `--filter-repeat` | off | Pre-filter repeat element reads: rRNA, tRNA, and transposable elements (opt-in) |
 | — | `--bc-len` | — | Barcode length (auto-detected from `-b`) |
 | — | `--spacer-len` | `0` | Spacer bases after barcode |
+| — | `--trim3` | `0` | Bases to trim from the 3' end *after* adapter removal — for a UMI/spacer sitting between the read and the adapter (`[READ][UMI2][adapter]`), e.g. iCLIP3's 3nt second UMI. Trimmed and discarded (not captured into the dedup UMI). |
 
 ### Peak Calling
 

@@ -30,6 +30,7 @@ UMI_LEN=0
 BC_LEN=""
 SPACER_LEN="0"
 BC_FIRST="false"   # --bc-first: read starts with BC then UMI (e.g. BrdU-CLIP, irCLIP2)
+TRIM3_LEN=0        # --trim3: bases to trim from 3' end after adapter removal (e.g. iCLIP3's 3nt UMI2)
 FASTP_MIN_QUAL=30  # --min-qual: fastp average quality threshold (default: 30)
 ADAPTER_3="GTGTCAGTCACTTCCAGCGG" # L32 default
 PEAK_DIST=50
@@ -70,6 +71,10 @@ function show_usage {
     echo "  --spacer-len <int>       Spacer length to trim after barcode (default: 0)"
     echo "  --bc-first               Barcode precedes UMI: layout [BC][UMI][spacer][READ]"
     echo "                             e.g. BrdU-CLIP, irCLIP2 (default: [UMI][BC][spacer][READ])"
+    echo "  --trim3 <int>            Bases to trim from the 3' end AFTER adapter removal, e.g. a"
+    echo "                             second UMI sitting between read and adapter, [READ][UMI2][adapter]"
+    echo "                             (e.g. iCLIP3's 3nt UMI2). Trimmed and discarded, not captured"
+    echo "                             into the dedup UMI. (default: 0)"
     echo "  --min-qual <int>         fastp average quality threshold (default: 30)"
     echo "  -a, --adapter <str>      3' adapter sequence (default: L32)"
     echo "  --no-dedup               Disable FASTQ deduplication (default: ON)"
@@ -213,6 +218,7 @@ while [[ $# -gt 0 ]]; do
         --bc-len) BC_LEN="$2"; shift 2 ;;
         --spacer-len) SPACER_LEN="$2"; shift 2 ;;
         --bc-first) BC_FIRST="true"; shift ;;
+        --trim3) TRIM3_LEN="$2"; shift 2 ;;
         --min-qual) FASTP_MIN_QUAL="$2"; shift 2 ;;
         -a|--adapter) ADAPTER_3="$2"; shift 2 ;;
         -k|--keep) KEEP_INTERMEDIATE="yes"; shift ;;
@@ -845,6 +851,7 @@ if [[ -n "$INPUT_DIR" ]]; then
     if [[ -n "$BC_LEN" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --bc-len $BC_LEN"; fi
     if [[ -n "$SPACER_LEN" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --spacer-len $SPACER_LEN"; fi
     if [[ "$BC_FIRST" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --bc-first"; fi
+    if [[ "$TRIM3_LEN" -ne 0 ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --trim3 $TRIM3_LEN"; fi
     if [[ "$FASTP_MIN_QUAL" -ne 30 ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --min-qual $FASTP_MIN_QUAL"; fi
     EXTRA_FLAGS="$EXTRA_FLAGS --child"
 
@@ -1418,6 +1425,7 @@ if [[ "$DEMUX" == "yes" ]]; then
     if [[ -n "$BC_LEN" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --bc-len $BC_LEN"; fi
     if [[ -n "$SPACER_LEN" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --spacer-len $SPACER_LEN"; fi
     if [[ "$BC_FIRST" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --bc-first"; fi
+    if [[ "$TRIM3_LEN" -ne 0 ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --trim3 $TRIM3_LEN"; fi
     if [[ "$FASTP_MIN_QUAL" -ne 30 ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --min-qual $FASTP_MIN_QUAL"; fi
 
     # Pass --child to suppress header in sub-calls
@@ -2052,7 +2060,7 @@ elif [[ "$ECLIP_MODE" == "se" ]]; then
 elif [[ "$PARCLIP_MODE" == "true" ]]; then
     run_parclip_preprocessing "$INPUT_FILE" "$BASENAME" "$UMI_LEN" "$THREADS" "$SAMPLE_SIZE" "$PARCLIP_ADAPTERS"
 else
-    run_fastp "$INPUT_FILE" "$BASENAME" "$UMI_LEN" "$ADAPTER_3" "$THREADS" "$SAMPLE_SIZE" "$BC_LEN" "$SPACER_LEN" "$BC_FIRST" "$FASTP_MIN_QUAL"
+    run_fastp "$INPUT_FILE" "$BASENAME" "$UMI_LEN" "$ADAPTER_3" "$THREADS" "$SAMPLE_SIZE" "$BC_LEN" "$SPACER_LEN" "$BC_FIRST" "$FASTP_MIN_QUAL" "$TRIM3_LEN"
 fi
 
 # Propagate eCLIP-detected UMI length for downstream tag2collapse.pl
