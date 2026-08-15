@@ -17,20 +17,27 @@ else
 fi
 separator_line=$(printf "%${terminal_width}s" | tr ' ' '*')
 
+# Timestamp prefix for LOG_FILE lines only (console output is left alone).
+# Lets a run's log be sliced into per-step wall-clock durations after the
+# fact, without touching what's printed to the terminal.
+_log_ts() {
+    date '+%Y-%m-%d %H:%M:%S'
+}
+
 log_info() {
     # Stick to FILE ONLY for info logs to keep console clean
-    echo -e "[INFO] $1" >> "${LOG_FILE:-/dev/null}"
+    echo -e "[$(_log_ts)] [INFO] $1" >> "${LOG_FILE:-/dev/null}"
 }
 
 log_warning() {
     # Warnings go to file and Console (in Yellow)
-    echo -e "[WARNING] $1" >> "${LOG_FILE}"
+    echo -e "[$(_log_ts)] [WARNING] $1" >> "${LOG_FILE}"
     echo -e "${YELLOW}[WARNING] $1${NC}" >&2
 }
 
 log_error() {
     # Errors go to file and Console (in Red)
-    echo -e "[ERROR] $1" >> "${LOG_FILE}"
+    echo -e "[$(_log_ts)] [ERROR] $1" >> "${LOG_FILE}"
     echo -e "${RED}[ERROR] $1${NC}" >&2
 }
 
@@ -38,7 +45,7 @@ log_error() {
 console_msg() {
     echo -e "$1"
     # Also log it simply
-    echo -e "$1" | sed 's/\x1b\[[0-9;]*m//g' >> "${LOG_FILE}"
+    echo -e "$1" | sed 's/\x1b\[[0-9;]*m//g' | awk -v ts="[$(_log_ts)]" '{print ts, $0}' >> "${LOG_FILE}"
 }
 
 # New Function: Update status on the same line (for progress bars)
@@ -46,23 +53,23 @@ console_msg() {
 update_status() {
     local msg="$1"
     # Print status trail (e.g. "Mapping > ") without newline
-    echo -ne "${msg} > " 
-    
+    echo -ne "${msg} > "
+
     # Log it as an event
-    echo -e "[STATUS] $msg" >> "${LOG_FILE}"
+    echo -e "[$(_log_ts)] [STATUS] $msg" >> "${LOG_FILE}"
 }
 
 # Final status with newline
 update_status_done() {
     echo -e "Done!"
-    echo -e "[STATUS] Done" >> "${LOG_FILE}"
+    echo -e "[$(_log_ts)] [STATUS] Done" >> "${LOG_FILE}"
 }
 
 # Section header for dedup/demux style output (with indented items)
 print_section_item() {
     local msg="$1"
     echo -e "  > ${msg}"
-    echo -e "[SECTION] $msg" >> "${LOG_FILE}"
+    echo -e "[$(_log_ts)] [SECTION] $msg" >> "${LOG_FILE}"
 }
 
 check_dependency() {

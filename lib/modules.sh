@@ -757,6 +757,7 @@ run_fastp() {
     local spacer_len="${8:-0}"
     local bc_first="${9:-false}"   # --bc-first: layout is [BC][UMI][sp][READ] not [UMI][BC][sp][READ]
     local fastp_min_qual="${10:-30}"
+    local trim3_len="${11:-0}"     # --trim3: bases to trim from 3' end AFTER adapter removal
 
     local cleaned="${output_prefix}_cleaned.fastq"
 
@@ -844,6 +845,30 @@ run_fastp() {
         log_info "Running: $fastp_cmd"
         execute_cmd "$fastp_cmd"
         local exit_code=$?
+    fi
+
+    if [ $exit_code -eq 0 ] && [ "$trim3_len" -gt 0 ]; then
+        # --trim_tail1 runs BEFORE adapter trimming inside a single fastp
+        # pass, so it can't reach a UMI/spacer sitting between [READ] and
+        # [adapter] — that's only exposed as the new 3' end after adapter
+        # removal (same constraint PAR-CLIP mode's spacer trim works around
+        # above). One more pass on the already-adapter-trimmed output.
+        log_info "Trimming ${trim3_len}nt from 3' end (post-adapter, e.g. iCLIP3 UMI2)..."
+        local trim3_tmp="${output_prefix}_trim3_tmp.fastq"
+        local trim3_cmd="fastp -i ${cleaned} -o ${trim3_tmp} \
+            --thread ${threads} \
+            --trim_tail1 ${trim3_len} \
+            --disable_adapter_trimming --disable_quality_filtering --disable_length_filtering \
+            --html /dev/null --json /dev/null"
+        log_info "Running (3' trim pass): $trim3_cmd"
+        execute_cmd "$trim3_cmd"
+        if [ $? -eq 0 ] && [ -s "$trim3_tmp" ]; then
+            mv "$trim3_tmp" "$cleaned"
+        else
+            log_error "fastp 3' trim pass failed."
+            rm -f "$trim3_tmp"
+            exit 1
+        fi
     fi
 
     if [ $exit_code -eq 0 ]; then
