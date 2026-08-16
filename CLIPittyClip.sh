@@ -532,12 +532,25 @@ if [[ -n "$GROUPS_FILE" ]]; then
         exit 1
     fi
     GROUPS_FILE="$(cd "$(dirname "$GROUPS_FILE")" && pwd)/$(basename "$GROUPS_FILE")"
+    log_info "Groups file: $GROUPS_FILE"
+
+    # Groups files routinely arrive from Excel/Windows (CRLF) or old Mac
+    # tools (bare CR) — sanitize once here so every downstream consumer
+    # (add_matrix_columns, group CTK/Clink analysis, combined bedgraph,
+    # PEAKittyPeak --group-peaks) gets clean sample/group names instead of
+    # corrupting generated awk scripts with embedded \r bytes.
+    _sanitized_groups="$(mktemp /tmp/groups_sanitized.XXXXXX)"
+    sanitize_line_endings "$GROUPS_FILE" "$_sanitized_groups"
+    if ! cmp -s "$GROUPS_FILE" "$_sanitized_groups"; then
+        log_warning "Groups file had non-Unix line endings (CRLF or CR-only) — sanitized a working copy: $_sanitized_groups"
+    fi
+    GROUPS_FILE="$_sanitized_groups"
+
     # Only set CTK_GROUPS_FILE if group CTK mode is explicitly enabled
     if [[ "$CTK_GROUP_MODE" == "true" ]]; then
         CTK_GROUPS_FILE="$GROUPS_FILE"
         log_info "Group CTK analysis enabled with groups file: $CTK_GROUPS_FILE"
     fi
-    log_info "Groups file: $GROUPS_FILE"
 fi
 
 # Validate and resolve --genome-fasta
