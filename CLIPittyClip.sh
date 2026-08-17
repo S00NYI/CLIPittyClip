@@ -492,6 +492,14 @@ else
 
     LOG_FILE="${OUTPUT_ROOT}/00_REPORTS/detailed_output.log"
     > "${LOG_FILE}"
+
+    # Run-scoped tally of large-library dedup warnings. Batch mode runs each
+    # sample as a separate child process, so the warnings cannot accumulate in
+    # a shell variable — children inherit this path through the environment.
+    # The :- guard means the parent sets it once and children reuse it rather
+    # than each pointing at their own sample directory.
+    export DEDUP_WARN_FILE="${DEDUP_WARN_FILE:-${OUTPUT_ROOT}/00_REPORTS/.dedup_warnings}"
+    [[ "${CHILD_MODE:-false}" == "true" ]] || : > "$DEDUP_WARN_FILE"
 fi
 
 # Thread validation: cap to available cores - 1 (leave 1 for system)
@@ -1268,6 +1276,8 @@ if [[ -n "$INPUT_DIR" ]]; then
     M=$(( (DURATION%3600)/60 ))
     S=$((DURATION%60))
 
+    print_dedup_warning_summary
+
     console_msg "\n[COMPLETE]"
     console_msg "  > Duration: ${H}h ${M}m ${S}s"
     console_msg "  > Output: $OUTPUT_ROOT/"
@@ -1950,6 +1960,7 @@ if [[ "$DEMUX" == "yes" ]]; then
     fi
     console_msg "  └── ${DIR_OTHERS}/"
 
+    print_dedup_warning_summary
     console_msg "\n[SUCCESS] Pipeline finished."
     
     # Calculate Duration
@@ -2483,6 +2494,7 @@ if [[ "$CHILD_MODE" != "true" ]]; then
     fi
     console_msg "  └── ${SF_DIR_OTHERS}/"
 
+    print_dedup_warning_summary
     console_msg "\n[SUCCESS] Pipeline finished."
     console_msg "End Time: $(date '+%Y-%m-%d %H:%M:%S')"
     console_msg "Total Duration: ${H}h ${M}m ${S}s"
