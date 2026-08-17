@@ -72,6 +72,28 @@ print_section_item() {
     echo -e "[$(_log_ts)] [SECTION] $msg" >> "${LOG_FILE}"
 }
 
+# sanitize_line_endings INFILE OUTFILE
+# Normalizes a text file to plain LF line endings, handling both CRLF
+# (Windows-edited files: real \n present, \r is a stray extra) and legacy
+# Mac CR-only files (no \n at all — the whole file is one unbroken line to
+# any line-oriented tool). Files not sourced from this pipeline (groups
+# files, barcode files) routinely arrive with either, and un-sanitized
+# group/sample names corrupt awk scripts they get spliced into downstream
+# (add_matrix_columns et al.) with cryptic "non-terminated string" errors.
+sanitize_line_endings() {
+    local infile="$1"
+    local outfile="$2"
+    if grep -qU $'\r' "$infile" 2>/dev/null; then
+        if grep -qU $'\n' "$infile" 2>/dev/null; then
+            tr -d '\r' < "$infile" > "$outfile"      # CRLF: drop the stray \r
+        else
+            tr '\r' '\n' < "$infile" > "$outfile"    # CR-only: promote \r to a real line break
+        fi
+    else
+        cp "$infile" "$outfile"
+    fi
+}
+
 check_dependency() {
     if ! command -v "$1" &> /dev/null; then
         log_error "Dependency '$1' not found. Please install it or activate the environment."
