@@ -580,19 +580,32 @@ if [[ ("$RUN_CIMS" == "true" || "$RUN_CITS" == "true") && -z "$GENOME_FASTA" ]];
     log_warning "  Provide --genome-fasta /path/to/genome.fa for optimal deletion detection."
 fi
 
-# Warn if Bowtie2 + CIMS/CITS requested
-if [[ "$ALIGNER" == "bowtie2" && ("$RUN_CIMS" == "true" || "$RUN_CITS" == "true") ]]; then
-    log_warning "Bowtie2 + CIMS/CITS: Bowtie2 has not been tuned for CIMS/CITS analysis."
-    log_warning "  Gap penalties are not optimized for crosslink-induced deletion detection."
-    log_warning "  Junction-spanning reads will be missed (not splice-aware)."
-    log_warning "  STAR is strongly recommended for CIMS/CITS workflows."
+# Warn if Bowtie2 is combined with crosslink-site analysis (CTK or Clink).
+#
+# What Bowtie2 does NOT break, contrary to how this warning used to read:
+#   - CITS crosslink positions. run_mapping_bowtie2 enforces --end-to-end, so
+#     no soft-clipping can shift the 5' read end that CITS calls the crosslink
+#     from. This is the same guarantee STAR gives via --alignEndsType EndToEnd.
+#   - CIMS deletions. --rdg 1,1 --rfg 1,1 (vs Bowtie2's 5,3 defaults) keep gap
+#     penalties low specifically so crosslink-induced deletions are still
+#     called, mirroring STAR's --scoreDelOpen/--scoreDelBase -1.
+#
+# What it DOES cost is junction-spanning reads, which cannot align at all
+# without splice awareness. That is a sensitivity loss concentrated near exon
+# boundaries, it applies equally to peak calling, CTK and Clink, and its size
+# depends on where the RBP binds — an intron-binding protein loses little, an
+# exon-junction-associated one loses a lot.
+if [[ "$ALIGNER" == "bowtie2" && ("$RUN_CIMS" == "true" || "$RUN_CITS" == "true" || "$RUN_CLINK" == "true") ]]; then
+    log_warning "Bowtie2 is not splice-aware: junction-spanning reads will not align."
+    log_warning "  Crosslink positions remain valid (--end-to-end enforced, no soft-clipping)."
+    log_warning "  Gap penalties are tuned for deletion detection (--rdg/--rfg 1,1)."
+    log_warning "  Expect reduced sensitivity near exon boundaries; STAR recovers those reads."
 fi
 
 # Clink dependency check (hard fail before any processing)
 if [[ "$RUN_CLINK" == "true" ]]; then
-    if [[ "$ALIGNER" == "bowtie2" ]]; then
-        log_warning "Clink + Bowtie2: Bowtie2 is not splice-aware. STAR is strongly recommended for Clink."
-    fi
+    # Bowtie2 caveat is emitted once, above, for all crosslink-site callers —
+    # it is a property of the aligner, not of Clink.
     log_info "Checking Clink dependencies (pysam, numpy, scipy, umi_tools)..."
     if ! check_clink_deps; then
         log_error "Clink dependencies not satisfied. Cannot run --run-clink."
