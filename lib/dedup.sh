@@ -57,13 +57,19 @@ _fastq_collapse_core() {
     #   either way   → recorded to the log, and to a run-scoped tally that the
     #                  final summary reports (see print_dedup_warning_summary)
     if [[ "$n_reads" -gt "$warn_threshold" && "${LOW_MEMORY:-false}" != "true" ]]; then
-        log_warning "Library has ${n_reads} reads (>${warn_threshold}); hash-based dedup RAM use is unbounded at this scale. Consider re-running with --low-memory."
         if [[ -n "${DEDUP_WARN_FILE:-}" ]]; then
             printf '%s\t%s\n' "${BASENAME:-$(basename "$input")}" "$n_reads" >> "$DEDUP_WARN_FILE"
         fi
         if [[ "${VERBOSE:-false}" == "true" ]]; then
+            # log_warning writes to BOTH the log and the console, which is what
+            # we want only under -v.
+            log_warning "Library has ${n_reads} reads (>${warn_threshold}); hash-based dedup RAM use is unbounded at this scale. Consider re-running with --low-memory."
             echo -e "\n      [WARNING: ${n_reads} reads > 30M — consider --low-memory to use the flat-RAM sort engine]" >&2
         else
+            # Quiet mode: log-only (bypass log_warning's console half), plus a
+            # single inline marker. The end-of-run [DEDUP MEMORY NOTICE] block
+            # reports the full list.
+            echo -e "[$(_log_ts)] [WARNING] Library has ${n_reads} reads (>${warn_threshold}); hash-based dedup RAM use is unbounded at this scale. Consider re-running with --low-memory." >> "${LOG_FILE}"
             echo -ne " \033[0;33m[!]\033[0m" >&2
         fi
     fi
