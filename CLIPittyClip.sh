@@ -80,6 +80,12 @@ function show_usage {
     echo "  --no-dedup               Disable FASTQ deduplication (default: ON)"
     echo "  --low-memory             Use flat-RAM sort-based dedup engine instead of hash-based"
     echo "                           (recommended above 30M reads; hash engine warns past this)"
+    echo "  --no-chr-filter          Keep all contigs (default: filter to canonical chromosomes)"
+    echo "                           Required for scaffold-level assemblies (e.g. hamster MesAur1.0),"
+    echo "                           where no contig matches the canonical naming pattern."
+    echo "  --clink-threads <N>      Workers for Clink pileup (default: min(-t, 8))"
+    echo "                           Pileup RAM scales with workers x covered positions; group-merged"
+    echo "                           BAMs are dense, so this is capped below -t by default."
     echo "  --eclip <pe|se>          eCLIP mode: 'pe' for paired-end (post-eclipdemux R2, UMI in header),
                                       'se' for single-end seCLIP (raw R1, UMI in sequence)"
     echo "  --parclip                PAR-CLIP mode: [UMI][READ][2nt spacer][6mer barcode][adapter]"
@@ -162,6 +168,7 @@ ECLIP_MODE=""       # eCLIP mode: "pe" (paired-end) or "se" (single-end), empty 
 PARCLIP_MODE="false"    # PAR-CLIP mode: specialized preprocessing for 4SU CLIP
 PARCLIP_ADAPTERS=""     # Optional override for PAR-CLIP adapter FASTA (default: lib/parclip_adapters.fa)
 FILTER_CHR="true"   # Filter to canonical chromosomes (chr1-22, X, Y, M) - default ON
+CLINK_THREADS=""    # Clink pileup workers; empty = min(THREADS, 8). See run_clink_pileup.
 DEMUX_MISMATCHES="1"   # Default for barcode demultiplexing
 ALIGN_MISMATCHES="2"   # Default for STAR --outFilterMismatchNmax
 GENOME_FASTA=""        # Path to reference FASTA (optional; strongly recommended for CIMS)
@@ -258,6 +265,7 @@ while [[ $# -gt 0 ]]; do
         --parclip) PARCLIP_MODE="true"; shift ;;
         --parclip-adapters) PARCLIP_ADAPTERS="$2"; shift 2 ;;
         --no-chr-filter) FILTER_CHR="false"; shift ;;
+        --clink-threads) CLINK_THREADS="$2"; shift 2 ;;
         --notification) NOTIFY_MODE="true"; shift ;;
         --child) CHILD_MODE="true"; shift ;;
         --ctk-preprocess) CTK_PREPROCESS="true"; shift ;;
@@ -869,6 +877,10 @@ if [[ -n "$INPUT_DIR" ]]; then
     if [[ "$VERBOSE" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --verbose"; fi
     if [[ "$KEEP_INTERMEDIATE" == "yes" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS -k"; fi
     if [[ "$SAMPLE_SIZE" -gt 0 ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --sample $SAMPLE_SIZE"; fi
+    # Propagate the canonical-chromosome filter choice to child invocations.
+    # Without this, batch/directory mode silently re-enables the filter per sample.
+    if [[ "$FILTER_CHR" != "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --no-chr-filter"; fi
+    if [[ -n "$CLINK_THREADS" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --clink-threads $CLINK_THREADS"; fi
     EXTRA_FLAGS="$EXTRA_FLAGS -m $ALIGNER"
     if [[ -n "$ALIGN_MISMATCHES" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --align-mismatches $ALIGN_MISMATCHES"; fi
     if [[ -n "$GENOME_FASTA" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --genome-fasta $GENOME_FASTA"; fi
@@ -1444,6 +1456,10 @@ if [[ "$DEMUX" == "yes" ]]; then
     if [[ "$KEEP_INTERMEDIATE" == "yes" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS -k"; fi
     
     # Pass Aligner choice
+    # Propagate the canonical-chromosome filter choice to child invocations.
+    # Without this, batch/directory mode silently re-enables the filter per sample.
+    if [[ "$FILTER_CHR" != "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --no-chr-filter"; fi
+    if [[ -n "$CLINK_THREADS" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --clink-threads $CLINK_THREADS"; fi
     EXTRA_FLAGS="$EXTRA_FLAGS -m $ALIGNER"
     if [[ -n "$ALIGN_MISMATCHES" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --align-mismatches $ALIGN_MISMATCHES"; fi
     if [[ -n "$GENOME_FASTA" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --genome-fasta $GENOME_FASTA"; fi

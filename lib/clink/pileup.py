@@ -517,6 +517,7 @@ def scan_bam(
     max_nh:   int  = 1,
     threads:  int  = 1,
     verbose:  bool = True,
+    all_chroms: bool = False,
 ) -> Dict[str, ChromPileup]:
     """
     One-pass BAM scan. Returns {chrom: ChromPileup}.
@@ -537,7 +538,7 @@ def scan_bam(
         chroms_to_scan = (
             [chrom] if chrom
             else [sq['SN'] for sq in bam.header['SQ']
-                  if is_standard_chrom(sq['SN'])]
+                  if all_chroms or is_standard_chrom(sq['SN'])]
         )
 
     pileups: Dict[str, ChromPileup] = {}
@@ -792,6 +793,10 @@ if __name__ == '__main__':
         help='Maximum NH tag — 1 = unique mappers only (default: 1)')
     parser.add_argument('--threads', type=int, default=1,
         help='Parallel workers — one per chromosome (default: 1 = sequential)')
+    parser.add_argument('--all-chroms', action='store_true',
+        help='Scan every contig in the BAM header, not just canonical chromosomes. '
+             'Required for scaffold-level assemblies (e.g. MesAur1.0), whose contigs '
+             'never match the canonical naming pattern.')
     parser.add_argument('--summary', action='store_true',
         help='Print per-chromosome signal summary')
     parser.add_argument('--top', type=int, default=10,
@@ -812,6 +817,7 @@ if __name__ == '__main__':
         min_mapq = args.mapq,
         max_nh   = args.nh,
         threads  = args.threads,
+        all_chroms = args.all_chroms,
     )
 
     chrom_data = {}
