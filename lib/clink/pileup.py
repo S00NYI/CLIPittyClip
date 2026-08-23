@@ -194,6 +194,31 @@ def _extract_subs_from_pairs(read: pysam.AlignedSegment,
 # With 8 parallel workers the peak pileup footprint is ~960 MB.
 _CHUNK_SIZE = 5_000_000
 
+# Maximum reads per chunk.  _CHUNK_SIZE alone bounds only the numpy arrays; the
+# per-chunk Python interval lists (M_starts, M_ends, T_off, ...) grow with the
+# number of reads in the window, which _CHUNK_SIZE does not constrain.  A short
+# contig of extreme depth (rDNA, snRNA loci, any amplified region) puts every
+# read on the contig into a single chunk: a 16 kb pig rDNA contig at ~150,000
+# reads/kb drove one worker to 29.8 GB RSS and an OOM kill.
+#
+# Chunk windows are therefore also sized so a window holds roughly this many
+# reads.  The partition is arbitrary — a read is owned by the chunk holding its
+# truncation site, and coverage accumulates across every overlapping chunk — so
+# finer windows produce identical output at bounded memory.
+_READS_PER_CHUNK = 2_000_000
+
+
+def _chunk_size_for(chrom_len: int, n_mapped: int) -> int:
+    """
+    Window size in bp for one contig: _CHUNK_SIZE, reduced when read density is
+    high enough that a full-size window would hold more than _READS_PER_CHUNK
+    reads.  Returns _CHUNK_SIZE unchanged for normal coverage.
+    """
+    if chrom_len <= 0 or n_mapped <= _READS_PER_CHUNK:
+        return _CHUNK_SIZE
+    density = n_mapped / chrom_len                 # reads per bp
+    return max(1_000, min(_CHUNK_SIZE, int(_READS_PER_CHUNK / density)))
+
 
 def _process_chunk(M_starts: list, M_ends: list,
                    D_starts: list, D_ends: list,
@@ -314,7 +339,8 @@ def _build_strand_arrays(all_positions: list, all_coverage: list,
 
 
 def _scan_single_chrom(bam_path: str, chrom: str,
-                       min_mapq: int, max_nh: int) -> 'ChromPileup':
+                       min_mapq: int, max_nh: int,
+                       n_mapped: int = 0) -> 'ChromPileup':
     """
     Scan one chromosome in fixed-size chunks and return a ChromPileup.
 
@@ -323,7 +349,9 @@ def _scan_single_chrom(bam_path: str, chrom: str,
 
     Algorithm
     ---------
-    The chromosome is split into windows of _CHUNK_SIZE bp.  For each window:
+    The chromosome is split into windows of at most _CHUNK_SIZE bp, shrunk
+    further when read density is high enough that a full-size window would
+    hold more than _READS_PER_CHUNK reads.  For each window:
 
     1. bam.fetch(chrom, start, end) returns only reads overlapping that window.
 
@@ -337,7 +365,9 @@ def _scan_single_chrom(bam_path: str, chrom: str,
        site.  n_reads, subs, and truncation counts are only incremented for owned
        reads.  Coverage intervals are accumulated in every overlapping chunk.
 
-    5. Peak RAM per worker ≈ 6 arrays × _CHUNK_SIZE × 4 bytes = 120 MB at 5 Mbp.
+    5. Peak RAM per worker has two terms: the numpy arrays, ≈ 6 × chunk_bp × 4
+       bytes (120 MB at the 5 Mbp cap), and the Python interval lists, which
+       scale with reads per window and are bounded by _READS_PER_CHUNK.
     """
     n_reads   = 0
     n_skipped = 0
@@ -360,8 +390,13 @@ def _scan_single_chrom(bam_path: str, chrom: str,
     with pysam.AlignmentFile(bam_path, 'rb') as bam:
         chrom_len = bam.get_reference_length(chrom)
 
-        for chunk_start in range(0, chrom_len, _CHUNK_SIZE):
-            chunk_end = min(chunk_start + _CHUNK_SIZE, chrom_len)
+        # Window size is capped by read count as well as by span; see
+        # _READS_PER_CHUNK. n_mapped == 0 means the caller did not supply a
+        # count, so fall back to the span-only behaviour.
+        chunk_bp = _chunk_size_for(chrom_len, n_mapped)
+
+        for chunk_start in range(0, chrom_len, chunk_bp):
+            chunk_end = min(chunk_start + chunk_bp, chrom_len)
             size      = chunk_end - chunk_start
 
             # Per-chunk interval lists, split by strand
@@ -373,7 +408,16 @@ def _scan_single_chrom(bam_path: str, chrom: str,
             T_off_fwd_clean: list = []; T_off_rev_clean: list = []
             sub_reads_fwd: list = []; sub_reads_rev: list = []
 
-            for read in bam.fetch(chrom, chunk_start, chunk_end):
+            # Fetch 1 bp wider than the window on each side. A read's truncation
+            # site sits one base OUTSIDE its own span (reference_start - 1 for
+            # fwd, reference_end for rev), so a read can own a site in a window
+            # its alignment does not overlap. Without the pad, fetch() never
+            # returns that read and it is dropped: ~1 read per chunk boundary.
+            # Coverage is unaffected — the s < e guard below discards intervals
+            # that fall outside the window.
+            for read in bam.fetch(chrom,
+                                  max(0, chunk_start - 1),
+                                  min(chrom_len, chunk_end + 1)):
                 # ── Filters ──────────────────────────────────────────────
                 if (read.is_unmapped or read.is_secondary or
                         read.is_supplementary or read.cigartuples is None):
@@ -500,8 +544,8 @@ def _worker(args: tuple):
     Multiprocessing worker — must be module-level for pickling.
     Returns (chrom, n_reads, n_skipped, arrays).
     """
-    bam_path, chrom, min_mapq, max_nh = args
-    p = _scan_single_chrom(bam_path, chrom, min_mapq, max_nh)
+    bam_path, chrom, min_mapq, max_nh, n_mapped = args
+    p = _scan_single_chrom(bam_path, chrom, min_mapq, max_nh, n_mapped)
     arrays = to_arrays(p)
     return chrom, p.n_reads, p.n_skipped, arrays
 
@@ -541,6 +585,15 @@ def scan_bam(
                   if all_chroms or is_standard_chrom(sq['SN'])]
         )
 
+        # Mapped reads per contig, read once from the BAM index (cheap — no
+        # alignment iteration). Feeds _chunk_size_for so dense contigs get
+        # smaller windows. Falls back to {} if the index carries no stats,
+        # which restores the previous span-only chunking.
+        try:
+            mapped = {s.contig: s.mapped for s in bam.get_index_statistics()}
+        except (ValueError, AttributeError):
+            mapped = {}
+
     pileups: Dict[str, ChromPileup] = {}
 
     def _log(p: ChromPileup, arrays) -> None:
@@ -565,26 +618,43 @@ def scan_bam(
 
     if threads > 1:
         # ── Parallel path ────────────────────────────────────────────────────
-        from multiprocessing import Pool
+        # ProcessPoolExecutor rather than multiprocessing.Pool: when a worker is
+        # killed (OOM), Pool silently replaces it but never re-queues the task it
+        # was holding, so .map() blocks forever with every worker idle. The
+        # executor raises BrokenProcessPool instead, turning a silent multi-hour
+        # stall into an immediate error.
+        # BrokenProcessPool lives in concurrent.futures.process; it is not
+        # re-exported from concurrent.futures on Python 3.10/3.11.
+        from concurrent.futures import ProcessPoolExecutor
+        from concurrent.futures.process import BrokenProcessPool
         n_workers = min(threads, len(chroms_to_scan))
         if verbose:
             print(f"  Scanning {len(chroms_to_scan)} chromosomes "
                   f"with {n_workers} parallel workers ...", file=sys.stderr)
 
-        jobs = [(bam_path, c, min_mapq, max_nh) for c in chroms_to_scan]
-        with Pool(n_workers) as pool:
-            for c, n_reads, n_skipped, arrays in pool.map(_worker, jobs):
-                p = ChromPileup(chrom=c)
-                p.n_reads   = n_reads
-                p.n_skipped = n_skipped
-                p._arrays   = arrays  # type: ignore[attr-defined]
-                pileups[c]  = p
-                _log(p, arrays)
+        jobs = [(bam_path, c, min_mapq, max_nh, mapped.get(c, 0))
+                for c in chroms_to_scan]
+        try:
+            with ProcessPoolExecutor(max_workers=n_workers) as pool:
+                for c, n_reads, n_skipped, arrays in pool.map(_worker, jobs):
+                    p = ChromPileup(chrom=c)
+                    p.n_reads   = n_reads
+                    p.n_skipped = n_skipped
+                    p._arrays   = arrays  # type: ignore[attr-defined]
+                    pileups[c]  = p
+                    _log(p, arrays)
+        except BrokenProcessPool as exc:
+            raise RuntimeError(
+                "Clink pileup: a worker process died (most likely an OOM kill). "
+                "Check 'dmesg -T | grep -i \"killed process\"'. Retry with fewer "
+                "workers via --threads, or with --clink-threads from CLIPittyClip.sh."
+            ) from exc
 
     else:
         # ── Sequential path ──────────────────────────────────────────────────
         for c in chroms_to_scan:
-            p = _scan_single_chrom(bam_path, c, min_mapq, max_nh)
+            p = _scan_single_chrom(bam_path, c, min_mapq, max_nh,
+                                   mapped.get(c, 0))
             arrays = to_arrays(p)
             p._arrays = arrays  # type: ignore[attr-defined]
             pileups[c] = p
