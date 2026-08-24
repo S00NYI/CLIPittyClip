@@ -148,7 +148,8 @@ All results land in a single numbered-folder hierarchy next to your input (or at
 │   ├── FASTP_REPORT/        ← HTML/JSON QC
 │   ├── ALIGNER_LOGS/        ← STAR/Bowtie2 summaries
 │   ├── PEAK/                ← peak calling logs
-│   └── SAMPLES/             ← per-sample detailed logs
+│   ├── SAMPLES/             ← per-sample detailed logs
+│   └── abundant_rna_report.tsv  ← per-sample + per-group ncRNA read fractions (if --report-abundant-rna)
 ├── 0_DEMUX_FASTQ/           ← demultiplexed reads (only with -k)
 ├── 01_BAM/                  ← sorted, indexed BAM files
 ├── 02_COLLAPSED_BED/        ← PCR-deduplicated read BED
@@ -249,6 +250,34 @@ Run `CLIPittyClip.sh --help` for full usage.
 |-------|------|---------|-------------|
 | `-g` | `--groups` | — | Groups file for bedgraph/peak aggregation (`SampleName\tGroupName`) |
 | — | `--group-xlsite` | off | Pool samples by group for crosslink-site analysis — CTK CIMS/CITS and/or Clink, whichever is enabled. Per-sample dedup BAMs are produced first, then merged by group for pileup → CITS/CIMS. Requires `-g`. (`--ctk-group` is a deprecated alias.) |
+
+### Abundant ncRNA Reporting
+
+Opt-in, non-destructive: reports what fraction of reads land on abundant ncRNA classes — it does not remove or divert anything (unlike `--filter-repeat`, which pre-filters reads before alignment). Useful for spotting read sinks (e.g. snRNA/snoRNA/rRNA absorbing a disproportionate share of signal) without committing to filtering them out. Runs once per sample on the collapsed BED, and again per group if `-g`/`--groups` is set (e.g. IP vs. SMI/input). Output: `00_REPORTS/abundant_rna_report.tsv`.
+
+| Long | Default | Description |
+|------|---------|-------------|
+| `--report-abundant-rna [list]` | off | Report read fractions for abundant ncRNA classes. Bare flag = all built-in categories: `rRNA,tRNA,snRNA,snoRNA,miRNA,vault_RNA,YRNA,other_ncRNA`. Or pass a comma-separated subset. Requires `--gtf` (and `--rmsk` or `--trna-bed` if `tRNA` is in scope). |
+| `--report-abundant-rna-custom` | — | `name:path.bed[,name2:path2...]` — report against user-defined regions too (BED or GTF; e.g. a histone gene list). Written to the same report. |
+| `--gtf` | — | Ensembl GTF for built-in category extraction |
+| `--rmsk` | — | RepeatMasker table, used for the `tRNA` category (no nuclear tRNA biotype exists in Ensembl GTFs) |
+| `--trna-bed` | — | Genomic tRNA-loci BED (e.g. from GtRNAdb) — if given, used for `tRNA` instead of `--rmsk` |
+
+```bash
+# All built-in categories, per sample and per group
+CLIPittyClip.sh -d reads/ -g groups.txt -x star_index --genome-fasta genome.fa \
+  --run-clink --group-xlsite \
+  --report-abundant-rna \
+  --gtf Homo_sapiens.GRCh38.115.gtf.gz --rmsk rmsk_hg38.txt \
+  -o output/
+
+# Subset of categories + a custom histone-gene region set
+CLIPittyClip.sh -d reads/ -g groups.txt -x star_index --genome-fasta genome.fa \
+  --report-abundant-rna rRNA,snRNA,snoRNA,tRNA \
+  --report-abundant-rna-custom histone:histone_genes.bed \
+  --gtf Homo_sapiens.GRCh38.115.gtf.gz --rmsk rmsk_hg38.txt \
+  -o output/
+```
 
 ### Crosslink Site Analysis
 
@@ -608,6 +637,9 @@ RPM is calculated as `(reads mapped to element / total input reads) × 10⁶`.
 - **`all_crosslinks.bed` output from Clink**: every position with ≥1 truncation event written to `{sample}_all_crosslinks.bed` alongside the FDR-filtered `_truncations.bed`; no significance threshold applied — suitable for PEKA and BindingSiteFinder
 - Fixed CTK output directory using hardcoded path `5_CTK_Analysis` instead of the `DIR_CTK` variable (broke numbering when other crosslink modules shifted folder numbers)
 - **`--low-memory` flag**: dedup engine selection is now explicit instead of auto-switching on read count. Hash-based (`fastq_collapse_hash.py`) is the default at every library size; `--low-memory` forces the flat-RAM sort-based engine (`fastq_collapse_sort.sh`). A warning is printed above 30M reads recommending `--low-memory` if RAM is limited.
+- **`--trim3` flag**: trims N bases from the 3' end *after* adapter removal, for protocols with a UMI/spacer between the read and the adapter (e.g. iCLIP3's 3nt second UMI). Implemented as a second fastp pass, same pattern PAR-CLIP mode already used.
+- **`--report-abundant-rna` / `--report-abundant-rna-custom`**: opt-in, non-destructive reporting of read fractions landing on abundant ncRNA classes (rRNA, tRNA, snRNA, snoRNA, miRNA, vault_RNA, YRNA, other_ncRNA, or user-defined BED/GTF regions), reported per sample and per group. Separate from `--filter-repeat`, which removes reads pre-alignment — this only reports, for diagnosing read sinks without committing to filtering them out. Output: `00_REPORTS/abundant_rna_report.tsv`.
+- Groups-file handling hardened: line endings (CRLF and old-Mac CR-only) are now auto-detected and sanitized, and sample names in the groups file may include or omit `.fastq`/`.fastq.gz`/`.fq`/`.fq.gz` extensions — both now match correctly against internal sample identifiers.
 
 ### v3.4.0
 - **PAR-CLIP mode** (`--parclip`): end-to-end support for 4-thiouridine CLIP data

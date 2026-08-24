@@ -119,6 +119,18 @@ function show_usage {
     echo "                             Requires bedGraphToBigWig in PATH. Suitable for BindingSiteFinder."
     echo "  -s, --sample <int>       Test mode: process only first N reads"
     echo "  --filter-repeat          Enable repeat element pre-filtering (off by default)"
+    echo "  --report-abundant-rna [list]  Report (do not remove) % of reads landing on abundant"
+    echo "                             ncRNA classes, per sample and per group. Bare flag reports"
+    echo "                             all built-in categories: rRNA,tRNA,snRNA,snoRNA,miRNA,"
+    echo "                             vault_RNA,YRNA,other_ncRNA. Or pass a comma-separated subset."
+    echo "                             Requires --gtf (and --rmsk or --trna-bed for tRNA)."
+    echo "  --report-abundant-rna-custom name:path.bed[,name2:path2...]"
+    echo "                             Report against user-defined regions too (BED or GTF, e.g."
+    echo "                             a histone gene list). Written to the same report as above."
+    echo "  --gtf <path>              Ensembl GTF for --report-abundant-rna built-in categories"
+    echo "  --rmsk <path>             RepeatMasker table for the tRNA category (ignored if --trna-bed given)"
+    echo "  --trna-bed <path>         Genomic tRNA-loci BED (e.g. from GtRNAdb) — takes priority over"
+    echo "                             --rmsk-derived tRNA extraction if both are given"
     echo ""
     echo "OUTPUT OPTIONS:"
     echo "  -k, --keep               Keep intermediate files (in OUTPUT/OTHERS/sample_analysis/)"
@@ -157,6 +169,16 @@ CLINK_DEDUP_ONLY="false"  # Internal: produce dedup BAMs only, skip pileup/CITS/
 NOTIFY_MODE="false"
 WIZARD_MODE="false"
 FILTER_REPEAT="false"  # Repeat element filtering is OFF by default; enable with --filter-repeat
+# --report-abundant-rna: opt-in, post-alignment, non-destructive reporting of what
+# fraction of reads land on abundant ncRNA classes (rRNA/tRNA/snRNA/snoRNA/miRNA/
+# vault RNA/YRNA/other ncRNA) — distinct from --filter-repeat, which removes reads
+# pre-alignment for mapping-accuracy reasons. This never removes anything; it just
+# measures and reports, per sample and per group, and leaves interpretation to the user.
+REPORT_ABUNDANT_RNA=""        # empty = off; "all" or comma list of built-in categories
+REPORT_ABUNDANT_RNA_CUSTOM="" # name:path.bed|gtf[,name2:path2...] for user-defined regions
+ABUNDANT_RNA_GTF=""           # Ensembl GTF for built-in category extraction (required if either flag above is set)
+ABUNDANT_RNA_RMSK=""          # RepeatMasker table for the tRNA category (required if tRNA in scope and --trna-bed not given)
+ABUNDANT_RNA_TRNA_BED=""      # Optional genomic tRNA-loci BED (e.g. GtRNAdb) — overrides --rmsk-derived extraction
 ALIGNER="star" # Default aligner
 ECLIP_MODE=""       # eCLIP mode: "pe" (paired-end) or "se" (single-end), empty = off
 PARCLIP_MODE="false"    # PAR-CLIP mode: specialized preprocessing for 4SU CLIP
@@ -254,6 +276,14 @@ while [[ $# -gt 0 ]]; do
         --no-dedup) DEDUP_MODE="false"; shift ;;
         --low-memory) LOW_MEMORY="true"; shift ;;
         --filter-repeat) FILTER_REPEAT="true"; shift ;;
+        --report-abundant-rna)
+            if [[ -n "${2:-}" && "$2" != -* ]]; then REPORT_ABUNDANT_RNA="$2"; shift 2
+            else REPORT_ABUNDANT_RNA="all"; shift; fi ;;
+        --report-abundant-rna-custom) REPORT_ABUNDANT_RNA_CUSTOM="$2"; shift 2 ;;
+        --gtf) ABUNDANT_RNA_GTF="$2"; shift 2 ;;
+        --rmsk) ABUNDANT_RNA_RMSK="$2"; shift 2 ;;
+        --trna-bed) ABUNDANT_RNA_TRNA_BED="$2"; shift 2 ;;
+        --abundant-rna-sink-dir) _ABUNDANT_RNA_SINK_DIR="$2"; shift 2 ;;  # internal: parent->child handoff, not documented
         --eclip) ECLIP_MODE="$2"; shift 2 ;;
         --parclip) PARCLIP_MODE="true"; shift ;;
         --parclip-adapters) PARCLIP_ADAPTERS="$2"; shift 2 ;;
@@ -544,12 +574,51 @@ if [[ -n "$GROUPS_FILE" ]]; then
     if ! cmp -s "$GROUPS_FILE" "$_sanitized_groups"; then
         log_warning "Groups file had non-Unix line endings (CRLF or CR-only) — sanitized a working copy: $_sanitized_groups"
     fi
-    GROUPS_FILE="$_sanitized_groups"
+
+    # Sample names must match the pipeline's internal extension-stripped
+    # basename — a groups file authored with raw input filenames
+    # (e.g. "sample1.fastq.gz") breaks group matching everywhere silently.
+    _stripped_groups="$(mktemp /tmp/groups_stripped.XXXXXX)"
+    strip_groups_file_extensions "$_sanitized_groups" "$_stripped_groups"
+    if ! cmp -s "$_sanitized_groups" "$_stripped_groups"; then
+        log_warning "Groups file sample names had a .fastq/.fq(.gz) extension — stripped to match internal sample naming: $_stripped_groups"
+    fi
+    rm -f "$_sanitized_groups"
+    GROUPS_FILE="$_stripped_groups"
 
     # Only set CTK_GROUPS_FILE if group CTK mode is explicitly enabled
     if [[ "$CTK_GROUP_MODE" == "true" ]]; then
         CTK_GROUPS_FILE="$GROUPS_FILE"
         log_info "Group CTK analysis enabled with groups file: $CTK_GROUPS_FILE"
+    fi
+fi
+
+if [[ -n "$REPORT_ABUNDANT_RNA" || -n "$REPORT_ABUNDANT_RNA_CUSTOM" ]]; then
+    if [[ -z "$ABUNDANT_RNA_GTF" ]]; then
+        log_error "--report-abundant-rna(-custom) requires --gtf"
+        exit 1
+    fi
+    if [[ ! -f "$ABUNDANT_RNA_GTF" ]]; then
+        log_error "--gtf not found: $ABUNDANT_RNA_GTF"
+        exit 1
+    fi
+    if [[ -n "$ABUNDANT_RNA_TRNA_BED" && ! -f "$ABUNDANT_RNA_TRNA_BED" ]]; then
+        log_error "--trna-bed not found: $ABUNDANT_RNA_TRNA_BED"
+        exit 1
+    fi
+    # tRNA has no nuclear biotype in Ensembl GTFs; sourced from --trna-bed if given,
+    # else RepeatMasker (same gap 01_annotate_dataset_human.R fills for tRNA*).
+    _rna_cats="$REPORT_ABUNDANT_RNA"
+    [[ "$_rna_cats" == "all" || "$_rna_cats" == "" ]] && _rna_cats="rRNA,tRNA,snRNA,snoRNA,miRNA,vault_RNA,YRNA,other_ncRNA"
+    if [[ ",$_rna_cats," == *",tRNA,"* && -z "$ABUNDANT_RNA_TRNA_BED" ]]; then
+        if [[ -z "$ABUNDANT_RNA_RMSK" ]]; then
+            log_error "--report-abundant-rna includes tRNA, which requires --rmsk or --trna-bed"
+            exit 1
+        fi
+        if [[ ! -f "$ABUNDANT_RNA_RMSK" ]]; then
+            log_error "--rmsk not found: $ABUNDANT_RNA_RMSK"
+            exit 1
+        fi
     fi
 fi
 
@@ -816,7 +885,17 @@ if [[ -n "$INPUT_DIR" ]]; then
     total_samples=${#SAMPLE_FILES[@]}
 
     console_msg "  > Found $total_samples sample files"
-    
+
+    # Build abundant-RNA sink regions ONCE here (parent), not once per child —
+    # cheap (~15s) but no reason to redo it per sample. Children inherit the
+    # path via --abundant-rna-sink-dir in EXTRA_FLAGS below.
+    if [[ -n "$REPORT_ABUNDANT_RNA" || -n "$REPORT_ABUNDANT_RNA_CUSTOM" ]]; then
+        _ABUNDANT_RNA_SINK_DIR="${OUTPUT_ROOT}/.abundant_rna_sinks"  # outside WORK_DIR so cleanup doesn't delete it before group-level aggregation runs
+        console_msg "  > Building abundant-RNA sink regions..."
+        _abundant_rna_build_sinks "$ABUNDANT_RNA_GTF" "$ABUNDANT_RNA_RMSK" \
+            "$REPORT_ABUNDANT_RNA" "$REPORT_ABUNDANT_RNA_CUSTOM" "$_ABUNDANT_RNA_SINK_DIR" "$ABUNDANT_RNA_TRNA_BED"
+    fi
+
     # Build extra flags for child processes
     EXTRA_FLAGS=""
     # In group mode, pass --ctk-preprocess so children run parseAlignment.pl
@@ -857,6 +936,12 @@ if [[ -n "$INPUT_DIR" ]]; then
         if [[ -n "$PARCLIP_ADAPTERS" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --parclip-adapters $PARCLIP_ADAPTERS"; fi
     fi
     if [[ "$FILTER_REPEAT" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --filter-repeat"; fi
+    if [[ -n "$REPORT_ABUNDANT_RNA" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --report-abundant-rna $REPORT_ABUNDANT_RNA"; fi
+    if [[ -n "$REPORT_ABUNDANT_RNA_CUSTOM" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --report-abundant-rna-custom \"$REPORT_ABUNDANT_RNA_CUSTOM\""; fi
+    if [[ -n "$ABUNDANT_RNA_GTF" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --gtf \"$ABUNDANT_RNA_GTF\""; fi
+    if [[ -n "$ABUNDANT_RNA_RMSK" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --rmsk \"$ABUNDANT_RNA_RMSK\""; fi
+    if [[ -n "$ABUNDANT_RNA_TRNA_BED" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --trna-bed \"$ABUNDANT_RNA_TRNA_BED\""; fi
+    if [[ -n "${_ABUNDANT_RNA_SINK_DIR:-}" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --abundant-rna-sink-dir \"$_ABUNDANT_RNA_SINK_DIR\""; fi
     if [[ "$DEDUP_MODE" == "false" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --no-dedup"; fi
     if [[ "$LOW_MEMORY" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --low-memory"; fi
     EXTRA_FLAGS="$EXTRA_FLAGS --peak-caller $PEAK_CALLER"
@@ -1005,7 +1090,20 @@ if [[ -n "$INPUT_DIR" ]]; then
             if [[ -n "$bed_file" ]]; then
                 cp "$bed_file" "$OUTPUT_ROOT/$DIR_BED/${sample_name}.bed"
             fi
-            
+
+            # 2b. Abundant-RNA sample report — append this child's rows into
+            # the run's combined report (each child writes its own header;
+            # skip it on every append after the first).
+            rna_report_file=$(find "$sample_out" -name "*_abundant_rna_report.tsv" 2>/dev/null | head -n 1)
+            if [[ -n "$rna_report_file" ]]; then
+                _combined_rna_report="$OUTPUT_ROOT/$DIR_REPORTS/abundant_rna_report.tsv"
+                if [[ ! -f "$_combined_rna_report" ]]; then
+                    cp "$rna_report_file" "$_combined_rna_report"
+                else
+                    tail -n +2 "$rna_report_file" >> "$_combined_rna_report"
+                fi
+            fi
+
             # 3. Bedgraph files & chrom.sizes
             bg_pos=$(find "$sample_out" -name "*_pos.bedgraph" 2>/dev/null | head -n 1)
             bg_neg=$(find "$sample_out" -name "*_neg.bedgraph" 2>/dev/null | head -n 1)
@@ -1144,7 +1242,17 @@ if [[ -n "$INPUT_DIR" ]]; then
         console_msg "  > Generating Combined Bedgraph by groups..."
         run_combined_bedgraph "$OUTPUT_ROOT" "$GROUPS_FILE" "$OUTPUT_ROOT/$DIR_BG"
     fi
-    
+
+    # Abundant-RNA group-level report (e.g. IP vs SMI) — pools each group's
+    # per-sample collapsed BEDs, appends group rows to the same report the
+    # per-sample collection loop above already started.
+    if [[ -n "$GROUPS_FILE" && -n "${_ABUNDANT_RNA_SINK_DIR:-}" ]]; then
+        console_msg "  > Generating Abundant-RNA report by groups..."
+        run_abundant_rna_group_report "$GROUPS_FILE" "$OUTPUT_ROOT/$DIR_BED" \
+            "$_ABUNDANT_RNA_SINK_DIR" "$OUTPUT_ROOT/$DIR_REPORTS/abundant_rna_report.tsv"
+    fi
+    [[ -n "${_ABUNDANT_RNA_SINK_DIR:-}" ]] && rm -rf "$_ABUNDANT_RNA_SINK_DIR"
+
     # Repeat Filtering Summary
     if [[ "$FILTER_REPEAT" == "true" ]]; then
         console_msg "\n[REPEAT FILTERING SUMMARY]"
@@ -1390,7 +1498,16 @@ if [[ "$DEMUX" == "yes" ]]; then
 
     # 2. Iterate and Recurse
     console_msg "\n[BATCH ANALYSIS]"
-    
+
+    # Build abundant-RNA sink regions ONCE here (parent) — see matching comment
+    # in the directory-mode batch branch above for why.
+    if [[ -n "$REPORT_ABUNDANT_RNA" || -n "$REPORT_ABUNDANT_RNA_CUSTOM" ]]; then
+        _ABUNDANT_RNA_SINK_DIR="${OUTPUT_ROOT}/.abundant_rna_sinks"  # outside WORK_DIR so cleanup doesn't delete it before group-level aggregation runs
+        console_msg "  > Building abundant-RNA sink regions..."
+        _abundant_rna_build_sinks "$ABUNDANT_RNA_GTF" "$ABUNDANT_RNA_RMSK" \
+            "$REPORT_ABUNDANT_RNA" "$REPORT_ABUNDANT_RNA_CUSTOM" "$_ABUNDANT_RNA_SINK_DIR" "$ABUNDANT_RNA_TRNA_BED"
+    fi
+
     # In group mode, pass --ctk-preprocess so children run parseAlignment.pl
     # (generating mutation files) without running full per-sample CIMS/CITS.
     if [[ "$CTK_GROUP_MODE" == "true" ]]; then
@@ -1430,6 +1547,12 @@ if [[ "$DEMUX" == "yes" ]]; then
         if [[ -n "$PARCLIP_ADAPTERS" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --parclip-adapters $PARCLIP_ADAPTERS"; fi
     fi
     if [[ "$FILTER_REPEAT" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --filter-repeat"; fi
+    if [[ -n "$REPORT_ABUNDANT_RNA" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --report-abundant-rna $REPORT_ABUNDANT_RNA"; fi
+    if [[ -n "$REPORT_ABUNDANT_RNA_CUSTOM" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --report-abundant-rna-custom \"$REPORT_ABUNDANT_RNA_CUSTOM\""; fi
+    if [[ -n "$ABUNDANT_RNA_GTF" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --gtf \"$ABUNDANT_RNA_GTF\""; fi
+    if [[ -n "$ABUNDANT_RNA_RMSK" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --rmsk \"$ABUNDANT_RNA_RMSK\""; fi
+    if [[ -n "$ABUNDANT_RNA_TRNA_BED" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --trna-bed \"$ABUNDANT_RNA_TRNA_BED\""; fi
+    if [[ -n "${_ABUNDANT_RNA_SINK_DIR:-}" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --abundant-rna-sink-dir \"$_ABUNDANT_RNA_SINK_DIR\""; fi
     # Pool was already deduped above; tell children to skip dedup
     EXTRA_FLAGS="$EXTRA_FLAGS --no-dedup"
 
@@ -1597,6 +1720,18 @@ if [[ "$DEMUX" == "yes" ]]; then
                 if [[ -n "$bed_file" ]]; then
                     cp "$bed_file" "$OUTPUT_ROOT/$DIR_BED/${sample_name}.bed"
                     ((count++))
+                fi
+
+                # 2b. Abundant-RNA sample report — see matching block in the
+                # directory-mode collection branch above for details.
+                rna_report_file=$(find "$analysis_dir" -name "*_abundant_rna_report.tsv" -not -name '._*' 2>/dev/null | head -n 1)
+                if [[ -n "$rna_report_file" ]]; then
+                    _combined_rna_report="$OUTPUT_ROOT/$DIR_REPORTS/abundant_rna_report.tsv"
+                    if [[ ! -f "$_combined_rna_report" ]]; then
+                        cp "$rna_report_file" "$_combined_rna_report"
+                    else
+                        tail -n +2 "$rna_report_file" >> "$_combined_rna_report"
+                    fi
                 fi
 
                 # 3. Bedgraph & Chrom Sizes
@@ -1844,7 +1979,16 @@ if [[ "$DEMUX" == "yes" ]]; then
     if [[ -n "$GROUPS_FILE" ]]; then
         run_combined_bedgraph "$OUTPUT_ROOT" "$GROUPS_FILE" "$OUTPUT_ROOT/$DIR_BG"
     fi
-    
+
+    # Abundant-RNA group-level report — see matching block in directory mode above.
+    if [[ -n "$GROUPS_FILE" && -n "${_ABUNDANT_RNA_SINK_DIR:-}" ]]; then
+        console_msg "  > Generating Abundant-RNA report by groups..."
+        run_abundant_rna_group_report "$GROUPS_FILE" "$OUTPUT_ROOT/$DIR_BED" \
+            "$_ABUNDANT_RNA_SINK_DIR" "$OUTPUT_ROOT/$DIR_REPORTS/abundant_rna_report.tsv"
+    fi
+    [[ -n "${_ABUNDANT_RNA_SINK_DIR:-}" ]] && rm -rf "$_ABUNDANT_RNA_SINK_DIR"
+
+
     # Add enhanced columns to peak matrix (after combined bedgraphs are ready)
     PEAK_MATRIX="$OUTPUT_ROOT/$DIR_PEAKS/COMBINED_PEAKS/COMBINED_PEAK_MATRIX.txt"
     PEAKS_BED="$OUTPUT_ROOT/$DIR_PEAKS/COMBINED_PEAKS/peaks_Sorted.bed"
@@ -2139,6 +2283,21 @@ bedtools bamtobed -i "$CLINK_DEDUP_BAM" -split 2>/dev/null \
     | sort -k1,1 -k2,2n > "$COLLAPSED_BED"
 log_info "Collapsed BED (Clink): $COLLAPSED_BED ($(wc -l < "$COLLAPSED_BED") reads)"
 
+# 3b-2. Abundant-RNA sample report (opt-in, non-destructive — see modules.sh)
+if [[ -n "$REPORT_ABUNDANT_RNA" || -n "$REPORT_ABUNDANT_RNA_CUSTOM" ]]; then
+    # True single-file mode (no batch/demux parent) never had a chance to
+    # build the shared sink dir — build it inline here, once, if missing.
+    if [[ -z "${_ABUNDANT_RNA_SINK_DIR:-}" ]]; then
+        _ABUNDANT_RNA_SINK_DIR="$(pwd)/ABUNDANT_RNA_SINKS"
+        log_info "Building abundant-RNA sink regions (single-file mode)..."
+        _abundant_rna_build_sinks "$ABUNDANT_RNA_GTF" "$ABUNDANT_RNA_RMSK" \
+            "$REPORT_ABUNDANT_RNA" "$REPORT_ABUNDANT_RNA_CUSTOM" "$_ABUNDANT_RNA_SINK_DIR" "$ABUNDANT_RNA_TRNA_BED"
+    fi
+    ABUNDANT_RNA_LOCAL_REPORT="${BASENAME}_abundant_rna_report.tsv"
+    run_abundant_rna_sample_report "$COLLAPSED_BED" "$_ABUNDANT_RNA_SINK_DIR" \
+        "$ABUNDANT_RNA_LOCAL_REPORT" "$BASENAME"
+fi
+
 # 3c. CTK preprocessing — only when --run-cims or --run-cits is explicitly requested.
 #     parseAlignment.pl + tag2collapse.pl produce a separate CTK_COLLAPSED_BED
 #     and mutation file required by CITS.pl / CIMS.pl.
@@ -2286,6 +2445,10 @@ if [[ "$CHILD_MODE" != "true" ]]; then
     # Collapsed BED
     mv "${COLLAPSED_BED:-${BASENAME}_collapsed.bed}" "$SINGLE_OUTPUT_ROOT/$SF_DIR_BED/" 2>/dev/null
     mv "${MUTATION_FILE:-${BASENAME}_mutations.txt}" "$SINGLE_OUTPUT_ROOT/$SF_DIR_BED/" 2>/dev/null
+
+    # Abundant-RNA sample report
+    mv "${ABUNDANT_RNA_LOCAL_REPORT:-${BASENAME}_abundant_rna_report.tsv}" \
+        "$SINGLE_OUTPUT_ROOT/$SF_DIR_REPORTS/abundant_rna_report.tsv" 2>/dev/null
 
     # Bedgraphs and scale factors
     mv "${BASENAME}"*.bedgraph "$SINGLE_OUTPUT_ROOT/$SF_DIR_BG/" 2>/dev/null
