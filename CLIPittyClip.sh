@@ -984,7 +984,12 @@ if [[ -n "$INPUT_DIR" ]]; then
                 $EXTRA_FLAGS"
 
             # Run child in WORK_DIR so *_analysis/ lands there
-            (cd "$WORK_DIR" && $cmd)
+            # eval re-parses the embedded \"...\" quoting in $cmd (needed for
+            # EXTRA_FLAGS values like --gtf/--rmsk/--peak-caller-args that may
+            # contain spaces) — plain unquoted expansion word-splits but does
+            # NOT re-interpret those escaped quotes, leaving literal " chars
+            # in the argument value.
+            (cd "$WORK_DIR" && eval "$cmd")
 
             if [ $? -eq 0 ]; then
                 update_status_done
@@ -1599,8 +1604,9 @@ if [[ "$DEMUX" == "yes" ]]; then
                 -o ${sample_name} \
                 $EXTRA_FLAGS"
             
-            # Run child in WORK_DIR so *_analysis/ lands there
-            (cd "$WORK_DIR" && $cmd) 2>&1 | tee "${WORK_DIR}/${sample_name}.log"
+            # Run child in WORK_DIR so *_analysis/ lands there (eval needed —
+            # see comment at the directory-mode dispatch site above)
+            (cd "$WORK_DIR" && eval "$cmd") 2>&1 | tee "${WORK_DIR}/${sample_name}.log"
             
             pipestatus="${PIPESTATUS[0]}"
             
