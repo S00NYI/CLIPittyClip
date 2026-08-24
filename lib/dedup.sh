@@ -46,22 +46,48 @@ _fastq_collapse_core() {
     n_reads=$(( $(wc -l < "$input") / 4 ))
     local warn_threshold=30000000
 
+    # Large-library warning.
+    #
+    # This fires per sample, so in batch mode it used to print a multi-line
+    # block for every large library regardless of -v, burying the actual
+    # progress output. Now:
+    #   -v given     → full explanation inline, as before
+    #   -v not given → a single yellow [!] marker on the progress line, so the
+    #                  condition is still visible without dominating the output
+    #   either way   → recorded to the log, and to a run-scoped tally that the
+    #                  final summary reports (see print_dedup_warning_summary)
     if [[ "$n_reads" -gt "$warn_threshold" && "${LOW_MEMORY:-false}" != "true" ]]; then
-        log_warning "Library has ${n_reads} reads (>${warn_threshold}); hash-based dedup RAM use is unbounded at this scale. Consider re-running with --low-memory."
-        echo -e "\n      [WARNING: ${n_reads} reads > 30M — consider --low-memory to use the flat-RAM sort engine]" >&2
+        if [[ -n "${DEDUP_WARN_FILE:-}" ]]; then
+            printf '%s\t%s\n' "${BASENAME:-$(basename "$input")}" "$n_reads" >> "$DEDUP_WARN_FILE"
+        fi
+        if [[ "${VERBOSE:-false}" == "true" ]]; then
+            # log_warning writes to BOTH the log and the console, which is what
+            # we want only under -v.
+            log_warning "Library has ${n_reads} reads (>${warn_threshold}); hash-based dedup RAM use is unbounded at this scale. Consider re-running with --low-memory."
+            echo -e "\n      [WARNING: ${n_reads} reads > 30M — consider --low-memory to use the flat-RAM sort engine]" >&2
+        else
+            # Quiet mode: log-only (bypass log_warning's console half), plus a
+            # single inline marker. The end-of-run [DEDUP MEMORY NOTICE] block
+            # reports the full list.
+            echo -e "[$(_log_ts)] [WARNING] Library has ${n_reads} reads (>${warn_threshold}); hash-based dedup RAM use is unbounded at this scale. Consider re-running with --low-memory." >> "${LOG_FILE}"
+            echo -ne " \033[0;33m[!]\033[0m" >&2
+        fi
     fi
+
+    # Engine-selection detail is diagnostic, not progress — verbose only.
+    _dedup_note () { [[ "${VERBOSE:-false}" == "true" ]] && echo -e "\n      $1" >&2; return 0; }
 
     if [[ "${LOW_MEMORY:-false}" != "true" ]] && [[ -f "$hash_script" ]] && command -v python3 &>/dev/null; then
         log_info "Dedup engine: hash-based (fastq_collapse_hash.py) — ${n_reads} reads"
-        echo -e "\n      [dedup: hash-based engine, ${n_reads} reads]" >&2
+        _dedup_note "[dedup: hash-based engine, ${n_reads} reads]"
         python3 "$hash_script" "$input" "$output" 2>> "${LOG_FILE:-/dev/null}"
     elif [[ -x "$sort_script" ]]; then
         log_info "Dedup engine: sort-based (fastq_collapse_sort.sh) — ${n_reads} reads"
-        echo -e "\n      [dedup: sort-based engine, ${n_reads} reads]" >&2
+        _dedup_note "[dedup: sort-based engine, ${n_reads} reads]"
         "$sort_script" "$input" "$output" 2>> "${LOG_FILE:-/dev/null}"
     else
         log_info "Dedup engine: sort-based inline fallback (awk | sort | uniq) — ${n_reads} reads"
-        echo -e "\n      [dedup: sort-based inline fallback, ${n_reads} reads]" >&2
+        _dedup_note "[dedup: sort-based inline fallback, ${n_reads} reads]"
         # Replicates fastq2collapse.pl column order exactly:
         #   paste order: ID | QUAL | SEQ  →  sort -k3 (by SEQ)
         #   uniq -f2 -c  →  fields: $1=count $2=ID $3=QUAL $4=SEQ
@@ -256,4 +282,26 @@ strip_eclip_barcode() {
         log_error "stripBarcode.pl failed - output is empty"
         return 1
     fi
+}
+
+# ── Run-scoped tally of large-library dedup warnings ──────────────────────────
+# Each sample runs as its own child process in batch mode, so the warnings
+# cannot be accumulated in a shell variable. _fastq_collapse_core appends to
+# $DEDUP_WARN_FILE instead, and this prints the collected result once at the
+# end of the run — to the console and, via console_msg, to the detailed log.
+#
+# Called from the [COMPLETE] block. Safe to call when nothing warned.
+print_dedup_warning_summary () {
+    [[ -n "${DEDUP_WARN_FILE:-}" && -s "${DEDUP_WARN_FILE:-/nonexistent}" ]] || return 0
+    local n
+    n=$(wc -l < "$DEDUP_WARN_FILE" | tr -d ' ')
+    console_msg "\n\033[0;33m[DEDUP MEMORY NOTICE]\033[0m"
+    console_msg "  ${n} librar$([[ $n -eq 1 ]] && echo y || echo ies) exceeded 30M reads and used the hash-based dedup engine,"
+    console_msg "  whose RAM use scales with unique reads and is not capped:"
+    while IFS=$'\t' read -r s r; do
+        console_msg "    $(printf '%-34s %15s reads' "$s" "$(printf "%'d" "$r" 2>/dev/null || echo "$r")")"
+    done < "$DEDUP_WARN_FILE"
+    console_msg "  If this run was killed during deduplication, re-run with --low-memory"
+    console_msg "  to use the flat-RAM sort engine instead."
+    rm -f "$DEDUP_WARN_FILE"
 }

@@ -80,6 +80,12 @@ function show_usage {
     echo "  --no-dedup               Disable FASTQ deduplication (default: ON)"
     echo "  --low-memory             Use flat-RAM sort-based dedup engine instead of hash-based"
     echo "                           (recommended above 30M reads; hash engine warns past this)"
+    echo "  --no-chr-filter          Keep all contigs (default: filter to canonical chromosomes)"
+    echo "                           Required for scaffold-level assemblies (e.g. hamster MesAur1.0),"
+    echo "                           where no contig matches the canonical naming pattern."
+    echo "  --clink-threads <N>      Workers for Clink pileup (default: min(-t, 8))"
+    echo "                           Pileup RAM scales with workers x covered positions; group-merged"
+    echo "                           BAMs are dense, so this is capped below -t by default."
     echo "  --eclip <pe|se>          eCLIP mode: 'pe' for paired-end (post-eclipdemux R2, UMI in header),
                                       'se' for single-end seCLIP (raw R1, UMI in sequence)"
     echo "  --parclip                PAR-CLIP mode: [UMI][READ][2nt spacer][6mer barcode][adapter]"
@@ -184,6 +190,7 @@ ECLIP_MODE=""       # eCLIP mode: "pe" (paired-end) or "se" (single-end), empty 
 PARCLIP_MODE="false"    # PAR-CLIP mode: specialized preprocessing for 4SU CLIP
 PARCLIP_ADAPTERS=""     # Optional override for PAR-CLIP adapter FASTA (default: lib/parclip_adapters.fa)
 FILTER_CHR="true"   # Filter to canonical chromosomes (chr1-22, X, Y, M) - default ON
+CLINK_THREADS=""    # Clink pileup workers; empty = min(THREADS, 8). See run_clink_pileup.
 DEMUX_MISMATCHES="1"   # Default for barcode demultiplexing
 ALIGN_MISMATCHES="2"   # Default for STAR --outFilterMismatchNmax
 GENOME_FASTA=""        # Path to reference FASTA (optional; strongly recommended for CIMS)
@@ -288,6 +295,7 @@ while [[ $# -gt 0 ]]; do
         --parclip) PARCLIP_MODE="true"; shift ;;
         --parclip-adapters) PARCLIP_ADAPTERS="$2"; shift 2 ;;
         --no-chr-filter) FILTER_CHR="false"; shift ;;
+        --clink-threads) CLINK_THREADS="$2"; shift 2 ;;
         --notification) NOTIFY_MODE="true"; shift ;;
         --child) CHILD_MODE="true"; shift ;;
         --ctk-preprocess) CTK_PREPROCESS="true"; shift ;;
@@ -522,6 +530,14 @@ else
 
     LOG_FILE="${OUTPUT_ROOT}/00_REPORTS/detailed_output.log"
     > "${LOG_FILE}"
+
+    # Run-scoped tally of large-library dedup warnings. Batch mode runs each
+    # sample as a separate child process, so the warnings cannot accumulate in
+    # a shell variable — children inherit this path through the environment.
+    # The :- guard means the parent sets it once and children reuse it rather
+    # than each pointing at their own sample directory.
+    export DEDUP_WARN_FILE="${DEDUP_WARN_FILE:-${OUTPUT_ROOT}/00_REPORTS/.dedup_warnings}"
+    [[ "${CHILD_MODE:-false}" == "true" ]] || : > "$DEDUP_WARN_FILE"
 fi
 
 # Thread validation: cap to available cores - 1 (leave 1 for system)
@@ -641,19 +657,32 @@ if [[ ("$RUN_CIMS" == "true" || "$RUN_CITS" == "true") && -z "$GENOME_FASTA" ]];
     log_warning "  Provide --genome-fasta /path/to/genome.fa for optimal deletion detection."
 fi
 
-# Warn if Bowtie2 + CIMS/CITS requested
-if [[ "$ALIGNER" == "bowtie2" && ("$RUN_CIMS" == "true" || "$RUN_CITS" == "true") ]]; then
-    log_warning "Bowtie2 + CIMS/CITS: Bowtie2 has not been tuned for CIMS/CITS analysis."
-    log_warning "  Gap penalties are not optimized for crosslink-induced deletion detection."
-    log_warning "  Junction-spanning reads will be missed (not splice-aware)."
-    log_warning "  STAR is strongly recommended for CIMS/CITS workflows."
+# Warn if Bowtie2 is combined with crosslink-site analysis (CTK or Clink).
+#
+# What Bowtie2 does NOT break, contrary to how this warning used to read:
+#   - CITS crosslink positions. run_mapping_bowtie2 enforces --end-to-end, so
+#     no soft-clipping can shift the 5' read end that CITS calls the crosslink
+#     from. This is the same guarantee STAR gives via --alignEndsType EndToEnd.
+#   - CIMS deletions. --rdg 1,1 --rfg 1,1 (vs Bowtie2's 5,3 defaults) keep gap
+#     penalties low specifically so crosslink-induced deletions are still
+#     called, mirroring STAR's --scoreDelOpen/--scoreDelBase -1.
+#
+# What it DOES cost is junction-spanning reads, which cannot align at all
+# without splice awareness. That is a sensitivity loss concentrated near exon
+# boundaries, it applies equally to peak calling, CTK and Clink, and its size
+# depends on where the RBP binds — an intron-binding protein loses little, an
+# exon-junction-associated one loses a lot.
+if [[ "$ALIGNER" == "bowtie2" && ("$RUN_CIMS" == "true" || "$RUN_CITS" == "true" || "$RUN_CLINK" == "true") ]]; then
+    log_warning "Bowtie2 is not splice-aware: junction-spanning reads will not align."
+    log_warning "  Crosslink positions remain valid (--end-to-end enforced, no soft-clipping)."
+    log_warning "  Gap penalties are tuned for deletion detection (--rdg/--rfg 1,1)."
+    log_warning "  Expect reduced sensitivity near exon boundaries; STAR recovers those reads."
 fi
 
 # Clink dependency check (hard fail before any processing)
 if [[ "$RUN_CLINK" == "true" ]]; then
-    if [[ "$ALIGNER" == "bowtie2" ]]; then
-        log_warning "Clink + Bowtie2: Bowtie2 is not splice-aware. STAR is strongly recommended for Clink."
-    fi
+    # Bowtie2 caveat is emitted once, above, for all crosslink-site callers —
+    # it is a property of the aligner, not of Clink.
     log_info "Checking Clink dependencies (pysam, numpy, scipy, umi_tools)..."
     if ! check_clink_deps; then
         log_error "Clink dependencies not satisfied. Cannot run --run-clink."
@@ -927,6 +956,10 @@ if [[ -n "$INPUT_DIR" ]]; then
     if [[ "$VERBOSE" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --verbose"; fi
     if [[ "$KEEP_INTERMEDIATE" == "yes" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS -k"; fi
     if [[ "$SAMPLE_SIZE" -gt 0 ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --sample $SAMPLE_SIZE"; fi
+    # Propagate the canonical-chromosome filter choice to child invocations.
+    # Without this, batch/directory mode silently re-enables the filter per sample.
+    if [[ "$FILTER_CHR" != "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --no-chr-filter"; fi
+    if [[ -n "$CLINK_THREADS" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --clink-threads $CLINK_THREADS"; fi
     EXTRA_FLAGS="$EXTRA_FLAGS -m $ALIGNER"
     if [[ -n "$ALIGN_MISMATCHES" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --align-mismatches $ALIGN_MISMATCHES"; fi
     if [[ -n "$GENOME_FASTA" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --genome-fasta $GENOME_FASTA"; fi
@@ -1394,6 +1427,8 @@ if [[ -n "$INPUT_DIR" ]]; then
     M=$(( (DURATION%3600)/60 ))
     S=$((DURATION%60))
 
+    print_dedup_warning_summary
+
     console_msg "\n[COMPLETE]"
     console_msg "  > Duration: ${H}h ${M}m ${S}s"
     console_msg "  > Output: $OUTPUT_ROOT/"
@@ -1543,6 +1578,10 @@ if [[ "$DEMUX" == "yes" ]]; then
     if [[ "$KEEP_INTERMEDIATE" == "yes" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS -k"; fi
     
     # Pass Aligner choice
+    # Propagate the canonical-chromosome filter choice to child invocations.
+    # Without this, batch/directory mode silently re-enables the filter per sample.
+    if [[ "$FILTER_CHR" != "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --no-chr-filter"; fi
+    if [[ -n "$CLINK_THREADS" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --clink-threads $CLINK_THREADS"; fi
     EXTRA_FLAGS="$EXTRA_FLAGS -m $ALIGNER"
     if [[ -n "$ALIGN_MISMATCHES" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --align-mismatches $ALIGN_MISMATCHES"; fi
     if [[ -n "$GENOME_FASTA" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --genome-fasta $GENOME_FASTA"; fi
@@ -2113,6 +2152,7 @@ if [[ "$DEMUX" == "yes" ]]; then
     fi
     console_msg "  └── ${DIR_OTHERS}/"
 
+    print_dedup_warning_summary
     console_msg "\n[SUCCESS] Pipeline finished."
     
     # Calculate Duration
@@ -2665,6 +2705,7 @@ if [[ "$CHILD_MODE" != "true" ]]; then
     fi
     console_msg "  └── ${SF_DIR_OTHERS}/"
 
+    print_dedup_warning_summary
     console_msg "\n[SUCCESS] Pipeline finished."
     console_msg "End Time: $(date '+%Y-%m-%d %H:%M:%S')"
     console_msg "Total Duration: ${H}h ${M}m ${S}s"

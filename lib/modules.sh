@@ -2947,12 +2947,26 @@ run_clink_pileup() {
     local clink_dir
     clink_dir=$(_clink_dir)
 
-    log_info "Clink pileup: scanning BAM → $npz_out (threads=$threads)"
+    # Honour --no-chr-filter here too. pileup.py applies its OWN canonical-chromosome
+    # filter (is_standard_chrom), independent of the BAM-level filter, so without this
+    # a scaffold-level assembly scans zero chromosomes and produces an empty .npz.
+    local extra=""
+    [[ "${FILTER_CHR:-true}" != "true" ]] && extra="--all-chroms"
+
+    # Pileup RAM scales with concurrent workers × covered positions per chromosome.
+    # Group-merged BAMs are far denser than single samples, which is where this
+    # OOMs first. Cap workers independently of the global -t, which mapping wants
+    # set high; override with --clink-threads on a machine with more headroom.
+    local pileup_threads="${CLINK_THREADS:-}"
+    [[ -z "$pileup_threads" ]] && pileup_threads=$(( threads > 8 ? 8 : threads ))
+
+    log_info "Clink pileup: scanning BAM → $npz_out (threads=$pileup_threads${extra:+ $extra})"
 
     _clink_exec python3 "$clink_dir/pileup.py" \
         "$bam_in" \
         --out "$npz_out" \
-        --threads "$threads"
+        --threads "$pileup_threads" \
+        $extra
 
     if [[ $? -ne 0 ]] || [[ ! -s "$npz_out" ]]; then
         log_error "Clink pileup failed. Check log for details."

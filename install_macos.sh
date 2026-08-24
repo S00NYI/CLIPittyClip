@@ -318,13 +318,23 @@ rm -f "$CONDA_BIN/x86_64-apple-darwin13.4.0-ld"
 
 cat > "$CONDA_BIN/x86_64-apple-darwin13.4.0-clang" << 'CLANG_WRAPPER'
 #!/bin/bash
-# Add -Wno-incompatible-pointer-types to fix XML::LibXML compilation on newer clang
-exec /usr/bin/clang -Wno-incompatible-pointer-types "$@"
+# -arch x86_64 is REQUIRED on Apple Silicon. The conda env is osx-64, so its
+# perl is an x86_64 binary whose Config carries x86-only compiler flags
+# (-march=core2 -mtune=haswell -mssse3). /usr/bin/clang defaults to targeting
+# arm64 on Apple Silicon and rejects those flags outright:
+#     clang: error: unsupported argument 'core2' to option '-march='
+#     clang: error: unsupported option '-mssse3' for target 'arm64-...'
+# Without it, every XS module build fails (Math::CDF, XML::Parser, BioPerl).
+# It must apply to linking as well as compiling: forcing it only at compile
+# time yields an arm64 bundle that an x86_64 perl cannot dlopen.
+# -Wno-incompatible-pointer-types fixes XML::LibXML on newer clang.
+exec /usr/bin/clang -arch x86_64 -Wno-incompatible-pointer-types "$@"
 CLANG_WRAPPER
 
 cat > "$CONDA_BIN/x86_64-apple-darwin13.4.0-clang++" << 'CLANGXX_WRAPPER'
 #!/bin/bash
-exec /usr/bin/clang++ -Wno-incompatible-pointer-types "$@"
+# See the note in the clang wrapper: -arch x86_64 is required on Apple Silicon.
+exec /usr/bin/clang++ -arch x86_64 -Wno-incompatible-pointer-types "$@"
 CLANGXX_WRAPPER
 
 cat > "$CONDA_BIN/x86_64-apple-darwin13.4.0-ar" << 'WRAPPER'
@@ -379,32 +389,55 @@ if ! command -v cpanm &> /dev/null; then
     curl -L https://cpanmin.us | perl - App::cpanminus 2>/dev/null || true
 fi
 
-# Install modules needed for BioPerl compatibility
-print_info "Installing XML::Parser (required for Bio::SeqIO)..."
-cpanm --notest XML::Parser 2>/dev/null || true
+# Install Perl modules via CPAN.
+#
+# These steps previously ended in `2>/dev/null || true`, which discarded both
+# the error output and the exit status — so a total failure (every XS build
+# broken by the arm64/x86_64 compiler mismatch above) still reported a
+# successful install, and only surfaced later as a pipeline crash. Failures are
+# now captured, summarised, and reported at the end.
+CPAN_LOG="$(mktemp -t clipittyclip_cpan)"
+CPAN_FAILED=()
 
-print_info "Installing DB_File (required for Bio::SeqIO)..."
-cpanm --notest DB_File 2>/dev/null || true
+cpan_install() {            # $1 = module, $2 = why it is needed, $3 = extra cpanm args
+    local module="$1" reason="$2" extra="${3:-}"
+    print_info "Installing ${module} (${reason})..."
+    if cpanm --notest ${extra} "$module" >> "$CPAN_LOG" 2>&1; then
+        print_success "${module} installed"
+    else
+        print_warning "${module} FAILED"
+        CPAN_FAILED+=("$module")
+        tail -n 12 "$CPAN_LOG" | sed 's/^/    /'
+    fi
+}
 
-# Install only the modules CTK actually needs (not full BioPerl)
-print_info "Installing Math::CDF (required for CIMS/CITS)..."
-cpanm --notest Math::CDF 2>/dev/null || true
-if perl -MMath::CDF -e '1' 2>/dev/null; then
-    print_success "Math::CDF installed successfully"
+cpan_install XML::Parser "required for Bio::SeqIO"
+cpan_install DB_File     "required for Bio::SeqIO"
+cpan_install Math::CDF   "required for CIMS/CITS"
+# XML::LibXML has minor test failures but works
+cpan_install XML::LibXML "dependency for Bio::SeqIO" "--force"
+cpan_install Bio::SeqIO  "required for sequence operations"
+
+# Verify by loading each module, which is the only check that proves the built
+# object is loadable by THIS perl — a module can install cleanly and still be
+# the wrong architecture.
+print_info "Verifying Perl modules load..."
+PERL_BROKEN=()
+for probe in Math::CDF Bio::SeqIO; do
+    if perl -M"$probe" -e '1' 2>/dev/null; then
+        print_success "  $probe loads"
+    else
+        print_warning "  $probe does NOT load"
+        PERL_BROKEN+=("$probe")
+    fi
+done
+
+if [[ ${#PERL_BROKEN[@]} -gt 0 ]]; then
+    print_warning "Perl modules unavailable: ${PERL_BROKEN[*]}"
+    print_warning "CTK CIMS/CITS (--run-cims-cits) will not work. Clink (--run-clink) is unaffected."
+    print_warning "Full CPAN log: $CPAN_LOG"
 else
-    print_warning "Math::CDF installation failed - CIMS/CITS analysis will not work"
-fi
-
-# XML::LibXML has minor test failures but works - install with --force
-print_info "Installing XML::LibXML (dependency for Bio::SeqIO)..."
-cpanm --notest --force XML::LibXML 2>/dev/null || true
-
-print_info "Installing Bio::SeqIO (required for sequence operations)..."
-cpanm --notest Bio::SeqIO 2>/dev/null || true
-if perl -MBio::SeqIO -e '1' 2>/dev/null; then
-    print_success "Bio::SeqIO installed successfully"
-else
-    print_warning "Bio::SeqIO installation failed - some CTK features may not work"
+    rm -f "$CPAN_LOG"
 fi
 
 #-------------------------------------------------------------------------------
