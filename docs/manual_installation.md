@@ -26,24 +26,22 @@ mamba create -n clipittyclip -c conda-forge -c bioconda \
   cutadapt fastp seqkit python>=3.10 pandas numpy scipy
 ```
 
-### macOS (Apple Silicon)
+### macOS (Apple Silicon and Intel)
 
-macOS requires x86 emulation via Rosetta 2:
+Use a native conda, e.g. [Miniforge](https://github.com/conda-forge/miniforge) (arm64 build on Apple Silicon). Rosetta is not needed; do not set `CONDA_SUBDIR`.
 
 ```bash
-# Create x86 environment
-CONDA_SUBDIR=osx-64 mamba create -n clipittyclip
-conda activate clipittyclip
-conda config --env --set subdir osx-64
-
-# Install packages
-mamba install -c conda-forge -c bioconda \
-  perl>=5.32 bedtools samtools>=1.15 star>=2.7 bowtie2 \
-  cutadapt fastp seqkit python>=3.10 pandas numpy scipy \
-  libxml2 openssl
+mamba create -n clipittyclip --override-channels -c conda-forge -c bioconda \
+  perl bedtools "samtools>=1.15" star=2.7.11b bowtie2 bwa \
+  cutadapt fastp seqkit "python>=3.10,<3.12" pandas numpy scipy pysam umi_tools \
+  perl-bioperl-core perl-math-cdf
 ```
 
-## Step 3: Install Perl Modules via CPAN
+Use `perl-bioperl-core`, not `perl-bioperl`: CTK only needs `Bio::SeqIO`, and the full package pins samtools to 0.1.19. STAR 2.7.10b has no arm64 build; 2.7.11b reads indices built with 2.7.10b.
+
+## Step 3: Install Perl Modules via CPAN (Linux)
+
+> **macOS:** skip this step. `Bio::SeqIO` and `Math::CDF` were installed from conda in Step 2 (nothing to compile). Verify with the two `perl -M` commands below.
 
 ```bash
 conda activate clipittyclip
@@ -60,43 +58,6 @@ cpanm --notest Bio::SeqIO
 perl -MMath::CDF -e 'print "Math::CDF OK\n"'
 perl -MBio::SeqIO -e 'print "Bio::SeqIO OK\n"'
 ```
-
-### Troubleshooting macOS CPAN Installation
-
-If CPAN modules fail to compile on macOS:
-
-1. **Install Xcode Command Line Tools:**
-   ```bash
-   xcode-select --install
-   ```
-
-2. **Install Homebrew dependencies:**
-   ```bash
-   brew install libxml2 openssl
-   ```
-
-3. **Create compiler wrappers** (for conda's Perl):
-   ```bash
-   CONDA_BIN=$(conda info --base)/envs/clipittyclip/bin
-   
-   # Remove existing symlinks
-   rm -f "$CONDA_BIN/x86_64-apple-darwin13.4.0-clang"
-   rm -f "$CONDA_BIN/x86_64-apple-darwin13.4.0-clang++"
-   
-   # Create wrapper scripts
-   cat > "$CONDA_BIN/x86_64-apple-darwin13.4.0-clang" << 'EOF'
-   #!/bin/bash
-   exec /usr/bin/clang -Wno-incompatible-pointer-types "$@"
-   EOF
-   
-   cat > "$CONDA_BIN/x86_64-apple-darwin13.4.0-clang++" << 'EOF'
-   #!/bin/bash
-   exec /usr/bin/clang++ -Wno-incompatible-pointer-types "$@"
-   EOF
-   
-   chmod +x "$CONDA_BIN/x86_64-apple-darwin13.4.0-clang"
-   chmod +x "$CONDA_BIN/x86_64-apple-darwin13.4.0-clang++"
-   ```
 
 ## Step 4: Install CTK
 
@@ -120,6 +81,8 @@ mkdir -p ~/Tools/homer && cd ~/Tools/homer
 wget http://homer.ucsd.edu/homer/configureHomer.pl
 perl configureHomer.pl -install homer
 ```
+
+HOMER compiles from source, so it is built for the architecture it was installed under. If it was installed by an older Intel/Rosetta setup, rebuild in place (keeps downloaded genomes): `perl ~/Tools/homer/configureHomer.pl -make`.
 
 ## Step 6: Configure Shell Environment
 
@@ -161,9 +124,6 @@ CTK requires the czplib library. Make sure you cloned it:
 ```bash
 git clone https://github.com/chaolinzhanglab/czplib.git ~/Tools/ctk/czplib
 ```
-
-### "x86_64-apple-darwin13.4.0-clang not found"
-See Step 3 troubleshooting section for creating compiler wrappers.
 
 ### XML::LibXML test failures
 Use `--force` flag: `cpanm --notest --force XML::LibXML`

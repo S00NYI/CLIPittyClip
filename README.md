@@ -44,9 +44,8 @@ CLIPittyClip runs a complete processing stack for CLIP data in a single command.
 
 ## Installation
 
-> [!WARNING]
-> **macOS:** STAR `2.7.11b` is broken on macOS Tahoe via Rosetta. Pin to `2.7.10b`:
-> `mamba install bioconda::star=2.7.10b`
+> [!NOTE]
+> **macOS:** the installer builds a native environment (arm64 on Apple Silicon); Rosetta is not needed. It requires a native conda or mamba, e.g. [Miniforge](https://github.com/conda-forge/miniforge).
 
 ### 1. Clone
 
