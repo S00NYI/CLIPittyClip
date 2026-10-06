@@ -3,7 +3,7 @@
 </p>
 
 # CLIPittyClip: Modern CLIP-seq Analysis Pipeline
-**Version 3.5.0**
+**Version 3.5.1**
 
 A comprehensive, single-command CLIP-seq analysis pipeline from raw FASTQ to peaks and crosslink sites. Supports iCLIP, irCLIP, eCLIP, PAR-CLIP, and related variant protocols.
 
@@ -44,9 +44,10 @@ CLIPittyClip runs a complete processing stack for CLIP data in a single command.
 
 ## Installation
 
-> [!WARNING]
-> **macOS:** STAR `2.7.11b` is broken on macOS Tahoe via Rosetta. Pin to `2.7.10b`:
-> `mamba install bioconda::star=2.7.10b`
+> [!NOTE]
+> **macOS:** the installer builds a native environment (arm64 on Apple Silicon); Rosetta is not needed. It needs a native conda or mamba, e.g. [Miniforge](https://github.com/conda-forge/miniforge).
+>
+> **STAR on macOS:** stock STAR 2.7.11b reads zero reads on macOS (an upstream libc++ bug) yet reports success. The installer detects this with a one-second alignment test and, only if needed, builds a patched STAR from the official source (about 30 seconds). Run `lib/star_selftest.sh` to check any STAR. Details: [lib/patches/README.md](lib/patches/README.md).
 
 ### 1. Clone
 
@@ -148,7 +149,8 @@ All results land in a single numbered-folder hierarchy next to your input (or at
 │   ├── FASTP_REPORT/        ← HTML/JSON QC
 │   ├── ALIGNER_LOGS/        ← STAR/Bowtie2 summaries
 │   ├── PEAK/                ← peak calling logs
-│   └── SAMPLES/             ← per-sample detailed logs
+│   ├── SAMPLES/             ← per-sample detailed logs
+│   └── abundant_rna_report.tsv  ← per-sample + per-group ncRNA read fractions (if --report-abundant-rna)
 ├── 0_DEMUX_FASTQ/           ← demultiplexed reads (only with -k)
 ├── 01_BAM/                  ← sorted, indexed BAM files
 ├── 02_COLLAPSED_BED/        ← PCR-deduplicated read BED
@@ -249,6 +251,34 @@ Run `CLIPittyClip.sh --help` for full usage.
 |-------|------|---------|-------------|
 | `-g` | `--groups` | — | Groups file for bedgraph/peak aggregation (`SampleName\tGroupName`) |
 | — | `--group-xlsite` | off | Pool samples by group for crosslink-site analysis — CTK CIMS/CITS and/or Clink, whichever is enabled. Per-sample dedup BAMs are produced first, then merged by group for pileup → CITS/CIMS. Requires `-g`. (`--ctk-group` is a deprecated alias.) |
+
+### Abundant ncRNA Reporting
+
+Opt-in, non-destructive: reports what fraction of reads land on abundant ncRNA classes — it does not remove or divert anything (unlike `--filter-repeat`, which pre-filters reads before alignment). Useful for spotting read sinks (e.g. snRNA/snoRNA/rRNA absorbing a disproportionate share of signal) without committing to filtering them out. Runs once per sample on the collapsed BED, and again per group if `-g`/`--groups` is set (e.g. IP vs. SMI/input). Output: `00_REPORTS/abundant_rna_report.tsv`.
+
+| Long | Default | Description |
+|------|---------|-------------|
+| `--report-abundant-rna [list]` | off | Report read fractions for abundant ncRNA classes. Bare flag = all built-in categories: `rRNA,tRNA,snRNA,snoRNA,miRNA,vault_RNA,YRNA,other_ncRNA`. Or pass a comma-separated subset. Requires `--gtf` (and `--rmsk` or `--trna-bed` if `tRNA` is in scope). |
+| `--report-abundant-rna-custom` | — | `name:path.bed[,name2:path2...]` — report against user-defined regions too (BED or GTF; e.g. a histone gene list). Written to the same report. |
+| `--gtf` | — | Ensembl GTF for built-in category extraction |
+| `--rmsk` | — | RepeatMasker table, used for the `tRNA` category (no nuclear tRNA biotype exists in Ensembl GTFs) |
+| `--trna-bed` | — | Genomic tRNA-loci BED (e.g. from GtRNAdb) — if given, used for `tRNA` instead of `--rmsk` |
+
+```bash
+# All built-in categories, per sample and per group
+CLIPittyClip.sh -d reads/ -g groups.txt -x star_index --genome-fasta genome.fa \
+  --run-clink --group-xlsite \
+  --report-abundant-rna \
+  --gtf Homo_sapiens.GRCh38.115.gtf.gz --rmsk rmsk_hg38.txt \
+  -o output/
+
+# Subset of categories + a custom histone-gene region set
+CLIPittyClip.sh -d reads/ -g groups.txt -x star_index --genome-fasta genome.fa \
+  --report-abundant-rna rRNA,snRNA,snoRNA,tRNA \
+  --report-abundant-rna-custom histone:histone_genes.bed \
+  --gtf Homo_sapiens.GRCh38.115.gtf.gz --rmsk rmsk_hg38.txt \
+  -o output/
+```
 
 ### Crosslink Site Analysis
 
@@ -587,6 +617,28 @@ RPM is calculated as `(reads mapped to element / total input reads) × 10⁶`.
 
 ## Changelog
 
+### v3.5.1
+
+**macOS / install**
+- **macOS install rewritten for native Apple Silicon (no Rosetta)**: conda packages replace the CPAN/compiler-wrapper build for CTK's Perl modules; HOMER is rebuilt natively if needed.
+- **STAR on macOS fixed**: stock STAR 2.7.11b reads 0 reads on macOS (libc++ ignores `pubsetbuf`; upstream STAR #2632). `install_macos.sh` now runs `lib/star_selftest.sh` and, only if STAR fails, builds a patched STAR (`lib/build_patched_star.sh`, patch in `lib/patches/`). `run_mapping_star` also stops with an explanation if STAR reports 0 input reads on a non-empty FASTQ, instead of silently producing empty results.
+
+**New**
+- **`--trim3` flag**: trims N bases from the 3' end *after* adapter removal, for protocols with a UMI/spacer between the read and the adapter (e.g. iCLIP3's 3nt second UMI). Implemented as a second fastp pass, same pattern PAR-CLIP mode already used.
+- **`--report-abundant-rna` / `--report-abundant-rna-custom`**: opt-in, non-destructive reporting of read fractions landing on abundant ncRNA classes (rRNA, tRNA, snRNA, snoRNA, miRNA, vault_RNA, YRNA, other_ncRNA, or user-defined BED/GTF regions), reported per sample and per group. Separate from `--filter-repeat`, which removes reads pre-alignment — this only reports, for diagnosing read sinks without committing to filtering them out. Output: `00_REPORTS/abundant_rna_report.tsv`.
+- **`--low-memory` flag**: dedup engine selection is now explicit instead of auto-switching on read count. Hash-based (`fastq_collapse_hash.py`) is the default at every library size; `--low-memory` forces the flat-RAM sort-based engine (`fastq_collapse_sort.sh`). A warning is printed above 30M reads recommending `--low-memory` if RAM is limited.
+- **`--clink-threads <N>`**: caps Clink pileup workers independently of `-t` (default `min(-t, 8)`). Group-merged BAMs are far denser than single samples, and `-t 16` could be OOM-killed. (S00NYI)
+- Large-library (>30M reads) dedup warning is now one inline `[!]` marker per sample plus a single end-of-run summary, instead of a multi-line block per sample. Log lines are timestamped. (S00NYI)
+
+**Fixed**
+- Batch mode dropped `--no-chr-filter` for per-sample runs, and `pileup.py` applied its own canonical-chromosome filter, so scaffold-level assemblies gave an empty pileup. Both now honor the flag (`--all-chroms`). (S00NYI)
+- Clink pileup: windows are bounded by read count (a 16 kb rDNA contig at extreme depth drove one worker to ~30 GB), a dead worker now raises an error instead of hanging, and an off-by-one that dropped about one read per window boundary is fixed. Output verified identical across window sizes. (S00NYI)
+- Batch dispatch passed quoted values (`--gtf`, `--rmsk`, `--peak-caller-args`, ...) to per-sample runs with literal quote characters; per-sample runs now receive them intact.
+- Groups-file handling hardened: line endings (CRLF and old-Mac CR-only) are now auto-detected and sanitized, and sample names in the groups file may include or omit `.fastq`/`.fastq.gz`/`.fq`/`.fq.gz` extensions — both now match correctly against internal sample identifiers.
+- Bowtie2 + crosslink-site warning reworded: crosslink positions stay valid (`--end-to-end`); the cost is junction-spanning reads. Now also shown for `--run-clink`, once. (S00NYI)
+- Demultiplexed batch path now produces `GROUP_PEAKS`; leading-zero folder-name and combined-peak path mismatches fixed; stray `REPORTS/` merged into `00_REPORTS/`. `--ctk-group` is now a deprecated alias of `--group-xlsite`.
+- Clink collapse output now says `Total input alignments` (was `Input reads`). Internal: dead legacy code paths removed; Benjamini-Hochberg FDR now uses scipy.
+
 ### v3.5.0
 - **Wizard overhaul**: per-tool interactive wizards (`-w` flag) for CLIPittyClip, PREPittyPrep, MAPittyMap, and PEAKittyPeak. New top-level launcher `CLIPittyClip_wizard.sh` provides a tool-triage entry point. Wizards collect inputs, ask for analysis tracks (HOMER / CTK CIMS-CITS / Clink), let you spot-edit defaults by category, show a diff-vs-defaults view + the equivalent CLI command at the end, and launch the chosen tool automatically.
 - **MAPittyMap scope expansion**: alignment module now produces collapsed BED and bedgraphs by default, and optionally runs CTK CIMS/CITS (`--run-cims`, `--run-cits`) and Clink (`--run-clink`) crosslink-site analysis. Output tree mirrors the full pipeline (`1_BAM/`, `2_BED/`, `3_COVERAGE/`, `4_CTK_Analysis/`, `5_Clink_Analysis/`). Legacy BAM-only behavior preserved via `--bam-only`. PEAKittyPeak's role is now purely peak calling; point its `--ctk-dir` at MAPittyMap's `4_CTK_Analysis/` to annotate peaks with crosslink-site counts.
@@ -607,7 +659,6 @@ RPM is calculated as `(reads mapped to element / total input reads) × 10⁶`.
   - Suitable as direct input for BindingSiteFinder and similar nucleotide-resolution tools
 - **`all_crosslinks.bed` output from Clink**: every position with ≥1 truncation event written to `{sample}_all_crosslinks.bed` alongside the FDR-filtered `_truncations.bed`; no significance threshold applied — suitable for PEKA and BindingSiteFinder
 - Fixed CTK output directory using hardcoded path `5_CTK_Analysis` instead of the `DIR_CTK` variable (broke numbering when other crosslink modules shifted folder numbers)
-- **`--low-memory` flag**: dedup engine selection is now explicit instead of auto-switching on read count. Hash-based (`fastq_collapse_hash.py`) is the default at every library size; `--low-memory` forces the flat-RAM sort-based engine (`fastq_collapse_sort.sh`). A warning is printed above 30M reads recommending `--low-memory` if RAM is limited.
 
 ### v3.4.0
 - **PAR-CLIP mode** (`--parclip`): end-to-end support for 4-thiouridine CLIP data

@@ -2,9 +2,10 @@
 #===============================================================================
 # CLIPittyClip macOS Installation Script
 # 
-# Self-contained installation script for macOS (Intel and Apple Silicon).
-# Creates conda environment, installs Perl dependencies via CPAN, and
-# configures CTK and HOMER from source.
+# Self-contained installation script for macOS (Apple Silicon and Intel).
+# Builds a NATIVE conda environment (no Rosetta), installs the Perl
+# dependencies CTK needs from conda, verifies STAR really aligns (patching it
+# if not), and configures CTK and HOMER.
 #
 # Usage:
 #   ./install_macos.sh [OPTIONS]
@@ -82,10 +83,12 @@ Examples:
     ./install_macos.sh --env myenv --tools-dir ~/Software
 
 Notes:
-    - Requires conda or mamba to be installed
-    - Uses x86 emulation via Rosetta 2 for Apple Silicon compatibility
+    - Requires a native conda or mamba (Miniforge: arm64 on Apple Silicon)
+    - Builds a native environment; Rosetta 2 is not needed or used
     - Installs CTK and HOMER from source (not available via conda on macOS)
-    - Installs Perl dependencies (BioPerl, Math::CDF) via CPAN
+    - Installs Perl dependencies (BioPerl core, Math::CDF) from conda
+    - Tests that STAR really aligns; if not (known macOS defect), builds a
+      patched STAR (see lib/patches/README.md)
 
 EOF
     exit 0
@@ -126,6 +129,9 @@ if [[ "$(uname)" != "Darwin" ]]; then
     exit 1
 fi
 
+# arm64 on Apple Silicon, x86_64 on Intel. Everything is built for this, natively.
+ARCH="$(uname -m)"
+
 print_header
 
 echo -e "${BOLD}Configuration:${NC}"
@@ -139,18 +145,33 @@ echo ""
 #-------------------------------------------------------------------------------
 print_step "Checking prerequisites..."
 
-# Check for conda/mamba
-if command -v mamba &> /dev/null; then
-    CONDA_CMD="mamba"
-    print_success "Found mamba"
-elif command -v conda &> /dev/null; then
-    CONDA_CMD="conda"
-    print_success "Found conda"
-else
-    print_error "Neither conda nor mamba found. Please install Miniconda or Mambaforge first."
-    echo -e "\n  Installation instructions: https://github.com/conda-forge/miniforge"
+# Find a conda/mamba that actually RUNS. `command -v` is not enough: an Intel-only
+# Anaconda earlier in PATH fails with "Bad CPU type in executable" on Macs without
+# Rosetta, so probe each candidate (PATH first, then common Miniforge locations).
+CONDA_CMD=""
+for cand in mamba conda \
+            "$HOME/miniforge3/bin/mamba" "$HOME/miniforge3/bin/conda" \
+            "$HOME/mambaforge/bin/mamba" "$HOME/mambaforge/bin/conda" \
+            "$HOME/miniconda3/bin/conda" \
+            /opt/homebrew/Caskroom/miniforge/base/bin/mamba; do
+    exe="$(command -v "$cand" 2>/dev/null)" || continue
+    if "$exe" --version &> /dev/null; then
+        CONDA_CMD="$exe"
+        break
+    fi
+    print_warning "Skipping $exe (cannot run on this Mac; Intel-only install?)"
+done
+
+if [[ -z "$CONDA_CMD" ]]; then
+    print_error "No working conda or mamba found."
+    echo -e "\n  Install Miniforge (native ${ARCH} build): https://github.com/conda-forge/miniforge"
+    echo -e "  or: brew install --cask miniforge"
     exit 1
 fi
+print_success "Using $(basename "$CONDA_CMD"): $CONDA_CMD"
+
+# Make later plain `conda ...` calls resolve to the working install too.
+export PATH="$(dirname "$CONDA_CMD"):$PATH"
 
 # Check for git
 if ! command -v git &> /dev/null; then
@@ -166,7 +187,7 @@ if ! command -v curl &> /dev/null; then
 fi
 print_success "Found curl"
 
-# Check for Xcode Command Line Tools (needed for CPAN compilation)
+# Check for Xcode Command Line Tools (provides git, and the compiler HOMER is built with)
 if ! xcode-select -p &> /dev/null; then
     print_warning "Xcode Command Line Tools not found."
     print_info "Installing Xcode Command Line Tools..."
@@ -176,46 +197,6 @@ if ! xcode-select -p &> /dev/null; then
     exit 1
 fi
 print_success "Found Xcode Command Line Tools"
-
-# Check for Homebrew and install required libraries
-if command -v brew &> /dev/null; then
-    print_success "Found Homebrew"
-    
-    # Check and install libxml2 (needed for XML::LibXML)
-    if ! brew list libxml2 &> /dev/null; then
-        print_info "Installing libxml2 via Homebrew..."
-        brew install libxml2 || print_warning "Failed to install libxml2"
-    else
-        print_success "libxml2 already installed"
-    fi
-    
-    # Check and install openssl (needed for Net::SSLeay)
-    if ! brew list openssl &> /dev/null; then
-        print_info "Installing openssl via Homebrew..."
-        brew install openssl || print_warning "Failed to install openssl"
-    else
-        print_success "openssl already installed"
-    fi
-
-    # Check and install expat (needed for XML::Parser)
-    if ! brew list expat &> /dev/null; then
-        print_info "Installing expat via Homebrew..."
-        brew install expat || print_warning "Failed to install expat"
-    else
-        print_success "expat already installed"
-    fi
-
-    # Check and install berkeley-db (needed for DB_File)
-    if ! brew list berkeley-db &> /dev/null; then
-        print_info "Installing berkeley-db via Homebrew..."
-        brew install berkeley-db || print_warning "Failed to install berkeley-db"
-    else
-        print_success "berkeley-db already installed"
-    fi
-else
-    print_warning "Homebrew not found. Some Perl modules may fail to compile."
-    print_info "Install Homebrew from: https://brew.sh"
-fi
 
 #-------------------------------------------------------------------------------
 # Step 2: Check if environment exists
@@ -237,37 +218,49 @@ if conda env list | grep -q "^${ENV_NAME} "; then
 fi
 
 #-------------------------------------------------------------------------------
-# Step 3: Create conda environment with x86 architecture
+# Step 3: Create native conda environment
 #-------------------------------------------------------------------------------
 if [[ -z "$SKIP_CONDA" ]]; then
-    print_step "Creating conda environment '${ENV_NAME}' (x86 architecture)..."
-    print_info "Using x86 emulation for Rosetta 2 compatibility"
+    print_step "Creating conda environment '${ENV_NAME}' (native ${ARCH})..."
     print_info "This may take several minutes..."
 
-    # Create environment with x86 architecture
-    CONDA_SUBDIR=osx-64 $CONDA_CMD create -n "$ENV_NAME" -y
-
-    # Configure environment for x86
-    conda activate "$ENV_NAME" 2>/dev/null || source "$(conda info --base)/etc/profile.d/conda.sh" && conda activate "$ENV_NAME"
-    conda config --env --set subdir osx-64
-
-    # Install packages (excluding perl-bioperl and perl-math-cdf which aren't available on macOS)
-    # star pinned to 2.7.10b: 2.7.11b breaks subprocess spawning on macOS Tahoe via Rosetta
+    # Never force a platform: conda picks osx-arm64 / osx-64 to match this Mac.
+    # --override-channels keeps ~/.condarc (e.g. the Anaconda 'defaults' channel,
+    # which also triggers its terms-of-service prompt) out of the solve.
+    #
+    # STAR version. Stock 2.7.11b is BROKEN on macOS (reads 0 reads; libc++ ignores
+    # pubsetbuf, upstream STAR #2632). 2.7.10b works but bioconda builds it for Intel
+    # only. So: Intel gets 2.7.10b; Apple Silicon gets 2.7.11b, and Step 4b verifies it
+    # with a real alignment and builds a patched copy if it fails.
+    # See lib/patches/README.md.
+    if [[ "$ARCH" == "x86_64" ]]; then
+        STAR_SPEC="star=2.7.10b"
+    else
+        STAR_SPEC="star=2.7.11b"
+    fi
+    #
+    # perl-bioperl-core, not perl-bioperl: CTK only needs Bio::SeqIO. The full
+    # metapackage pulls in ~120 extra packages and pins samtools to 0.1.19.
+    # perl-math-cdf is needed for CIMS/CITS. Both ship prebuilt, so nothing is
+    # compiled from CPAN.
     print_info "Installing conda packages..."
-    $CONDA_CMD install -n "$ENV_NAME" -y \
+    if ! $CONDA_CMD create -n "$ENV_NAME" -y --override-channels \
         -c conda-forge -c bioconda \
         wget \
         "python>=3.10,<3.12" \
         perl \
         perl-threaded \
         perl-yaml \
+        perl-bioperl-core \
+        perl-math-cdf \
         bedtools \
         ucsc-bedgraphtobigwig \
         samtools \
         htslib \
         bowtie2 \
         bwa \
-        "star=2.7.10b" \
+        "$STAR_SPEC" \
+        llvm-openmp \
         cutadapt \
         fastp \
         seqkit \
@@ -282,146 +275,32 @@ if [[ -z "$SKIP_CONDA" ]]; then
         umi_tools \
         ca-certificates \
         openssl \
-        certifi \
-        clang_osx-64 \
-        clangxx_osx-64
-
-    if [[ $? -eq 0 ]]; then
-        print_success "Conda packages installed successfully"
-    else
-        print_error "Failed to install conda packages"
+        certifi; then
+        print_error "Failed to create conda environment"
         exit 1
     fi
+    print_success "Conda environment created"
 fi
 
 #-------------------------------------------------------------------------------
-# Step 4: Install Perl dependencies via CPAN
+# Step 4: Verify the environment is native and its Perl modules load
 #-------------------------------------------------------------------------------
-print_step "Installing Perl dependencies via CPAN..."
+print_step "Verifying environment..."
 
-# Activate environment to use its perl
 source "$(conda info --base)/etc/profile.d/conda.sh"
 conda activate "$ENV_NAME"
 
-# Create compiler wrapper scripts
-# The conda perl package references non-existent compilers (x86_64-apple-darwin13.4.0-clang)
-# These wrapper scripts redirect to system clang/ar/ranlib/ld
-print_info "Creating compiler wrappers for CPAN..."
-CONDA_BIN="$(conda info --base)/envs/$ENV_NAME/bin"
-
-# Remove existing symlinks first (conda creates symlinks to clang-21 which interfere)
-rm -f "$CONDA_BIN/x86_64-apple-darwin13.4.0-clang"
-rm -f "$CONDA_BIN/x86_64-apple-darwin13.4.0-clang++"
-rm -f "$CONDA_BIN/x86_64-apple-darwin13.4.0-ar"
-rm -f "$CONDA_BIN/x86_64-apple-darwin13.4.0-ranlib"
-rm -f "$CONDA_BIN/x86_64-apple-darwin13.4.0-ld"
-
-cat > "$CONDA_BIN/x86_64-apple-darwin13.4.0-clang" << 'CLANG_WRAPPER'
-#!/bin/bash
-# -arch x86_64 is REQUIRED on Apple Silicon. The conda env is osx-64, so its
-# perl is an x86_64 binary whose Config carries x86-only compiler flags
-# (-march=core2 -mtune=haswell -mssse3). /usr/bin/clang defaults to targeting
-# arm64 on Apple Silicon and rejects those flags outright:
-#     clang: error: unsupported argument 'core2' to option '-march='
-#     clang: error: unsupported option '-mssse3' for target 'arm64-...'
-# Without it, every XS module build fails (Math::CDF, XML::Parser, BioPerl).
-# It must apply to linking as well as compiling: forcing it only at compile
-# time yields an arm64 bundle that an x86_64 perl cannot dlopen.
-# -Wno-incompatible-pointer-types fixes XML::LibXML on newer clang.
-exec /usr/bin/clang -arch x86_64 -Wno-incompatible-pointer-types "$@"
-CLANG_WRAPPER
-
-cat > "$CONDA_BIN/x86_64-apple-darwin13.4.0-clang++" << 'CLANGXX_WRAPPER'
-#!/bin/bash
-# See the note in the clang wrapper: -arch x86_64 is required on Apple Silicon.
-exec /usr/bin/clang++ -arch x86_64 -Wno-incompatible-pointer-types "$@"
-CLANGXX_WRAPPER
-
-cat > "$CONDA_BIN/x86_64-apple-darwin13.4.0-ar" << 'WRAPPER'
-#!/bin/bash
-exec /usr/bin/ar "$@"
-WRAPPER
-
-cat > "$CONDA_BIN/x86_64-apple-darwin13.4.0-ranlib" << 'WRAPPER'
-#!/bin/bash
-exec /usr/bin/ranlib "$@"
-WRAPPER
-
-cat > "$CONDA_BIN/x86_64-apple-darwin13.4.0-ld" << 'WRAPPER'
-#!/bin/bash
-exec /usr/bin/ld "$@"
-WRAPPER
-
-chmod +x "$CONDA_BIN/x86_64-apple-darwin13.4.0-clang"
-chmod +x "$CONDA_BIN/x86_64-apple-darwin13.4.0-clang++"
-chmod +x "$CONDA_BIN/x86_64-apple-darwin13.4.0-ar"
-chmod +x "$CONDA_BIN/x86_64-apple-darwin13.4.0-ranlib"
-chmod +x "$CONDA_BIN/x86_64-apple-darwin13.4.0-ld"
-print_success "Compiler wrappers created"
-
-# FIX: Create xlocale.h compatibility stub
-# Conda's perl 5.32 was built expecting xlocale.h, which was removed in
-# macOS Catalina (10.15) and later. This stub redirects to locale.h which
-# now contains the same definitions. The existence check prevents overwriting
-# on reinstall.
-if [[ ! -f "$CONDA_PREFIX/include/xlocale.h" ]]; then
-    print_info "Creating xlocale.h compatibility stub..."
-    echo '#include <locale.h>' > "$CONDA_PREFIX/include/xlocale.h"
-    print_success "xlocale.h stub created"
+# An env built by an older (Intel/Rosetta) version of this installer cannot run on
+# a Mac without Rosetta. Catch it here rather than as a cryptic failure mid-run.
+if ! file "$CONDA_PREFIX/bin/python" | grep -q "$ARCH"; then
+    print_error "Environment '${ENV_NAME}' is not native to this Mac (${ARCH})."
+    print_info "Re-run this script and answer 'y' to remove and recreate it."
+    exit 1
 fi
+print_success "Environment is native (${ARCH})"
 
-# Set compiler flags for Homebrew libraries
-if [[ -d "/opt/homebrew/opt/openssl" ]]; then
-    # Apple Silicon
-    export LDFLAGS="-L/opt/homebrew/opt/openssl/lib -L/opt/homebrew/opt/libxml2/lib -L/opt/homebrew/opt/expat/lib -L/opt/homebrew/opt/berkeley-db/lib"
-    export CPPFLAGS="-I/opt/homebrew/opt/openssl/include -I/opt/homebrew/opt/libxml2/include -I/opt/homebrew/opt/expat/include -I/opt/homebrew/opt/berkeley-db/include"
-    export PKG_CONFIG_PATH="/opt/homebrew/opt/openssl/lib/pkgconfig:/opt/homebrew/opt/libxml2/lib/pkgconfig:/opt/homebrew/opt/expat/lib/pkgconfig"
-elif [[ -d "/usr/local/opt/openssl" ]]; then
-    # Intel Mac
-    export LDFLAGS="-L/usr/local/opt/openssl/lib -L/usr/local/opt/libxml2/lib -L/usr/local/opt/expat/lib -L/usr/local/opt/berkeley-db/lib"
-    export CPPFLAGS="-I/usr/local/opt/openssl/include -I/usr/local/opt/libxml2/include -I/usr/local/opt/expat/include -I/usr/local/opt/berkeley-db/include"
-    export PKG_CONFIG_PATH="/usr/local/opt/openssl/lib/pkgconfig:/usr/local/opt/libxml2/lib/pkgconfig:/usr/local/opt/expat/lib/pkgconfig"
-fi
-
-# Check if cpanm is available, if not install it
-if ! command -v cpanm &> /dev/null; then
-    print_info "Installing cpanminus..."
-    curl -L https://cpanmin.us | perl - App::cpanminus 2>/dev/null || true
-fi
-
-# Install Perl modules via CPAN.
-#
-# These steps previously ended in `2>/dev/null || true`, which discarded both
-# the error output and the exit status — so a total failure (every XS build
-# broken by the arm64/x86_64 compiler mismatch above) still reported a
-# successful install, and only surfaced later as a pipeline crash. Failures are
-# now captured, summarised, and reported at the end.
-CPAN_LOG="$(mktemp -t clipittyclip_cpan)"
-CPAN_FAILED=()
-
-cpan_install() {            # $1 = module, $2 = why it is needed, $3 = extra cpanm args
-    local module="$1" reason="$2" extra="${3:-}"
-    print_info "Installing ${module} (${reason})..."
-    if cpanm --notest ${extra} "$module" >> "$CPAN_LOG" 2>&1; then
-        print_success "${module} installed"
-    else
-        print_warning "${module} FAILED"
-        CPAN_FAILED+=("$module")
-        tail -n 12 "$CPAN_LOG" | sed 's/^/    /'
-    fi
-}
-
-cpan_install XML::Parser "required for Bio::SeqIO"
-cpan_install DB_File     "required for Bio::SeqIO"
-cpan_install Math::CDF   "required for CIMS/CITS"
-# XML::LibXML has minor test failures but works
-cpan_install XML::LibXML "dependency for Bio::SeqIO" "--force"
-cpan_install Bio::SeqIO  "required for sequence operations"
-
-# Verify by loading each module, which is the only check that proves the built
-# object is loadable by THIS perl — a module can install cleanly and still be
-# the wrong architecture.
-print_info "Verifying Perl modules load..."
+# Loading each module is the only check that proves the installed build works
+# with THIS perl.
 PERL_BROKEN=()
 for probe in Math::CDF Bio::SeqIO; do
     if perl -M"$probe" -e '1' 2>/dev/null; then
@@ -435,9 +314,34 @@ done
 if [[ ${#PERL_BROKEN[@]} -gt 0 ]]; then
     print_warning "Perl modules unavailable: ${PERL_BROKEN[*]}"
     print_warning "CTK CIMS/CITS (--run-cims-cits) will not work. Clink (--run-clink) is unaffected."
-    print_warning "Full CPAN log: $CPAN_LOG"
+fi
+
+#-------------------------------------------------------------------------------
+# Step 4b: Verify STAR can actually align (not just run)
+#-------------------------------------------------------------------------------
+# `STAR --version` passes even when STAR reads 0 reads, so run a real (1 s) alignment.
+# If it fails, build a patched STAR from the official source. Details and removal
+# criteria: lib/patches/README.md
+print_step "Verifying STAR aligns reads..."
+if "$SCRIPT_DIR/lib/star_selftest.sh" "$CONDA_PREFIX/bin/STAR" > /dev/null 2>&1; then
+    print_success "STAR aligns correctly ($(STAR --version))"
 else
-    rm -f "$CPAN_LOG"
+    print_warning "This STAR reads 0 reads on this Mac (known libc++ defect, STAR issue #2632)."
+    print_info "Building a patched STAR from the official source (about a minute)..."
+    if ! conda list -n "$ENV_NAME" --json 2>/dev/null | grep -q '"name": "llvm-openmp"'; then
+        $CONDA_CMD install -n "$ENV_NAME" -y --override-channels -c conda-forge llvm-openmp \
+            || { print_error "Could not install llvm-openmp"; exit 1; }
+    fi
+    if ! "$SCRIPT_DIR/lib/build_patched_star.sh" --dest "$CONDA_PREFIX/bin" --omp-prefix "$CONDA_PREFIX"; then
+        print_error "Could not build the patched STAR. See lib/patches/README.md"
+        exit 1
+    fi
+    if "$SCRIPT_DIR/lib/star_selftest.sh" "$CONDA_PREFIX/bin/STAR"; then
+        print_success "Patched STAR installed and verified"
+    else
+        print_error "STAR still does not align after patching. See lib/patches/README.md"
+        exit 1
+    fi
 fi
 
 #-------------------------------------------------------------------------------
@@ -507,6 +411,21 @@ if [[ -z "$SKIP_HOMER" ]]; then
     
     cd "$SCRIPT_DIR"
     print_success "HOMER installed to $HOMER_DIR"
+fi
+
+# HOMER compiles its binaries from source, so they match the architecture of the
+# shell that built them. A copy built by an older (Intel/Rosetta) run cannot
+# execute on a Mac without Rosetta. Rebuild in place (~10 s) rather than
+# reinstalling, which would delete any genomes already downloaded into data/.
+if ! file "$HOMER_DIR/bin/findPeaks" 2>/dev/null | grep -q "$ARCH"; then
+    print_info "HOMER binaries are not native (${ARCH}); rebuilding..."
+    perl "$HOMER_DIR/configureHomer.pl" -make > /dev/null 2>&1 || true
+    if file "$HOMER_DIR/bin/findPeaks" 2>/dev/null | grep -q "$ARCH"; then
+        print_success "HOMER binaries rebuilt natively"
+    else
+        print_warning "HOMER rebuild failed; --peak-caller homer will not work."
+        print_info "Retry manually: perl $HOMER_DIR/configureHomer.pl -make"
+    fi
 fi
 
 #-------------------------------------------------------------------------------

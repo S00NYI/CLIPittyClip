@@ -1085,6 +1085,21 @@ run_mapping_star() {
         exit 1
     fi
     
+    # STAR exits 0 even when it read nothing, and the zero then flows silently through
+    # every downstream step. Known cause: STAR 2.7.11b built with libc++ (macOS) reads
+    # 0 reads from any input. Fail here, loudly, instead of producing empty results.
+    local star_log="${output_prefix}.Log.final.out"
+    if [[ -s "$input_fastq" && -f "$star_log" ]]; then
+        local n_input_reads
+        n_input_reads=$(awk -F'|' '/Number of input reads/{gsub(/[ \t]/,"",$2); print $2}' "$star_log")
+        if [[ "$n_input_reads" == "0" ]]; then
+            log_error "STAR reported 0 input reads, but the input is not empty: $input_fastq"
+            log_error "On macOS this is a known STAR 2.7.11b defect (libc++); re-run install_macos.sh to install a patched STAR."
+            log_error "Otherwise, check that the input FASTQ is valid. STAR log: $star_log"
+            exit 1
+        fi
+    fi
+
     samtools index "${output_prefix}.Aligned.sortedByCoord.out.bam"
     if [ $? -ne 0 ]; then
         log_error "samtools index failed. The BAM file might be empty or invalid."
@@ -2947,12 +2962,26 @@ run_clink_pileup() {
     local clink_dir
     clink_dir=$(_clink_dir)
 
-    log_info "Clink pileup: scanning BAM → $npz_out (threads=$threads)"
+    # Honour --no-chr-filter here too. pileup.py applies its OWN canonical-chromosome
+    # filter (is_standard_chrom), independent of the BAM-level filter, so without this
+    # a scaffold-level assembly scans zero chromosomes and produces an empty .npz.
+    local extra=""
+    [[ "${FILTER_CHR:-true}" != "true" ]] && extra="--all-chroms"
+
+    # Pileup RAM scales with concurrent workers × covered positions per chromosome.
+    # Group-merged BAMs are far denser than single samples, which is where this
+    # OOMs first. Cap workers independently of the global -t, which mapping wants
+    # set high; override with --clink-threads on a machine with more headroom.
+    local pileup_threads="${CLINK_THREADS:-}"
+    [[ -z "$pileup_threads" ]] && pileup_threads=$(( threads > 8 ? 8 : threads ))
+
+    log_info "Clink pileup: scanning BAM → $npz_out (threads=$pileup_threads${extra:+ $extra})"
 
     _clink_exec python3 "$clink_dir/pileup.py" \
         "$bam_in" \
         --out "$npz_out" \
-        --threads "$threads"
+        --threads "$pileup_threads" \
+        $extra
 
     if [[ $? -ne 0 ]] || [[ ! -s "$npz_out" ]]; then
         log_error "Clink pileup failed. Check log for details."
@@ -3365,4 +3394,247 @@ run_group_clink_analysis() {
     done
 
     rm -f "$groups_map" "$group_samples_file"
+}
+
+# =============================================================================
+# --report-abundant-rna: opt-in, post-alignment, NON-DESTRUCTIVE reporting of
+# what fraction of reads land on abundant ncRNA classes (rRNA, tRNA, snRNA,
+# snoRNA, miRNA, vault RNA, Y RNA, other ncRNA) plus any user-defined custom
+# regions (e.g. histone genes). Distinct from --filter-repeat, which removes
+# reads pre-alignment for mapping-accuracy reasons (rDNA is poorly assembled
+# in most reference genomes, so post-alignment unique-mapping filtering alone
+# can't catch it) — this never removes anything from the pipeline's output,
+# it only measures and reports, per sample and per group, leaving
+# interpretation (real biology vs. nonspecific background) to the user.
+#
+# Categories are named "abundant ncRNA", not "repeat RNA" — snRNA/snoRNA/
+# miRNA/vault RNA/Y RNA are mostly single/low-copy genes, not genomically
+# repetitive; what makes them candidate sinks is cellular abundance, not
+# copy number. Only rRNA/tRNA are genuinely repetitive (why --filter-repeat
+# targets exactly those two, historically, plus TEs).
+# =============================================================================
+
+# Ensembl GTF chromosome names ("1", "MT") -> UCSC-style ("chr1", "chrM"),
+# matching what the pipeline's own BAM/BED output already uses. Plain
+# bash/awk equivalent of GenomicRanges::seqlevelsStyle<- used elsewhere.
+_abundant_rna_to_ucsc_chr() {
+    awk -F'\t' -v OFS='\t' '{
+        c=$1
+        if (c=="MT") c="chrM"
+        else if (c !~ /^chr/) c="chr" c
+        $1=c
+        print
+    }'
+}
+
+# Reads GTF lines from stdin, outputs: chr  start0  end  gene_id  gene_name  strand
+_abundant_rna_extract_genes() {
+    awk -F'\t' -v OFS='\t' '$3=="gene"{
+        s=$9
+        gid=s; sub(/^.*gene_id "/,"",gid); sub(/".*$/,"",gid)
+        gn=gid
+        if (s ~ /gene_name "/) { gn=s; sub(/^.*gene_name "/,"",gn); sub(/".*$/,"",gn) }
+        print $1, $4-1, $5, gid, gn, $7
+    }'
+}
+
+# _abundant_rna_build_sinks GTF RMSK CATEGORY_CSV CUSTOM_SPEC OUT_DIR [TRNA_BED]
+# Builds one sink_<category>.bed per requested category (built-in + custom)
+# into OUT_DIR. Cheap (~15s total for all 8 built-in categories) — safe to
+# call once per run rather than caching across runs. If TRNA_BED is given
+# (e.g. a GtRNAdb genomic-coordinate BED), it's used as-is for the tRNA
+# category instead of extracting repClass==tRNA from RMSK.
+_abundant_rna_build_sinks() {
+    local gtf="$1" rmsk="$2" cat_csv="$3" custom_spec="$4" out_dir="$5" trna_bed="${6:-}"
+    mkdir -p "$out_dir"
+    [[ "$cat_csv" == "all" || -z "$cat_csv" ]] && cat_csv="rRNA,tRNA,snRNA,snoRNA,miRNA,vault_RNA,YRNA,other_ncRNA"
+
+    local gtf_plain="$out_dir/_gtf_plain.gtf"
+    if [[ ! -s "$gtf_plain" ]]; then
+        gzcat "$gtf" > "$gtf_plain" 2>/dev/null || cat "$gtf" > "$gtf_plain"
+    fi
+
+    local gene_bed="$out_dir/_all_genes.bed"
+    if [[ ! -s "$gene_bed" ]]; then
+        _abundant_rna_extract_genes < "$gtf_plain" > "$gene_bed"
+    fi
+
+    IFS=',' read -ra cats <<< "$cat_csv"
+    for cat in "${cats[@]}"; do
+        case "$cat" in
+            rRNA)
+                { grep -F 'gene_biotype "rRNA";' "$gtf_plain"; grep -F 'gene_biotype "Mt_rRNA";' "$gtf_plain"; } \
+                    | _abundant_rna_extract_genes \
+                    | awk -F'\t' -v OFS='\t' '{print $1,$2,$3,$4,".",$6}' \
+                    | _abundant_rna_to_ucsc_chr | sort -k1,1 -k2,2n > "$out_dir/sink_rRNA.bed"
+                ;;
+            tRNA)
+                if [[ -n "$trna_bed" && -f "$trna_bed" ]]; then
+                    sort -k1,1 -k2,2n "$trna_bed" > "$out_dir/sink_tRNA.bed"
+                elif [[ -n "$rmsk" && -f "$rmsk" ]]; then
+                    awk -F'\t' -v OFS='\t' 'NR>1 && $12=="tRNA" { s=$10; if(s=="C")s="-"; print $6,$7,$8,$11,".",s }' "$rmsk" \
+                        | sort -k1,1 -k2,2n > "$out_dir/sink_tRNA.bed"
+                fi
+                grep -F 'gene_biotype "Mt_tRNA";' "$gtf_plain" \
+                    | _abundant_rna_extract_genes \
+                    | awk -F'\t' -v OFS='\t' '{print $1,$2,$3,$4,".",$6}' \
+                    | _abundant_rna_to_ucsc_chr >> "$out_dir/sink_tRNA.bed"
+                sort -k1,1 -k2,2n -o "$out_dir/sink_tRNA.bed" "$out_dir/sink_tRNA.bed"
+                ;;
+            snRNA)
+                grep -F 'gene_biotype "snRNA";' "$gtf_plain" \
+                    | _abundant_rna_extract_genes \
+                    | awk -F'\t' -v OFS='\t' '{print $1,$2,$3,$4,".",$6}' \
+                    | _abundant_rna_to_ucsc_chr | sort -k1,1 -k2,2n > "$out_dir/sink_snRNA.bed"
+                ;;
+            snoRNA)
+                { grep -F 'gene_biotype "snoRNA";' "$gtf_plain"; grep -F 'gene_biotype "scaRNA";' "$gtf_plain"; } \
+                    | _abundant_rna_extract_genes \
+                    | awk -F'\t' -v OFS='\t' '{print $1,$2,$3,$4,".",$6}' \
+                    | _abundant_rna_to_ucsc_chr | sort -k1,1 -k2,2n > "$out_dir/sink_snoRNA.bed"
+                ;;
+            miRNA)
+                grep -F 'gene_biotype "miRNA";' "$gtf_plain" \
+                    | _abundant_rna_extract_genes \
+                    | awk -F'\t' -v OFS='\t' '{print $1,$2,$3,$4,".",$6}' \
+                    | _abundant_rna_to_ucsc_chr | sort -k1,1 -k2,2n > "$out_dir/sink_miRNA.bed"
+                ;;
+            vault_RNA)
+                grep -F 'gene_biotype "vault_RNA";' "$gtf_plain" \
+                    | _abundant_rna_extract_genes \
+                    | awk -F'\t' -v OFS='\t' '{print $1,$2,$3,$4,".",$6}' \
+                    | _abundant_rna_to_ucsc_chr | sort -k1,1 -k2,2n > "$out_dir/sink_vault_RNA.bed"
+                ;;
+            YRNA)
+                grep -F 'gene_biotype "misc_RNA";' "$gtf_plain" \
+                    | _abundant_rna_extract_genes \
+                    | awk -F'\t' '$5 ~ /^RNY[0-9P]/' \
+                    | awk -F'\t' -v OFS='\t' '{print $1,$2,$3,$4,".",$6}' \
+                    | _abundant_rna_to_ucsc_chr | sort -k1,1 -k2,2n > "$out_dir/sink_YRNA.bed"
+                ;;
+            other_ncRNA)
+                { grep -F 'gene_biotype "misc_RNA";' "$gtf_plain"; grep -F 'gene_biotype "sRNA";' "$gtf_plain"; } \
+                    | _abundant_rna_extract_genes \
+                    | awk -F'\t' '$5 !~ /^RNY[0-9P]/' \
+                    | awk -F'\t' -v OFS='\t' '{print $1,$2,$3,$4,".",$6}' \
+                    | _abundant_rna_to_ucsc_chr | sort -k1,1 -k2,2n > "$out_dir/sink_other_ncRNA.bed"
+                ;;
+            *)
+                log_warning "--report-abundant-rna: unknown category '$cat', skipping"
+                ;;
+        esac
+    done
+
+    # Custom regions: name:path[,name2:path2...], BED used as-is, GTF gene bodies extracted
+    if [[ -n "$custom_spec" ]]; then
+        IFS=',' read -ra pairs <<< "$custom_spec"
+        for pair in "${pairs[@]}"; do
+            local cname="${pair%%:*}" cpath="${pair#*:}"
+            if [[ ! -f "$cpath" ]]; then
+                log_warning "--report-abundant-rna-custom: file not found for '$cname': $cpath"
+                continue
+            fi
+            if [[ "$cpath" == *.gtf.gz || "$cpath" == *.gtf ]]; then
+                local cplain="$out_dir/_custom_${cname}.gtf"
+                gzcat "$cpath" > "$cplain" 2>/dev/null || cat "$cpath" > "$cplain"
+                _abundant_rna_extract_genes < "$cplain" \
+                    | awk -F'\t' -v OFS='\t' '{print $1,$2,$3,$4,".",$6}' \
+                    | _abundant_rna_to_ucsc_chr | sort -k1,1 -k2,2n > "$out_dir/sink_custom_${cname}.bed"
+                rm -f "$cplain"
+            else
+                if ! awk -F'\t' '$2 !~ /^[0-9]+$/ || $3 !~ /^[0-9]+$/ { bad=1 } END{ exit !bad }' "$cpath"; then
+                    sort -k1,1 -k2,2n "$cpath" > "$out_dir/sink_custom_${cname}.bed"
+                else
+                    log_warning "--report-abundant-rna-custom: '$cname' ($cpath) doesn't look like a BED (columns 2/3 must be numeric start/end) — skipping. Pass a BED or GTF, not a gene list."
+                fi
+            fi
+        done
+    fi
+
+    rm -f "$gtf_plain" "$gene_bed"
+}
+
+# _abundant_rna_measure INPUT_BED SINK_DIR OUT_TSV LABEL LEVEL
+# Appends one row per sink_*.bed found in SINK_DIR. LEVEL = "sample" or "group".
+# Raw-read counts are recovered from the #count# field CLIPittyClip's FASTQ-
+# level collapse step writes into every read name (same convention the
+# NormedTC recovery elsewhere in this project relies on) — this is what
+# distinguishes "many unique molecules" from "one molecule PCR-amplified
+# many times", which peak-level or even unique-molecule-level counts alone
+# cannot see.
+_abundant_rna_measure() {
+    local input_bed="$1" sink_dir="$2" out_tsv="$3" label="$4" level="$5"
+    [[ -s "$input_bed" ]] || return 0
+
+    local sorted
+    sorted=$(mktemp)
+    sort -k1,1 -k2,2n "$input_bed" > "$sorted"
+
+    local n_unique_total n_raw_total
+    n_unique_total=$(wc -l < "$sorted" | tr -d ' ')
+    n_raw_total=$(awk -F'#' '{n=split($0,a,"#"); print (n>=2)?a[2]:1}' "$sorted" | awk '{s+=$1} END{print s+0}')
+
+    local sink_bed cat hit_bed n_unique_hit n_raw_hit pct_unique pct_raw
+    for sink_bed in "$sink_dir"/sink_*.bed; do
+        [[ -f "$sink_bed" ]] || continue
+        cat=$(basename "$sink_bed" .bed); cat="${cat#sink_}"
+
+        hit_bed=$(mktemp)
+        bedtools intersect -a "$sorted" -b "$sink_bed" -u > "$hit_bed" 2>/dev/null
+
+        n_unique_hit=$(wc -l < "$hit_bed" | tr -d ' ')
+        n_raw_hit=$(awk -F'#' '{n=split($0,a,"#"); print (n>=2)?a[2]:1}' "$hit_bed" | awk '{s+=$1} END{print s+0}')
+        pct_unique=$(awk -v h="$n_unique_hit" -v t="$n_unique_total" 'BEGIN{ if(t>0) printf "%.4f", 100*h/t; else print "NA" }')
+        pct_raw=$(awk -v h="$n_raw_hit" -v t="$n_raw_total" 'BEGIN{ if(t>0) printf "%.4f", 100*h/t; else print "NA" }')
+
+        printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+            "$level" "$label" "$cat" "$n_unique_total" "$n_unique_hit" "$pct_unique" "$n_raw_total" "$n_raw_hit" "$pct_raw" >> "$out_tsv"
+        rm -f "$hit_bed"
+    done
+    rm -f "$sorted"
+}
+
+# run_abundant_rna_sample_report COLLAPSED_BED SINK_DIR OUT_TSV SAMPLE_NAME
+# Called once per sample, right after that sample's collapsed BED is
+# produced (works identically in single-file and batch/child mode, since
+# both paths go through the same per-sample code).
+run_abundant_rna_sample_report() {
+    local collapsed_bed="$1" sink_dir="$2" out_tsv="$3" sample_name="$4"
+    if [[ ! -f "$out_tsv" ]]; then
+        printf "level\tlabel\tcategory\tn_unique_total\tn_unique_hit\tpct_unique\tn_raw_total\tn_raw_hit\tpct_raw\n" > "$out_tsv"
+    fi
+    log_info "Abundant-RNA report: measuring sample $sample_name"
+    _abundant_rna_measure "$collapsed_bed" "$sink_dir" "$out_tsv" "$sample_name" "sample"
+}
+
+# run_abundant_rna_group_report GROUPS_FILE BED_DIR SINK_DIR OUT_TSV
+# Called once in the parent process after all samples are processed, pooling
+# each group's per-sample collapsed BEDs (same group/sample matching pattern
+# run_combined_bedgraph already uses) — this is what makes the SMI-vs-IP
+# (or any other grouping) comparison possible, not just per-sample numbers.
+run_abundant_rna_group_report() {
+    local groups_file="$1" bed_dir="$2" sink_dir="$3" out_tsv="$4"
+    [[ -n "$groups_file" && -f "$groups_file" ]] || return 0
+    if [[ ! -f "$out_tsv" ]]; then
+        printf "level\tlabel\tcategory\tn_unique_total\tn_unique_hit\tpct_unique\tn_raw_total\tn_raw_hit\tpct_raw\n" > "$out_tsv"
+    fi
+
+    local groups group samples pooled f
+    groups=$(awk '{gsub(/^[ \t]+|[ \t]+$/,"",$2); print $2}' "$groups_file" | sort -u)
+    for group in $groups; do
+        log_info "Abundant-RNA report: pooling group $group"
+        samples=$(awk -v g="$group" '{gsub(/^[ \t]+|[ \t]+$/,"",$1); gsub(/^[ \t]+|[ \t]+$/,"",$2)} $2==g {print $1}' "$groups_file")
+        pooled=$(mktemp)
+        for s in $samples; do
+            f="$bed_dir/${s}.bed"
+            [[ -f "$f" ]] || f="$bed_dir/${s}_collapsed.bed"
+            [[ -f "$f" ]] && cat "$f" >> "$pooled"
+        done
+        if [[ -s "$pooled" ]]; then
+            _abundant_rna_measure "$pooled" "$sink_dir" "$out_tsv" "$group" "group"
+        else
+            log_warning "Abundant-RNA report: no collapsed BED files found for group $group"
+        fi
+        rm -f "$pooled"
+    done
 }

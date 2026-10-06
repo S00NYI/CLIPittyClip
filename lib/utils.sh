@@ -94,6 +94,25 @@ sanitize_line_endings() {
     fi
 }
 
+# strip_groups_file_extensions INFILE OUTFILE
+# Groups-file column 1 (sample name) must match the pipeline's internal
+# per-sample identifier, which has any FASTQ extension already stripped
+# (see BASENAME construction in CLIPittyClip.sh). A groups file authored
+# against the raw input filenames (e.g. "sample1.fastq.gz") silently fails
+# every downstream group-matching step that keys off column 1 — combined
+# bedgraph generation ("No bedgraph files found for group X"), and
+# add_matrix_columns' BC_* column lookup, which fails with no warning at
+# all and just reports 0 for every sample. Strip it here once so either
+# form (with or without extension) works.
+strip_groups_file_extensions() {
+    local infile="$1"
+    local outfile="$2"
+    # Default (whitespace) field splitting on read, matching every other
+    # groups-file consumer in this codebase — some groups files use spaces
+    # rather than tabs between columns. Output is normalized to tabs.
+    awk 'BEGIN{OFS="\t"} { sub(/\.(fastq|fq)(\.gz)?$/, "", $1); print }' "$infile" > "$outfile"
+}
+
 check_dependency() {
     if ! command -v "$1" &> /dev/null; then
         log_error "Dependency '$1' not found. Please install it or activate the environment."
