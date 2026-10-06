@@ -4,7 +4,8 @@
 # 
 # Self-contained installation script for macOS (Apple Silicon and Intel).
 # Builds a NATIVE conda environment (no Rosetta), installs the Perl
-# dependencies CTK needs from conda, and configures CTK and HOMER.
+# dependencies CTK needs from conda, verifies STAR really aligns (patching it
+# if not), and configures CTK and HOMER.
 #
 # Usage:
 #   ./install_macos.sh [OPTIONS]
@@ -86,6 +87,8 @@ Notes:
     - Builds a native environment; Rosetta 2 is not needed or used
     - Installs CTK and HOMER from source (not available via conda on macOS)
     - Installs Perl dependencies (BioPerl core, Math::CDF) from conda
+    - Tests that STAR really aligns; if not (known macOS defect), builds a
+      patched STAR (see lib/patches/README.md)
 
 EOF
     exit 0
@@ -225,8 +228,16 @@ if [[ -z "$SKIP_CONDA" ]]; then
     # --override-channels keeps ~/.condarc (e.g. the Anaconda 'defaults' channel,
     # which also triggers its terms-of-service prompt) out of the solve.
     #
-    # star=2.7.11b: 2.7.10b has no osx-arm64 build. 2.7.11b reads indices built
-    # by 2.7.10b (index format is compatible since 2.7.4a).
+    # STAR version. Stock 2.7.11b is BROKEN on macOS (reads 0 reads; libc++ ignores
+    # pubsetbuf, upstream STAR #2632). 2.7.10b works but bioconda builds it for Intel
+    # only. So: Intel gets 2.7.10b; Apple Silicon gets 2.7.11b, and Step 4b verifies it
+    # with a real alignment and builds a patched copy if it fails.
+    # See lib/patches/README.md.
+    if [[ "$ARCH" == "x86_64" ]]; then
+        STAR_SPEC="star=2.7.10b"
+    else
+        STAR_SPEC="star=2.7.11b"
+    fi
     #
     # perl-bioperl-core, not perl-bioperl: CTK only needs Bio::SeqIO. The full
     # metapackage pulls in ~120 extra packages and pins samtools to 0.1.19.
@@ -248,7 +259,8 @@ if [[ -z "$SKIP_CONDA" ]]; then
         htslib \
         bowtie2 \
         bwa \
-        "star=2.7.11b" \
+        "$STAR_SPEC" \
+        llvm-openmp \
         cutadapt \
         fastp \
         seqkit \
@@ -302,6 +314,34 @@ done
 if [[ ${#PERL_BROKEN[@]} -gt 0 ]]; then
     print_warning "Perl modules unavailable: ${PERL_BROKEN[*]}"
     print_warning "CTK CIMS/CITS (--run-cims-cits) will not work. Clink (--run-clink) is unaffected."
+fi
+
+#-------------------------------------------------------------------------------
+# Step 4b: Verify STAR can actually align (not just run)
+#-------------------------------------------------------------------------------
+# `STAR --version` passes even when STAR reads 0 reads, so run a real (1 s) alignment.
+# If it fails, build a patched STAR from the official source. Details and removal
+# criteria: lib/patches/README.md
+print_step "Verifying STAR aligns reads..."
+if "$SCRIPT_DIR/lib/star_selftest.sh" "$CONDA_PREFIX/bin/STAR" > /dev/null 2>&1; then
+    print_success "STAR aligns correctly ($(STAR --version))"
+else
+    print_warning "This STAR reads 0 reads on this Mac (known libc++ defect, STAR issue #2632)."
+    print_info "Building a patched STAR from the official source (about a minute)..."
+    if ! conda list -n "$ENV_NAME" --json 2>/dev/null | grep -q '"name": "llvm-openmp"'; then
+        $CONDA_CMD install -n "$ENV_NAME" -y --override-channels -c conda-forge llvm-openmp \
+            || { print_error "Could not install llvm-openmp"; exit 1; }
+    fi
+    if ! "$SCRIPT_DIR/lib/build_patched_star.sh" --dest "$CONDA_PREFIX/bin" --omp-prefix "$CONDA_PREFIX"; then
+        print_error "Could not build the patched STAR. See lib/patches/README.md"
+        exit 1
+    fi
+    if "$SCRIPT_DIR/lib/star_selftest.sh" "$CONDA_PREFIX/bin/STAR"; then
+        print_success "Patched STAR installed and verified"
+    else
+        print_error "STAR still does not align after patching. See lib/patches/README.md"
+        exit 1
+    fi
 fi
 
 #-------------------------------------------------------------------------------

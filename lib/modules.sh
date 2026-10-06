@@ -1085,6 +1085,21 @@ run_mapping_star() {
         exit 1
     fi
     
+    # STAR exits 0 even when it read nothing, and the zero then flows silently through
+    # every downstream step. Known cause: STAR 2.7.11b built with libc++ (macOS) reads
+    # 0 reads from any input. Fail here, loudly, instead of producing empty results.
+    local star_log="${output_prefix}.Log.final.out"
+    if [[ -s "$input_fastq" && -f "$star_log" ]]; then
+        local n_input_reads
+        n_input_reads=$(awk -F'|' '/Number of input reads/{gsub(/[ \t]/,"",$2); print $2}' "$star_log")
+        if [[ "$n_input_reads" == "0" ]]; then
+            log_error "STAR reported 0 input reads, but the input is not empty: $input_fastq"
+            log_error "On macOS this is a known STAR 2.7.11b defect (libc++); re-run install_macos.sh to install a patched STAR."
+            log_error "Otherwise, check that the input FASTQ is valid. STAR log: $star_log"
+            exit 1
+        fi
+    fi
+
     samtools index "${output_prefix}.Aligned.sortedByCoord.out.bam"
     if [ $? -ne 0 ]; then
         log_error "samtools index failed. The BAM file might be empty or invalid."

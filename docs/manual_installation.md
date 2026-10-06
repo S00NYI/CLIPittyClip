@@ -39,6 +39,18 @@ mamba create -n clipittyclip --override-channels -c conda-forge -c bioconda \
 
 Use `perl-bioperl-core`, not `perl-bioperl`: CTK only needs `Bio::SeqIO`, and the full package pins samtools to 0.1.19. STAR 2.7.10b has no arm64 build; 2.7.11b reads indices built with 2.7.10b.
 
+**Check STAR, then patch if needed (macOS).** Stock STAR 2.7.11b reads zero reads on macOS and still reports success (upstream bug, libc++). After creating the environment:
+
+```bash
+mamba install -n clipittyclip llvm-openmp
+conda activate clipittyclip
+lib/star_selftest.sh                                    # PASS = nothing more to do
+lib/build_patched_star.sh --dest "$CONDA_PREFIX/bin"    # only if it FAILED (~30 s)
+lib/star_selftest.sh                                    # should now PASS
+```
+
+Intel Macs can instead pin `star=2.7.10b`. Background and removal criteria: [lib/patches/README.md](../lib/patches/README.md).
+
 ## Step 3: Install Perl Modules via CPAN (Linux)
 
 > **macOS:** skip this step. `Bio::SeqIO` and `Math::CDF` were installed from conda in Step 2 (nothing to compile). Verify with the two `perl -M` commands below.
