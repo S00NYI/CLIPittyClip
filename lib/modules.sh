@@ -1377,6 +1377,28 @@ run_collapse_pcr() {
     fi
 }
 
+# check_homer_tag_count TAG_DIR EXPECTED_TAGS [LABEL]
+# Warns when the tag directory holds a different number of tags than the
+# input BED has lines. With a one-line-per-read tag BED, that line count is
+# the read count, so the check confirms one tag per read.
+check_homer_tag_count() {
+    local tag_dir="$1"
+    local expected="$2"
+    local label="${3:-$(basename "$tag_dir")}"
+    local info="${tag_dir%/}/tagInfo.txt"
+    if [[ ! -f "$info" ]]; then
+        log_warning "HOMER tag check ($label): no tagInfo.txt in $tag_dir"
+        return 0
+    fi
+    local total
+    total=$(awk -F'\t' 'NR==2 {printf "%d", $3}' "$info")
+    if [[ "$total" == "$expected" ]]; then
+        log_info "HOMER tag check ($label): $total tags = $expected input lines"
+    else
+        log_warning "HOMER tag check ($label): $total tags but the input BED has $expected lines"
+    fi
+}
+
 # 4. Peak Calling (HOMER)
 run_peak_calling_homer() {
     local input_bed="$1"
@@ -1391,6 +1413,7 @@ run_peak_calling_homer() {
 
     echo "Running HOMER makeTagDirectory..." > "$log_file"
     makeTagDirectory "${out_dir}" "${input_bed}" -single -format bed >> "$log_file" 2>&1
+    check_homer_tag_count "${out_dir}" "$(wc -l < "${input_bed}" | tr -d ' ')" "$(basename "${out_dir}")"
 
     echo "Running HOMER findPeaks..." >> "$log_file"
     findPeaks "${out_dir}" -o auto -style factor -L 2 -localSize 1000 -strand separate \
