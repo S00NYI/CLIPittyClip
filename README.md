@@ -153,7 +153,8 @@ All results land in a single numbered-folder hierarchy next to your input (or at
 │   └── abundant_rna_report.tsv  ← per-sample + per-group ncRNA read fractions (if --report-abundant-rna)
 ├── 0_DEMUX_FASTQ/           ← demultiplexed reads (only with -k)
 ├── 01_BAM/                  ← sorted, indexed BAM files
-├── 02_COLLAPSED_BED/        ← PCR-deduplicated read BED
+├── 02_COLLAPSED_BED/        ← PCR-deduplicated read BED (one line per aligned block)
+│   └── TAG_BED/             ← one line per read (5'-end block), used for HOMER tags
 ├── 03_COVERAGE/             ← RPM-normalized ± strand bedgraphs
 │   ├── COMBINED_BEDGRAPH/  ← group-averaged tracks (with -g)
 │   └── BigWig/              ← per-sample crosslink-site bigWigs (with --xl-bigwig)
@@ -492,7 +493,9 @@ PEAKittyPeak.sh -i ./2_COLLAPSED_BED -n Combined --aggregate \
 PEAKittyPeak.sh --wizard
 ```
 
-Key options: `-i` (BED dir), `-n` (output prefix), `--aggregate` / `--no-aggregate`, `--group-peaks`, `--peak-caller`, `--peak-caller-args`, `--ctk-dir`, `-p` (min peak distance), `-z` (peak size), `-f` (fragment length)
+Key options: `-i` (BED dir), `-n` (output prefix), `--aggregate` / `--no-aggregate`, `--group-peaks`, `--peak-caller`, `--peak-caller-args`, `--ctk-dir`, `--tag-bed-dir`, `-p` (min peak distance), `-z` (peak size), `-f` (fragment length)
+
+HOMER builds its tags from the matching file in `<input>/TAG_BED/` (one line per read). The split BEDs in `<input>/` are used for the peak matrix. A sample with no tag BED (output from before this fix) falls back to its split BED, with a warning.
 
 ---
 
@@ -616,6 +619,11 @@ RPM is calculated as `(reads mapped to element / total input reads) × 10⁶`.
 ---
 
 ## Changelog
+
+### Unreleased
+
+**Fixed**
+- **HOMER peaks no longer get fake tags from splice-junction reads.** Since v3.3 (Clink integration, `44d642d`), HOMER built its tags from `bedtools bamtobed -split`, which writes one line per aligned block. Each read across a junction added a tag at the first base of the downstream exon, where no read started, and HOMER called peaks on those stacks. HOMER now builds tags from a separate tag BED (`02_COLLAPSED_BED/TAG_BED/`, `2_BED/TAG_BED/` in MAPittyMap): one line per read, holding only the block with the read's 5' end. This matches HOMER reading the BAM with `-format sam`. The split BED still feeds the bedgraphs, the peak matrix and the CTK peak caller. Clink and CTK crosslink sites are not affected. The log now checks that HOMER's tag total equals the read count. **HOMER peak sets from spliced data will change** (pig PTBP1 kept libraries: 378,255 → 345,565 combined peaks; peaks in the first 25 nt of exons 20.0% → 3.8%).
 
 ### v3.5.1
 

@@ -92,6 +92,7 @@ function show_usage {
     echo "OUTPUT TREE ({BASENAME}_mapping/):"
     echo "  1_BAM/                Sorted, indexed BAM"
     echo "  2_BED/                PCR-collapsed BED (feeds PEAKittyPeak)"
+    echo "  2_BED/TAG_BED/        one-line-per-read BED for HOMER tags"
     echo "  3_COVERAGE/           Strand-specific normalized bedgraphs"
     echo "  4_CTK_Analysis/       (--run-cims/--run-cits) CIMS / CITS BED files"
     echo "  5_Clink_Analysis/     (--run-clink) Clink truncations + mutations + crosslinks"
@@ -328,7 +329,12 @@ run_clink_collapse "$BAM_FILE" "$CLINK_DEDUP_BAM" "$CLINK_UMI_LEN" "$THREADS" ||
 COLLAPSED_BED="2_BED/${BASENAME}_collapsed.bed"
 bedtools bamtobed -i "$CLINK_DEDUP_BAM" -split 2>/dev/null \
     | sort -k1,1 -k2,2n > "$COLLAPSED_BED"
-log_info "Collapsed BED: $COLLAPSED_BED ($(wc -l < "$COLLAPSED_BED") reads)"
+log_info "Collapsed BED: $COLLAPSED_BED ($(wc -l < "$COLLAPSED_BED") blocks)"
+
+# Tag BED for HOMER (one line per read, 5'-end block). Same file name in
+# 2_BED/TAG_BED/, where PEAKittyPeak.sh looks for it.
+mkdir -p 2_BED/TAG_BED
+make_tag_bed "$CLINK_DEDUP_BAM" "2_BED/TAG_BED/${BASENAME}_collapsed.bed"
 
 # Strand-specific normalized bedgraphs
 if [[ -f "$GENOME_INDEX/chrom.sizes" ]]; then

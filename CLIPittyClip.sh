@@ -38,7 +38,6 @@ PEAK_SIZE=20
 FRAG_LEN=25
 PEAK_CALLER="homer" # Peak caller: homer (default) or ctk
 ADV_PEAK_CALLER_ARGS=""    # Additional arguments for peak caller (homer or ctk)
-HOMER_TAGS="read"  # HOMER tag source: read (one tag per read, default) or split (one per aligned block, pre-3.6)
 MISMATCH_MAX=2 # STAR default
 # ------------------------------------------------------------------
 # Usage
@@ -102,8 +101,6 @@ function show_usage {
     echo "ANALYSIS OPTIONS:"
     echo "  --peak-caller <str>      Peak caller: homer (default) or ctk"
     echo "  --peak-caller-args <str> Additional peak caller arguments (quoted string)"
-    echo "  --homer-tags <str>       HOMER tags: read (default, one tag per read) or split"
-    echo "                           (one tag per aligned block; adds fake tags at exon starts)"
     echo "  --run-cims-cits          Enable full CTK CIMS+CITS analysis"
     echo "  --run-cims               Enable CIMS analysis (mutation sites only)"
     echo "  --run-cits               Enable CITS analysis (truncation sites only)"
@@ -256,7 +253,6 @@ while [[ $# -gt 0 ]]; do
         -k|--keep) KEEP_INTERMEDIATE="yes"; shift ;;
         --peak-caller) PEAK_CALLER=$(echo "$2" | tr '[:upper:]' '[:lower:]'); shift 2 ;;
         --peak-caller-args) ADV_PEAK_CALLER_ARGS="$2"; shift 2 ;;
-        --homer-tags) HOMER_TAGS=$(echo "$2" | tr '[:upper:]' '[:lower:]'); shift 2 ;;
         --run-cims) RUN_CIMS=true; RUN_CTK="yes"; shift ;;
         --run-cits) RUN_CITS=true; RUN_CTK="yes"; shift ;;
         --run-cims-cits) RUN_CTK="yes"; RUN_CIMS=true; RUN_CITS=true; shift ;;
@@ -725,7 +721,6 @@ if [[ "$ADVANCED_MODE" == "true" ]]; then
         log_info "CTK Added:      ${ADV_PEAK_CALLER_ARGS:-(None)}"
     else
         log_info "Homer Defaults: $DEF_HOMER"
-        log_info "Homer Tags:     $HOMER_TAGS"
         log_info "Homer Added:    ${ADV_PEAK_CALLER_ARGS:-(None)}"
     fi
 else
@@ -739,7 +734,6 @@ else
         log_info "CTK Added:      ${ADV_PEAK_CALLER_ARGS:-(None)}"
     else
         log_info "Homer Config:   $DEF_HOMER"
-        log_info "Homer Tags:     $HOMER_TAGS"
     fi
 fi
 log_info "------------------------------------------------------------------"
@@ -759,10 +753,6 @@ if [[ "$RUN_CLINK" != "true" ]] || [[ "$RUN_CIMS" == "true" ]] || [[ "$RUN_CITS"
 fi
 if [[ "$PEAK_CALLER" == "ctk" ]]; then
     check_dependency tag2peak.pl
-fi
-if [[ "$HOMER_TAGS" != "read" && "$HOMER_TAGS" != "split" ]]; then
-    log_error "--homer-tags must be 'read' or 'split' (got: $HOMER_TAGS)"
-    exit 1
 fi
 check_dependency seqkit
 
@@ -987,7 +977,7 @@ if [[ -n "$INPUT_DIR" ]]; then
     if [[ -n "${_ABUNDANT_RNA_SINK_DIR:-}" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --abundant-rna-sink-dir \"$_ABUNDANT_RNA_SINK_DIR\""; fi
     if [[ "$DEDUP_MODE" == "false" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --no-dedup"; fi
     if [[ "$LOW_MEMORY" == "true" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --low-memory"; fi
-    EXTRA_FLAGS="$EXTRA_FLAGS --peak-caller $PEAK_CALLER --homer-tags $HOMER_TAGS"
+    EXTRA_FLAGS="$EXTRA_FLAGS --peak-caller $PEAK_CALLER"
     if [[ -n "$ADV_PEAK_CALLER_ARGS" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --peak-caller-args \"$ADV_PEAK_CALLER_ARGS\""; fi
     if [[ -n "$BC_LEN" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --bc-len $BC_LEN"; fi
     if [[ -n "$SPACER_LEN" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --spacer-len $SPACER_LEN"; fi
@@ -1343,7 +1333,7 @@ if [[ -n "$INPUT_DIR" ]]; then
     
     PEAK_LOG="$OUTPUT_ROOT/$DIR_PEAK_LOGS/Combined_PeakCalling.log"
     
-    PEAK_CMD="$SCRIPT_DIR/PEAKittyPeak.sh -i \"$BED_DIR\" --aggregate -n \"COMBINED\" -p \"$PEAK_DIST\" -z \"$PEAK_SIZE\" -f \"$FRAG_LEN\" --peak-caller \"$PEAK_CALLER\" --homer-tags \"$HOMER_TAGS\""
+    PEAK_CMD="$SCRIPT_DIR/PEAKittyPeak.sh -i \"$BED_DIR\" --aggregate -n \"COMBINED\" -p \"$PEAK_DIST\" -z \"$PEAK_SIZE\" -f \"$FRAG_LEN\" --peak-caller \"$PEAK_CALLER\""
     if [[ -n "$ADV_PEAK_CALLER_ARGS" ]]; then PEAK_CMD="$PEAK_CMD --peak-caller-args \"$ADV_PEAK_CALLER_ARGS\""; fi
     if [[ -n "$DIR_CTK" ]]; then
         PEAK_CMD="$PEAK_CMD --ctk-dir \"$OUTPUT_ROOT/$DIR_CTK\""
@@ -1375,7 +1365,7 @@ if [[ -n "$INPUT_DIR" ]]; then
         console_msg "\n[GROUP PEAK CALLING]"
         mkdir -p "$OUTPUT_ROOT/$DIR_PEAKS/GROUP_PEAKS"
 
-        GRP_PEAK_CMD="$SCRIPT_DIR/PEAKittyPeak.sh -i \"$BED_DIR\" --group-peaks \"$GROUPS_FILE\" -p \"$PEAK_DIST\" -z \"$PEAK_SIZE\" -f \"$FRAG_LEN\" --peak-caller \"$PEAK_CALLER\" --homer-tags \"$HOMER_TAGS\""
+        GRP_PEAK_CMD="$SCRIPT_DIR/PEAKittyPeak.sh -i \"$BED_DIR\" --group-peaks \"$GROUPS_FILE\" -p \"$PEAK_DIST\" -z \"$PEAK_SIZE\" -f \"$FRAG_LEN\" --peak-caller \"$PEAK_CALLER\""
         if [[ -n "$ADV_PEAK_CALLER_ARGS" ]]; then GRP_PEAK_CMD="$GRP_PEAK_CMD --peak-caller-args \"$ADV_PEAK_CALLER_ARGS\""; fi
 
         eval "$GRP_PEAK_CMD" >> "$OUTPUT_ROOT/$DIR_PEAK_LOGS/Combined_PeakCalling.log" 2>&1
@@ -1615,7 +1605,7 @@ if [[ "$DEMUX" == "yes" ]]; then
     # Pool was already deduped above; tell children to skip dedup
     EXTRA_FLAGS="$EXTRA_FLAGS --no-dedup"
 
-    EXTRA_FLAGS="$EXTRA_FLAGS --peak-caller $PEAK_CALLER --homer-tags $HOMER_TAGS"
+    EXTRA_FLAGS="$EXTRA_FLAGS --peak-caller $PEAK_CALLER"
     if [[ -n "$ADV_PEAK_CALLER_ARGS" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --peak-caller-args \"$ADV_PEAK_CALLER_ARGS\""; fi
     if [[ -n "$BC_LEN" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --bc-len $BC_LEN"; fi
     if [[ -n "$SPACER_LEN" ]]; then EXTRA_FLAGS="$EXTRA_FLAGS --spacer-len $SPACER_LEN"; fi
@@ -1963,7 +1953,7 @@ if [[ "$DEMUX" == "yes" ]]; then
         # Call script (using absolute path or relative to old pwd)
         # Call script with -n COMBINED to create COMBINED_peaks folder
         # Use -i 02_COLLAPSED_BED (relative to OUTPUT_ROOT) and --aggregate parameter
-        PEAK_CMD="bash $PEAK_SCRIPT -i 02_COLLAPSED_BED --aggregate -n COMBINED -p $PEAK_DIST -z $PEAK_SIZE -f $FRAG_LEN --peak-caller \"$PEAK_CALLER\" --homer-tags \"$HOMER_TAGS\""
+        PEAK_CMD="bash $PEAK_SCRIPT -i 02_COLLAPSED_BED --aggregate -n COMBINED -p $PEAK_DIST -z $PEAK_SIZE -f $FRAG_LEN --peak-caller \"$PEAK_CALLER\""
         if [[ -n "$ADV_PEAK_CALLER_ARGS" ]]; then PEAK_CMD="$PEAK_CMD --peak-caller-args \"$ADV_PEAK_CALLER_ARGS\""; fi
         
         # Add --ctk-dir if CTK analysis was enabled
@@ -2006,7 +1996,7 @@ if [[ "$DEMUX" == "yes" ]]; then
             console_msg "\n[GROUP PEAK CALLING]"
             mkdir -p "$DIR_PEAKS/GROUP_PEAKS"
 
-            GRP_PEAK_CMD="bash $PEAK_SCRIPT -i 02_COLLAPSED_BED --group-peaks \"$GROUPS_FILE\" -p $PEAK_DIST -z $PEAK_SIZE -f $FRAG_LEN --peak-caller \"$PEAK_CALLER\" --homer-tags \"$HOMER_TAGS\""
+            GRP_PEAK_CMD="bash $PEAK_SCRIPT -i 02_COLLAPSED_BED --group-peaks \"$GROUPS_FILE\" -p $PEAK_DIST -z $PEAK_SIZE -f $FRAG_LEN --peak-caller \"$PEAK_CALLER\""
             if [[ -n "$ADV_PEAK_CALLER_ARGS" ]]; then GRP_PEAK_CMD="$GRP_PEAK_CMD --peak-caller-args \"$ADV_PEAK_CALLER_ARGS\""; fi
 
             eval "$GRP_PEAK_CMD" >> "$DIR_PEAK_LOGS/Combined_PeakCalling.log" 2>&1
@@ -2349,13 +2339,13 @@ bedtools bamtobed -i "$CLINK_DEDUP_BAM" -split 2>/dev/null \
     | sort -k1,1 -k2,2n > "$COLLAPSED_BED"
 log_info "Collapsed BED (Clink): $COLLAPSED_BED ($(wc -l < "$COLLAPSED_BED") blocks)"
 
-# 3b-1. Tag BED for HOMER: one line per read (no -split), so a spliced read
-#       spans its intron but keeps one 5' end. The split BED above has one line
-#       per aligned block, and HOMER would add a fake tag at each exon start.
-#       The split BED stays the input for coverage and the peak matrix.
+# 3b-1. Tag BED for HOMER: one line per read, holding only the aligned block
+#       with the read's 5' end (see make_tag_bed in lib/modules.sh). The split
+#       BED above has one line per block, so HOMER would add a fake tag at each
+#       exon start. The split BED stays the input for coverage, the peak
+#       matrix and the CTK peak caller.
 TAG_BED="${BASENAME}_tags.bed"
-bedtools bamtobed -i "$CLINK_DEDUP_BAM" 2>/dev/null \
-    | sort -k1,1 -k2,2n > "$TAG_BED"
+make_tag_bed "$CLINK_DEDUP_BAM" "$TAG_BED"
 log_info "Tag BED (one line per read): $TAG_BED ($(wc -l < "$TAG_BED") reads)"
 
 # 3b-2. Abundant-RNA sample report (opt-in, non-destructive — see modules.sh)
@@ -2391,7 +2381,7 @@ run_coverage "${COLLAPSED_BED}" "${BASENAME}" "$GENOME_INDEX/chrom.sizes" "${CLI
 # 5. Peak Calling (Per-Sample)
 PEAK_DIR="${BASENAME}_peaks"
 PEAK_INPUT_BED="$COLLAPSED_BED"
-if [[ "${PEAK_CALLER:-homer}" != "ctk" && "$HOMER_TAGS" == "read" ]]; then
+if [[ "${PEAK_CALLER:-homer}" != "ctk" ]]; then
     PEAK_INPUT_BED="$TAG_BED"
 fi
 run_peak_calling "${PEAK_INPUT_BED}" "${PEAK_DIR}" "$PEAK_DIST" "$PEAK_SIZE" "$FRAG_LEN"
@@ -2525,7 +2515,9 @@ if [[ "$CHILD_MODE" != "true" ]]; then
     mv "${COLLAPSED_BED:-${BASENAME}_collapsed.bed}" "$SINGLE_OUTPUT_ROOT/$SF_DIR_BED/" 2>/dev/null
     if [[ -f "${TAG_BED:-${BASENAME}_tags.bed}" ]]; then
         mkdir -p "$SINGLE_OUTPUT_ROOT/$SF_DIR_BED/TAG_BED"
-        mv "${TAG_BED:-${BASENAME}_tags.bed}" "$SINGLE_OUTPUT_ROOT/$SF_DIR_BED/TAG_BED/" 2>/dev/null
+        # Same file name as the split BED, which is how PEAKittyPeak.sh pairs them
+        mv "${TAG_BED:-${BASENAME}_tags.bed}" \
+            "$SINGLE_OUTPUT_ROOT/$SF_DIR_BED/TAG_BED/${COLLAPSED_BED:-${BASENAME}_collapsed.bed}" 2>/dev/null
     fi
     mv "${MUTATION_FILE:-${BASENAME}_mutations.txt}" "$SINGLE_OUTPUT_ROOT/$SF_DIR_BED/" 2>/dev/null
 

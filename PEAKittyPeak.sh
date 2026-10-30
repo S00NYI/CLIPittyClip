@@ -19,8 +19,7 @@ FRAG_LEN=25
 BASE_NAME="Combined"
 ADV_PEAK_CALLER_ARGS="" # Additional arguments for the peak caller
 PEAK_CALLER="homer" # Peak caller: homer (default) or ctk
-HOMER_TAGS="read"   # HOMER tags: read (one per read, from <input>/TAG_BED) or split
-TAG_BED_DIR=""      # Folder of one-line-per-read BEDs (default: <input>/TAG_BED)
+TAG_BED_DIR=""      # Folder of HOMER tag BEDs, one line per read (default: <input>/TAG_BED)
 GROUP_PEAKS_FILE=""  # --group-peaks: run one aggregate call per group in file
 LOG_FILE="${LOG_FILE:-/dev/null}" # Use parent's log if set, otherwise discard
 WIZARD_MODE="false"
@@ -51,10 +50,9 @@ function show_usage {
     echo "  -n <str>       Base name for output (default: 'Combined')"
     echo "  --peak-caller-args <str> Additional peak caller arguments (quoted string)"
     echo "  --peak-caller <str> Peak caller: homer (default) or ctk"
-    echo "  --homer-tags <str>  HOMER tags: read (default) or split. 'read' builds tags from"
-    echo "                      one-line-per-read BEDs in --tag-bed-dir; falls back to the"
-    echo "                      split BED (with a warning) when a sample has none"
-    echo "  --tag-bed-dir <dir> Folder of tag BEDs, same file names as -i (default: <input>/TAG_BED)"
+    echo "  --tag-bed-dir <dir> Folder of HOMER tag BEDs (one line per read, 5'-end block),"
+    echo "                      same file names as -i (default: <input>/TAG_BED). A sample"
+    echo "                      with no tag BED falls back to its split BED, with a warning"
     echo "  --ctk-dir <path>   Add CIMS/CITS site counts from CTK analysis"
     echo "  -g, --groups <file> Groups file for aggregation metrics"
     echo "  --cims-fdr <float> CIMS FDR threshold (default: 0.05)"
@@ -99,7 +97,6 @@ while [[ $# -gt 0 ]]; do
         -n) BASE_NAME="$2"; shift 2 ;;
         --peak-caller-args) ADV_PEAK_CALLER_ARGS="$2"; shift 2 ;;
         --peak-caller) PEAK_CALLER="$2"; shift 2 ;;
-        --homer-tags) HOMER_TAGS=$(echo "$2" | tr '[:upper:]' '[:lower:]'); shift 2 ;;
         --tag-bed-dir) TAG_BED_DIR="$2"; shift 2 ;;
         --ctk-dir) CTK_DIR="$2"; shift 2 ;;
         -g|--groups|--group-xlsite) GROUPS_FILE="$2"; shift 2 ;;
@@ -142,19 +139,15 @@ if [[ $BED_COUNT -eq 0 ]]; then
     exit 1
 fi
 
-if [[ "$HOMER_TAGS" != "read" && "$HOMER_TAGS" != "split" ]]; then
-    log_error "--homer-tags must be 'read' or 'split' (got: $HOMER_TAGS)"
-    exit 1
-fi
 TAG_BED_DIR="${TAG_BED_DIR:-$INPUT_BED_DIR/TAG_BED}"
 
-# tag_bed_for SPLIT_BED — print the BED HOMER should build tags from.
-# In 'read' mode that is the matching one-line-per-read BED in TAG_BED_DIR.
-# The split BED has one line per aligned block, so each splice junction
-# would add a fake tag at the downstream exon start.
+# tag_bed_for SPLIT_BED — print the BED HOMER should build tags from: the
+# matching tag BED in TAG_BED_DIR (one line per read, see make_tag_bed in
+# lib/modules.sh). The split BED has one line per aligned block, so each
+# splice junction would add a fake tag at the downstream exon start.
 tag_bed_for() {
     local split_bed="$1"
-    if [[ "$HOMER_TAGS" == "split" || "${PEAK_CALLER:-homer}" == "ctk" ]]; then
+    if [[ "${PEAK_CALLER:-homer}" == "ctk" ]]; then
         echo "$split_bed"; return
     fi
     local name; name=$(basename "$split_bed")
@@ -171,7 +164,7 @@ log_info "Input Dir:   $INPUT_BED_DIR"
 log_info "Input Files: $BED_COUNT"
 log_info "Mode:        $(if [[ "$AGGREGATE" == "true" ]]; then echo "AGGREGATE"; elif [[ -n "$GROUP_PEAKS_FILE" ]]; then echo "GROUP-PEAKS"; else echo "INDIVIDUAL"; fi)"
 log_info "Caller:      $PEAK_CALLER"
-[[ "${PEAK_CALLER:-homer}" != "ctk" ]] && log_info "HOMER tags:  $HOMER_TAGS (tag BEDs: $TAG_BED_DIR)"
+[[ "${PEAK_CALLER:-homer}" != "ctk" ]] && log_info "Tag BEDs:     $TAG_BED_DIR"
 log_info "Parameters:  Dist=$PEAK_DIST, Size=$PEAK_SIZE, Frag=$FRAG_LEN"
 
 # --- Function: Call Peaks ---
