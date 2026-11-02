@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# PEAKittyPeak.sh - Peak Calling Module for CLIPittyClip (v3.5)
+# PEAKittyPeak.sh - Peak Calling Module for CLIPittyClip (v3.5.2)
 # Uses the unified lib/utils.sh for logging
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -32,7 +32,7 @@ function show_usage {
     echo ""
     echo "Usage: PEAKittyPeak.sh [options]"
     echo ""
-    echo "PEAKittyPeak v3.5 - Peak Calling Module for CLIPittyClip"
+    echo "PEAKittyPeak v3.5.2 - Peak Calling Module for CLIPittyClip"
     echo ""
     echo "CONTEXT:"
     echo "  Run this in a directory containing a 'BED' folder with collapsed .bed files."

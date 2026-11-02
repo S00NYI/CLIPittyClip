@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# MAPittyMap.sh - Mapping-only module for CLIPittyClip (v3.5)
+# MAPittyMap.sh - Mapping-only module for CLIPittyClip (v3.5.2)
 # Uses the unified lib/modules.sh for consistent behavior
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -50,7 +50,7 @@ function show_usage {
     echo ""
     echo "Usage: $0 -i <input.fastq.gz> -x <index_dir> [options]"
     echo ""
-    echo "MAPittyMap v3.5 - Standalone Mapping + Crosslink-Site Analysis Module"
+    echo "MAPittyMap v3.5.2 - Standalone Mapping + Crosslink-Site Analysis Module"
     echo ""
     echo "REQUIRED:"
     echo "  -i <path>      Input FASTQ/FASTA file (gzipped supported)"

@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # CLIPittyClip.sh - Modernized CLIP-seq Analysis Pipeline
-# Version 3.5.1
+# Version 3.5.2
 
 # ------------------------------------------------------------------
 # Initialization & Setup
@@ -47,7 +47,7 @@ function show_usage {
     echo ""
     echo "Usage: $0 [-i <input.fastq.gz> | -d <input_dir>] -x <index_dir> [options]"
     echo ""
-    echo "CLIPittyClip v3.5 - Modern CLIP-seq Analysis Pipeline"
+    echo "CLIPittyClip v3.5.2 - Modern CLIP-seq Analysis Pipeline"
     echo ""
     echo "REQUIRED INPUT (Choose one):"
     echo "  -i, --input-file <path>  Input FASTQ file (gzipped supported)"
@@ -223,7 +223,7 @@ if [[ $# -eq 0 ]]; then
     # Only show header if we are going to exit anyway
     echo "$separator_line"
     echo -e "${BLUE}CLIPittyClip: Modern CLIP-seq Analysis Pipeline${NC}"
-    echo "Version 3.5.1"
+    echo "Version 3.5.2"
     echo "Author: Soon Yi (Updated by Antigravity)"
     echo "Last updated: $(date +'%Y-%m-%d')"
     echo "$separator_line"
@@ -774,7 +774,7 @@ ulimit -n 2048 2>/dev/null || true
 if [[ "$CHILD_MODE" != "true" ]]; then
     # Print Clean Banner to Console
     console_msg "********************************************************************************"
-    console_msg "CLIPittyClip Standard Pipeline v3.5"
+    console_msg "CLIPittyClip Standard Pipeline v3.5.2"
     console_msg "Started: $(date '+%Y-%m-%d %H:%M:%S')"
     if [[ -n "$INPUT_DIR" ]]; then
         console_msg "Input Directory: $INPUT_DIR"

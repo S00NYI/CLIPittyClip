@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# PREPittyPrep.sh - Preprocessing Module for CLIPittyClip (v3.5)
+# PREPittyPrep.sh - Preprocessing Module for CLIPittyClip (v3.5.2)
 #
 # Runs the full CLIP-seq preprocessing stack and stops before alignment:
 #   dedup → [demux] → fastp → *_prepped.fastq.gz (ready to map)
@@ -40,7 +40,7 @@ function show_usage {
     echo ""
     echo "Usage: $0 [-i <input.fastq.gz> | -d <dir>] [options]"
     echo ""
-    echo "PREPittyPrep v3.5 - CLIP-seq Preprocessing Module"
+    echo "PREPittyPrep v3.5.2 - CLIP-seq Preprocessing Module"
     echo "Output: groomed, deduplicated, adapter-trimmed *_prepped.fastq.gz"
     echo ""
     echo "INPUT (choose one):"
@@ -202,7 +202,7 @@ fi
 
 # ─── Banner ──────────────────────────────────────────────────────────────────
 echo "════════════════════════════════════════════════════════════════════════════════"
-echo "  PREPittyPrep v3.5"
+echo "  PREPittyPrep v3.5.2"
 echo "  Started: $(date '+%Y-%m-%d %H:%M:%S')"
 if [[ -n "$INPUT_DIR" ]]; then
     echo "  Input:   $INPUT_DIR  [directory mode]"
