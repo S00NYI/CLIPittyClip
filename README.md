@@ -620,6 +620,11 @@ RPM is calculated as `(reads mapped to element / total input reads) × 10⁶`.
 
 ## Changelog
 
+### Unreleased
+
+**Fixed**
+- **Clink CIMS no longer runs out of RAM on large pileups.** `cims.py` loaded the whole pileup and computed the genome-wide background rates on genome-size arrays, about 66 bytes per position (22.7 GB for a pig group pileup). A human group pileup was killed by the system for lack of memory. `cims.py` now reads a pileup one chromosome and strand at a time and rebuilds the genome-wide background rates exactly from per-chromosome parts. Output files are byte-identical. Peak RAM on the pig group pileup: 22.7 GB → 0.8 GB, at the same run time. `--bam` input is unchanged. (S00NYI)
+
 ### v3.5.2
 
 **Fixed**
