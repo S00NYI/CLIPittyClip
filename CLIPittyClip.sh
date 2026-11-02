@@ -529,6 +529,7 @@ else
     exec > >(tee -a "$TEMP_CONSOLE_LOG") 2>&1
 
     LOG_FILE="${OUTPUT_ROOT}/00_REPORTS/detailed_output.log"
+    export LOG_FILE  # PEAKittyPeak.sh logs here too
     > "${LOG_FILE}"
 
     # Run-scoped tally of large-library dedup warnings. Batch mode runs each
@@ -2263,6 +2264,7 @@ fi
 mkdir -p "$_WORK_ANALYSIS"
 cd "$_WORK_ANALYSIS" || exit 1
 LOG_FILE="${BASENAME}_analysis.log" # redirect log to inside analysis dir
+export LOG_FILE
 log_info "Working directory: $(pwd)"
 
 # 1. Preprocessing — dispatch based on mode
@@ -2638,6 +2640,7 @@ if [[ "$CHILD_MODE" != "true" ]]; then
         cat "$LOG_FILE" >> "$SINGLE_OUTPUT_ROOT/$SF_DIR_REPORTS/detailed_output.log" 2>/dev/null
         rm -f "$LOG_FILE"
         LOG_FILE="$SINGLE_OUTPUT_ROOT/$SF_DIR_REPORTS/detailed_output.log"
+        export LOG_FILE
     fi
 
     log_info "Output organized: $SINGLE_OUTPUT_ROOT"
