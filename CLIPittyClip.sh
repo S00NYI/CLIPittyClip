@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # CLIPittyClip.sh - Modernized CLIP-seq Analysis Pipeline
-# Version 3.5.1
+# Version 3.5.2
 
 # ------------------------------------------------------------------
 # Initialization & Setup
@@ -47,7 +47,7 @@ function show_usage {
     echo ""
     echo "Usage: $0 [-i <input.fastq.gz> | -d <input_dir>] -x <index_dir> [options]"
     echo ""
-    echo "CLIPittyClip v3.5 - Modern CLIP-seq Analysis Pipeline"
+    echo "CLIPittyClip v3.5.2 - Modern CLIP-seq Analysis Pipeline"
     echo ""
     echo "REQUIRED INPUT (Choose one):"
     echo "  -i, --input-file <path>  Input FASTQ file (gzipped supported)"
@@ -223,7 +223,7 @@ if [[ $# -eq 0 ]]; then
     # Only show header if we are going to exit anyway
     echo "$separator_line"
     echo -e "${BLUE}CLIPittyClip: Modern CLIP-seq Analysis Pipeline${NC}"
-    echo "Version 3.5.1"
+    echo "Version 3.5.2"
     echo "Author: Soon Yi (Updated by Antigravity)"
     echo "Last updated: $(date +'%Y-%m-%d')"
     echo "$separator_line"
@@ -529,6 +529,7 @@ else
     exec > >(tee -a "$TEMP_CONSOLE_LOG") 2>&1
 
     LOG_FILE="${OUTPUT_ROOT}/00_REPORTS/detailed_output.log"
+    export LOG_FILE  # PEAKittyPeak.sh logs here too
     > "${LOG_FILE}"
 
     # Run-scoped tally of large-library dedup warnings. Batch mode runs each
@@ -773,7 +774,7 @@ ulimit -n 2048 2>/dev/null || true
 if [[ "$CHILD_MODE" != "true" ]]; then
     # Print Clean Banner to Console
     console_msg "********************************************************************************"
-    console_msg "CLIPittyClip Standard Pipeline v3.5"
+    console_msg "CLIPittyClip Standard Pipeline v3.5.2"
     console_msg "Started: $(date '+%Y-%m-%d %H:%M:%S')"
     if [[ -n "$INPUT_DIR" ]]; then
         console_msg "Input Directory: $INPUT_DIR"
@@ -1127,6 +1128,11 @@ if [[ -n "$INPUT_DIR" ]]; then
             bed_file=$(find "$sample_out" -name "*_collapsed.bed" -not -name '*_ctk_*' 2>/dev/null | head -n 1)
             if [[ -n "$bed_file" ]]; then
                 cp "$bed_file" "$OUTPUT_ROOT/$DIR_BED/${sample_name}.bed"
+            fi
+            tag_bed_file=$(find "$sample_out" -name "*_tags.bed" 2>/dev/null | head -n 1)
+            if [[ -n "$tag_bed_file" ]]; then
+                mkdir -p "$OUTPUT_ROOT/$DIR_BED/TAG_BED"
+                cp "$tag_bed_file" "$OUTPUT_ROOT/$DIR_BED/TAG_BED/${sample_name}.bed"
             fi
 
             # 2b. Abundant-RNA sample report — append this child's rows into
@@ -1766,6 +1772,11 @@ if [[ "$DEMUX" == "yes" ]]; then
                     cp "$bed_file" "$OUTPUT_ROOT/$DIR_BED/${sample_name}.bed"
                     ((count++))
                 fi
+                tag_bed_file=$(find "$analysis_dir" -name "*_tags.bed" -not -name '._*' 2>/dev/null | head -n 1)
+                if [[ -n "$tag_bed_file" ]]; then
+                    mkdir -p "$OUTPUT_ROOT/$DIR_BED/TAG_BED"
+                    cp "$tag_bed_file" "$OUTPUT_ROOT/$DIR_BED/TAG_BED/${sample_name}.bed"
+                fi
 
                 # 2b. Abundant-RNA sample report — see matching block in the
                 # directory-mode collection branch above for details.
@@ -2253,6 +2264,7 @@ fi
 mkdir -p "$_WORK_ANALYSIS"
 cd "$_WORK_ANALYSIS" || exit 1
 LOG_FILE="${BASENAME}_analysis.log" # redirect log to inside analysis dir
+export LOG_FILE
 log_info "Working directory: $(pwd)"
 
 # 1. Preprocessing — dispatch based on mode
@@ -2327,7 +2339,16 @@ CLINK_DEDUP_BAM="Clink_Analysis/${BASENAME}_dedup.bam"
 run_clink_collapse "$BAM_FILE" "$CLINK_DEDUP_BAM" "$CLINK_UMI_LEN" "$THREADS" || true
 bedtools bamtobed -i "$CLINK_DEDUP_BAM" -split 2>/dev/null \
     | sort -k1,1 -k2,2n > "$COLLAPSED_BED"
-log_info "Collapsed BED (Clink): $COLLAPSED_BED ($(wc -l < "$COLLAPSED_BED") reads)"
+log_info "Collapsed BED (Clink): $COLLAPSED_BED ($(wc -l < "$COLLAPSED_BED") blocks)"
+
+# 3b-1. Tag BED for HOMER: one line per read, holding only the aligned block
+#       with the read's 5' end (see make_tag_bed in lib/modules.sh). The split
+#       BED above has one line per block, so HOMER would add a fake tag at each
+#       exon start. The split BED stays the input for coverage, the peak
+#       matrix and the CTK peak caller.
+TAG_BED="${BASENAME}_tags.bed"
+make_tag_bed "$CLINK_DEDUP_BAM" "$TAG_BED"
+log_info "Tag BED (one line per read): $TAG_BED ($(wc -l < "$TAG_BED") reads)"
 
 # 3b-2. Abundant-RNA sample report (opt-in, non-destructive — see modules.sh)
 if [[ -n "$REPORT_ABUNDANT_RNA" || -n "$REPORT_ABUNDANT_RNA_CUSTOM" ]]; then
@@ -2361,7 +2382,11 @@ run_coverage "${COLLAPSED_BED}" "${BASENAME}" "$GENOME_INDEX/chrom.sizes" "${CLI
 
 # 5. Peak Calling (Per-Sample)
 PEAK_DIR="${BASENAME}_peaks"
-run_peak_calling "${COLLAPSED_BED}" "${PEAK_DIR}" "$PEAK_DIST" "$PEAK_SIZE" "$FRAG_LEN"
+PEAK_INPUT_BED="$COLLAPSED_BED"
+if [[ "${PEAK_CALLER:-homer}" != "ctk" ]]; then
+    PEAK_INPUT_BED="$TAG_BED"
+fi
+run_peak_calling "${PEAK_INPUT_BED}" "${PEAK_DIR}" "$PEAK_DIST" "$PEAK_SIZE" "$FRAG_LEN"
 
 # 6. CIMS / CITS (CTK Analysis)
 if [[ "$RUN_CIMS" == "true" ]] || [[ "$RUN_CITS" == "true" ]]; then
@@ -2490,6 +2515,12 @@ if [[ "$CHILD_MODE" != "true" ]]; then
 
     # Collapsed BED
     mv "${COLLAPSED_BED:-${BASENAME}_collapsed.bed}" "$SINGLE_OUTPUT_ROOT/$SF_DIR_BED/" 2>/dev/null
+    if [[ -f "${TAG_BED:-${BASENAME}_tags.bed}" ]]; then
+        mkdir -p "$SINGLE_OUTPUT_ROOT/$SF_DIR_BED/TAG_BED"
+        # Same file name as the split BED, which is how PEAKittyPeak.sh pairs them
+        mv "${TAG_BED:-${BASENAME}_tags.bed}" \
+            "$SINGLE_OUTPUT_ROOT/$SF_DIR_BED/TAG_BED/${COLLAPSED_BED:-${BASENAME}_collapsed.bed}" 2>/dev/null
+    fi
     mv "${MUTATION_FILE:-${BASENAME}_mutations.txt}" "$SINGLE_OUTPUT_ROOT/$SF_DIR_BED/" 2>/dev/null
 
     # Abundant-RNA sample report
@@ -2609,6 +2640,7 @@ if [[ "$CHILD_MODE" != "true" ]]; then
         cat "$LOG_FILE" >> "$SINGLE_OUTPUT_ROOT/$SF_DIR_REPORTS/detailed_output.log" 2>/dev/null
         rm -f "$LOG_FILE"
         LOG_FILE="$SINGLE_OUTPUT_ROOT/$SF_DIR_REPORTS/detailed_output.log"
+        export LOG_FILE
     fi
 
     log_info "Output organized: $SINGLE_OUTPUT_ROOT"

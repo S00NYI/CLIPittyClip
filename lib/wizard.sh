@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # wizard.sh - Interactive configuration wizard for CLIPittyClip Suite
-# Part of CLIPittyClip v3.5
+# Part of CLIPittyClip v3.5.2
 
 # Colors for Wizard
 WIZ_CYAN='\033[1;36m'

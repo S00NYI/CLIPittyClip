@@ -1377,6 +1377,49 @@ run_collapse_pcr() {
     fi
 }
 
+# make_tag_bed DEDUP_BAM OUT_BED
+# Writes the BED that HOMER builds its tags from: one line per alignment,
+# holding only the aligned block that contains the read's 5' end (the first
+# block on + strand, the last block on - strand).
+#   - bamtobed -split gives one line per block, so each splice junction adds a
+#     fake tag at the downstream exon start.
+#   - bamtobed without -split gives one line per read, but the line spans the
+#     intron. HOMER counts tags as duplicates only when start, strand and
+#     length all match, so the long lengths change which tags it keeps.
+# Works one alignment at a time (no grouping by read name), so two alignments
+# of the same read never merge.
+make_tag_bed() {
+    local bam_in="$1"
+    local out_bed="$2"
+    bedtools bamtobed -bed12 -i "$bam_in" 2>/dev/null \
+        | awk 'BEGIN{OFS="\t"} {n=split($11,sz,","); split($12,st,","); if (sz[n]=="") n--;
+               if ($6=="+") {s=$2+st[1]; e=s+sz[1]} else {s=$2+st[n]; e=s+sz[n]}
+               print $1,s,e,$4,$5,$6}' \
+        | sort -k1,1 -k2,2n > "$out_bed"
+}
+
+# check_homer_tag_count TAG_DIR EXPECTED_TAGS [LABEL]
+# Warns when the tag directory holds a different number of tags than the
+# input BED has lines. With a one-line-per-read tag BED, that line count is
+# the read count, so the check confirms one tag per read.
+check_homer_tag_count() {
+    local tag_dir="$1"
+    local expected="$2"
+    local label="${3:-$(basename "$tag_dir")}"
+    local info="${tag_dir%/}/tagInfo.txt"
+    if [[ ! -f "$info" ]]; then
+        log_warning "HOMER tag check ($label): no tagInfo.txt in $tag_dir"
+        return 0
+    fi
+    local total
+    total=$(awk -F'\t' 'NR==2 {printf "%d", $3}' "$info")
+    if [[ "$total" == "$expected" ]]; then
+        log_info "HOMER tag check ($label): $total tags = $expected input lines"
+    else
+        log_warning "HOMER tag check ($label): $total tags but the input BED has $expected lines"
+    fi
+}
+
 # 4. Peak Calling (HOMER)
 run_peak_calling_homer() {
     local input_bed="$1"
@@ -1391,6 +1434,7 @@ run_peak_calling_homer() {
 
     echo "Running HOMER makeTagDirectory..." > "$log_file"
     makeTagDirectory "${out_dir}" "${input_bed}" -single -format bed >> "$log_file" 2>&1
+    check_homer_tag_count "${out_dir}" "$(wc -l < "${input_bed}" | tr -d ' ')" "$(basename "${out_dir}")"
 
     echo "Running HOMER findPeaks..." >> "$log_file"
     findPeaks "${out_dir}" -o auto -style factor -L 2 -localSize 1000 -strand separate \
@@ -3234,7 +3278,9 @@ run_clink_full() {
         run_clink_cims "$npz" "$prefix" "$min_cov" "$min_frac" "$fdr" || true
     fi
 
-    # Generate collapsed BED for peak calling (bedtools bamtobed -split handles spliced reads)
+    # Split collapsed BED for this Clink output folder. It is not used for
+    # HOMER peaks: those come from the tag BED (make_tag_bed) built in
+    # CLIPittyClip.sh / MAPittyMap.sh.
     update_status "Clink BED"
     local collapsed_bed="${out_dir}/${sample_name}_collapsed.bed"
     bedtools bamtobed -i "$dedup_bam" -split 2>/dev/null \

@@ -188,7 +188,7 @@ show_header() {
     echo "$separator_line"
     echo -e "${BLUE}CLIPittyClip: Modern CLIP-seq Analysis Pipeline${NC}"
     echo "$separator_line"
-    echo "Version 3.5.0"
+    echo "Version 3.5.2"
     echo "Author: Soon Yi (Updated by Antigravity)"
     echo "Last updated: $(date +'%Y-%m-%d')"
     echo "$separator_line"
@@ -196,7 +196,7 @@ show_header() {
     {
         echo "$separator_line"
         echo "CLIPittyClip: Modern CLIP-seq Analysis Pipeline"
-        echo "Version 3.5.0"
+        echo "Version 3.5.2"
         echo "$separator_line"
     } >> "${LOG_FILE}"
 }
