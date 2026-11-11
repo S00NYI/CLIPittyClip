@@ -7,6 +7,10 @@
 
 A comprehensive, single-command CLIP-seq analysis pipeline from raw FASTQ to peaks and crosslink sites. Supports iCLIP, irCLIP, eCLIP, PAR-CLIP, and related variant protocols.
 
+For more information, please see our manuscript. If you use CLIPittyClip in your work, please cite:
+
+> Yi S, Luna JM. CLIPittyClip: a single-command framework for CLIP sequencing data analysis. *NAR Genomics and Bioinformatics*. 2026;8(4):lqag138. [https://doi.org/10.1093/nargab/lqag138](https://academic.oup.com/nargab/article/8/4/lqag138/9026364)
+
 ---
 
 ## Table of Contents
@@ -620,16 +624,12 @@ RPM is calculated as `(reads mapped to element / total input reads) × 10⁶`.
 
 ## Changelog
 
-### Unreleased
-
-**Fixed**
-- **Clink CIMS no longer runs out of RAM on large pileups.** `cims.py` loaded the whole pileup and computed the genome-wide background rates on genome-size arrays, about 66 bytes per position (22.7 GB for a pig group pileup). A human group pileup was killed by the system for lack of memory. `cims.py` now reads a pileup one chromosome and strand at a time and rebuilds the genome-wide background rates exactly from per-chromosome parts. Output files are byte-identical. Peak RAM on the pig group pileup: 22.7 GB → 0.8 GB, at the same run time. `--bam` input is unchanged. (S00NYI)
-
 ### v3.5.2
 
 **Fixed**
 - **HOMER peaks no longer get fake tags from splice-junction reads.** Since v3.3 (Clink integration, `44d642d`), HOMER built its tags from `bedtools bamtobed -split`, which writes one line per aligned block. Each read across a junction added a tag at the first base of the downstream exon, where no read started, and HOMER called peaks on those stacks. HOMER now builds tags from a separate tag BED (`02_COLLAPSED_BED/TAG_BED/`, `2_BED/TAG_BED/` in MAPittyMap): one line per read, holding only the block with the read's 5' end. This matches HOMER reading the BAM with `-format sam`. The split BED still feeds the bedgraphs, the peak matrix and the CTK peak caller. Clink and CTK crosslink sites are not affected. The log now checks that HOMER's tag total equals the read count. **HOMER peak sets from spliced data will change**: peaks at the start of exons drop, and the total peak count can drop. (S00NYI)
 - **`PEAKittyPeak.sh` log lines now reach the run log.** `CLIPittyClip.sh` set `LOG_FILE` but did not export it, so `PEAKittyPeak.sh` wrote its log lines, including the HOMER tag check, to `/dev/null`. `LOG_FILE` is now exported for the run log and the per-sample logs. Output files do not change. (S00NYI)
+- **Clink CIMS no longer runs out of RAM on large pileups.** `cims.py` loaded the whole pileup and computed the genome-wide background rates on genome-size arrays, so memory grew with genome size and large group pileups could be killed for lack of memory. `cims.py` now reads a pileup one chromosome and strand at a time and rebuilds the genome-wide background rates exactly from per-chromosome parts. Output files are byte-identical, run time is unchanged, and peak RAM drops by more than an order of magnitude. `--bam` input is unchanged. (S00NYI)
 
 ### v3.5.1
 
@@ -646,7 +646,7 @@ RPM is calculated as `(reads mapped to element / total input reads) × 10⁶`.
 
 **Fixed**
 - Batch mode dropped `--no-chr-filter` for per-sample runs, and `pileup.py` applied its own canonical-chromosome filter, so scaffold-level assemblies gave an empty pileup. Both now honor the flag (`--all-chroms`). (S00NYI)
-- Clink pileup: windows are bounded by read count (a 16 kb rDNA contig at extreme depth drove one worker to ~30 GB), a dead worker now raises an error instead of hanging, and an off-by-one that dropped about one read per window boundary is fixed. Output verified identical across window sizes. (S00NYI)
+- Clink pileup: windows are bounded by read count (a short, very deep contig such as rDNA could drive one worker to very high memory), a dead worker now raises an error instead of hanging, and an off-by-one that dropped about one read per window boundary is fixed. Output verified identical across window sizes. (S00NYI)
 - Batch dispatch passed quoted values (`--gtf`, `--rmsk`, `--peak-caller-args`, ...) to per-sample runs with literal quote characters; per-sample runs now receive them intact.
 - Groups-file handling hardened: line endings (CRLF and old-Mac CR-only) are now auto-detected and sanitized, and sample names in the groups file may include or omit `.fastq`/`.fastq.gz`/`.fq`/`.fq.gz` extensions — both now match correctly against internal sample identifiers.
 - Bowtie2 + crosslink-site warning reworded: crosslink positions stay valid (`--end-to-end`); the cost is junction-spanning reads. Now also shown for `--run-clink`, once. (S00NYI)
