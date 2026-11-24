@@ -1,33 +1,58 @@
 Flag	Short	Long	Type	Default	Required	Error Handling	Category
-Input file	-i	--input-file	path	—	Yes*	Exits if not found	Input/Output
-Input dir	-d	--input-dir	path	—	Yes*	Exits if not found	Input/Output
-Genome index	-x	--index	path	—	Yes	Exits if not found	Input/Output
-Output name	-o	--output	string	derived from input	No	Auto-derived	Input/Output
-Keep files	-k	--keep	bool	no	No	—	Input/Output
-Threads	-t	--threads	int	1	No	—	Processing
-Aligner	-m	--mapper	string	star	No	Validates star/bowtie2	Processing
-eCLIP mode	—	--eclip	bool	false	No	—	Processing
-Adapter	-a	--adapter	string	L32	No	—	Processing
-UMI length	-u	--umi-length	int	—	No	Auto-detected for eCLIP	Processing
-Verbose	-v	--verbose	bool	false	No	—	Processing
-Barcode file	-b	--barcodes	path	—	No	Enables demultiplexing	Demux
+Input file	-i	--input-file	path	—	Yes (or -d)	Exits if not found; exits if used with -d	Input/Output
+Input dir	-d	--input-dir	path	—	Yes (or -i)	Exits if not found or if it holds no .fastq(.gz)/.fq(.gz) files	Input/Output
+Genome index	-x	--index	path	—	Yes	Exits if missing	Input/Output
+Genome FASTA	—	--genome-fasta	path	—	No	Exits if not found; warns if CIMS/CITS run without it	Input/Output
+Output name	-o	--output	string	INPUT_output	No	Name: next to input; absolute path: used as given	Input/Output
+Keep files	-k	--keep	bool	off	No	—	Input/Output
+Threads	-t	--threads	int	1	No	Capped to cores − 1 with a warning	Processing
+Aligner	-m	--mapper	string	star	No	Values other than bowtie2 run STAR; warns if bowtie2 is used with crosslink tracks	Processing
+Verbose	-v	--verbose	bool	off	No	—	Processing
+Low memory	—	--low-memory	bool	off	No	—	Processing
+UMI length	-u	--umi-length	int	—	No	Ignored with --eclip	Preprocessing
+Adapter	-a	--adapter	string	L32	No	Accepts a DNA sequence or L32, L3, L3MOD, L7 (L19), SRA3; exits on anything else; ignored with --eclip	Preprocessing
+Barcode length	—	--bc-len	int	from -b	No	Exits if it conflicts with the barcode file	Preprocessing
+Spacer length	—	--spacer-len	int	0	No	—	Preprocessing
+Barcode first	—	--bc-first	bool	off	No	—	Preprocessing
+3' trim	—	--trim3	int	0	No	—	Preprocessing
+Min quality	—	--min-qual	int	30	No	—	Preprocessing
+Disable dedup	—	--no-dedup	bool	off (dedup on)	No	—	Preprocessing
+eCLIP mode	—	--eclip	pe|se	off	No	Exits unless pe or se	Preprocessing
+PAR-CLIP mode	—	--parclip	bool	off	No	Exits without -u	Preprocessing
+PAR-CLIP adapters	—	--parclip-adapters	path	lib/parclip_adapters.fa	No	Exits if not found	Preprocessing
+Barcode file	-b	--barcodes	path	—	No	Enables demultiplexing; exits if barcode length cannot be read	Demux
 Demux mismatches	—	--demux-mismatches	int	1	No	—	Demux
-Disable dedup	—	--no-dedup	bool	—	No	Default: dedup ON	Dedup/Align
-Align mismatches	—	--align-mismatches	int	2	No	—	Dedup/Align
-Filter ncRNA	—	--filter-ncrna	bool	false	No	Warns if index missing	Dedup/Align
-Filter chr	—	--no-chr-filter	bool	true	No	—	Dedup/Align
-Run CTK	—	--run-ctk	bool	—	No	—	CTK
-Run CIMS	—	--run-cims	bool	—	No	—	CTK
-Run CITS	—	--run-cits	bool	—	No	—	CTK
+Align mismatches	—	--align-mismatches	int	2	No	STAR only	Alignment/Filters
+Disable chr filter	—	--no-chr-filter	bool	off (filter on)	No	—	Alignment/Filters
+Repeat filter	—	--filter-repeat	bool	off	No	Warns and skips if no repeat index in INDEX or INDEX/Repeat	Alignment/Filters
+Abundant RNA report	—	--report-abundant-rna	list	off (bare flag = all)	No	Exits without --gtf; exits if tRNA is in scope without --rmsk or --trna-bed	Reports
+Custom RNA report	—	--report-abundant-rna-custom	name:path list	off	No	Exits without --gtf	Reports
+GTF	—	--gtf	path	—	No	Exits if not found	Reports
+RepeatMasker table	—	--rmsk	path	—	No	Exits if not found	Reports
+tRNA BED	—	--trna-bed	path	—	No	Exits if not found; overrides --rmsk	Reports
+Peak caller	—	--peak-caller	string	homer	No	Values other than ctk run HOMER	Peaks
+Peak caller args	—	--peak-caller-args	string	—	No	—	Peaks
+Run CIMS+CITS	—	--run-cims-cits	bool	off	No	—	CTK
+Run CIMS	—	--run-cims	bool	off	No	—	CTK
+Run CITS	—	--run-cits	bool	off	No	—	CTK
+Run CTK (deprecated)	—	--run-ctk	bool	off	No	Alias for --run-cims-cits	CTK
 CIMS iterations	—	--cims-iter	int	5	No	—	CTK
 CIMS FDR	—	--cims-fdr	float	0.05	No	—	CTK
 CITS p-value	—	--cits-pval	float	0.05	No	—	CTK
 CITS gap	—	--cits-gap	int	25	No	-1 disables clustering	CTK
-Flank size	-f	--flank	int	10	No	—	CTK
-No motif	—	--no-motif	bool	—	No	—	CTK
+Run Clink	—	--run-clink	bool	off	No	Exits if pysam or umi_tools is missing	Clink
+Clink UMI length	—	--clink-umi-len	int	auto	No	—	Clink
+Clink FDR	—	--clink-fdr	float	0.05	No	—	Clink
+Clink min coverage	—	--clink-min-cov	int	5	No	—	Clink
+Clink multi-map	—	--clink-multi-map	bool	off	No	—	Clink
+Clink threads	—	--clink-threads	int	min(-t, 8)	No	—	Clink
+Crosslink bigWig	—	--xl-bigwig	bool	off	No	Needs bedGraphToBigWig in PATH	Clink
+Flank	-f	--flank	int	10	No	—	Motif
+No motif	—	--no-motif	bool	off	No	—	Motif
 Groups file	-g	--groups	path	—	No	Exits if not found	Grouping
-CTK group mode	—	--ctk-group	bool	false	No	Warns if no --cims/--cits	Grouping
+Group xlsite	—	--group-xlsite	bool	off	No	Exits without -g	Grouping
+CTK group (deprecated)	—	--ctk-group	bool	off	No	Alias for --group-xlsite, with a warning	Grouping
+Sample	-s	--sample	int	all reads	No	—	Other
+Notification	—	--notification	bool	off	No	—	Other
+Wizard	-w	--wizard	bool	off	No	--advanced is an alias	Other
 Help	-h	--help	—	—	No	Shows help, exits	Other
-Notification	—	--notification	bool	false	No	—	Other
-Wizard	-w	--wizard	bool	—	No	—	Other
-Sample	-s	--sample	int	—	No	—	Other

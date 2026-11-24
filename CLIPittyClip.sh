@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # CLIPittyClip.sh - Modernized CLIP-seq Analysis Pipeline
-# Version 3.5.2
+# Version 3.5.3
 
 # ------------------------------------------------------------------
 # Initialization & Setup
@@ -47,7 +47,7 @@ function show_usage {
     echo ""
     echo "Usage: $0 [-i <input.fastq.gz> | -d <input_dir>] -x <index_dir> [options]"
     echo ""
-    echo "CLIPittyClip v3.5.2 - Modern CLIP-seq Analysis Pipeline"
+    echo "CLIPittyClip v3.5.3 - Modern CLIP-seq Analysis Pipeline"
     echo ""
     echo "REQUIRED INPUT (Choose one):"
     echo "  -i, --input-file <path>  Input FASTQ file (gzipped supported)"
@@ -76,7 +76,7 @@ function show_usage {
     echo "                             (e.g. iCLIP3's 3nt UMI2). Trimmed and discarded, not captured"
     echo "                             into the dedup UMI. (default: 0)"
     echo "  --min-qual <int>         fastp average quality threshold (default: 30)"
-    echo "  -a, --adapter <str>      3' adapter sequence (default: L32)"
+    echo "  -a, --adapter <str>      3' adapter sequence, or a name: L32, L3, L3MOD, L7 (L19), SRA3 (default: L32)"
     echo "  --no-dedup               Disable FASTQ deduplication (default: ON)"
     echo "  --low-memory             Use flat-RAM sort-based dedup engine instead of hash-based"
     echo "                           (recommended above 30M reads; hash engine warns past this)"
@@ -223,7 +223,7 @@ if [[ $# -eq 0 ]]; then
     # Only show header if we are going to exit anyway
     echo "$separator_line"
     echo -e "${BLUE}CLIPittyClip: Modern CLIP-seq Analysis Pipeline${NC}"
-    echo "Version 3.5.2"
+    echo "Version 3.5.3"
     echo "Author: Soon Yi (Updated by Antigravity)"
     echo "Last updated: $(date +'%Y-%m-%d')"
     echo "$separator_line"
@@ -358,6 +358,7 @@ if [[ "$WIZARD_MODE" == "true" ]]; then
     [[ -n "$WIZ_BC_LEN" ]]                && BC_LEN="$WIZ_BC_LEN"
     SPACER_LEN="$WIZ_SPACER_LEN"
     [[ "$WIZ_BC_FIRST" == "true" ]]       && BC_FIRST="true"
+    [[ -n "$WIZ_TRIM3_LEN" ]]             && TRIM3_LEN="$WIZ_TRIM3_LEN"
     FASTP_MIN_QUAL="$WIZ_MIN_QUAL"
     [[ "$WIZ_NO_DEDUP" == "true" ]]       && DEDUP_MODE="false"
     ALIGN_MISMATCHES="$WIZ_ALIGN_MISMATCHES"
@@ -406,6 +407,9 @@ if [[ "$WIZARD_MODE" == "true" ]]; then
     [[ "$WIZ_NOTIFICATION" == "true" ]]   && NOTIFY_MODE="true"
     [[ "$WIZ_XL_BIGWIG" == "true" ]]      && XL_BIGWIG="true"
 fi
+
+# Convert an adapter name (for example L32 from the wizard) to its sequence
+ADAPTER_3=$(resolve_adapter "$ADAPTER_3") || exit 1
 
 # ------------------------------------------------------------------
 # Path Resolution (must happen before log files are opened)
@@ -464,9 +468,10 @@ if [[ -n "$INPUT_DIR" ]]; then
         exit 1
     fi
     INPUT_DIR="$(cd "$INPUT_DIR" && pwd)"
-    FASTQ_COUNT=$(ls "$INPUT_DIR"/*.fastq.gz "$INPUT_DIR"/*.fq.gz 2>/dev/null | wc -l)
+    FASTQ_COUNT=$(ls "$INPUT_DIR"/*.fastq.gz "$INPUT_DIR"/*.fq.gz \
+                     "$INPUT_DIR"/*.fastq "$INPUT_DIR"/*.fq 2>/dev/null | wc -l)
     if [[ "$FASTQ_COUNT" -eq 0 ]]; then
-        echo "[ERROR] No .fastq.gz or .fq.gz files found in: $INPUT_DIR" >&2
+        echo "[ERROR] No .fastq.gz, .fq.gz, .fastq, or .fq files found in: $INPUT_DIR" >&2
         exit 1
     fi
 fi
@@ -774,7 +779,7 @@ ulimit -n 2048 2>/dev/null || true
 if [[ "$CHILD_MODE" != "true" ]]; then
     # Print Clean Banner to Console
     console_msg "********************************************************************************"
-    console_msg "CLIPittyClip Standard Pipeline v3.5.2"
+    console_msg "CLIPittyClip Standard Pipeline v3.5.3"
     console_msg "Started: $(date '+%Y-%m-%d %H:%M:%S')"
     if [[ -n "$INPUT_DIR" ]]; then
         console_msg "Input Directory: $INPUT_DIR"
@@ -785,13 +790,11 @@ if [[ "$CHILD_MODE" != "true" ]]; then
     
     # eCLIP Mode Banner
     if [[ "$ECLIP_MODE" == "pe" ]]; then
-        console_msg "╔══════════════════════════════════════════════════════════════════╗"
-        console_msg "║                  eCLIP PAIRED-END MODE ENABLED                   ║"
-        console_msg "╠══════════════════════════════════════════════════════════════════╣"
-        console_msg "║  • Input: Read 2, post-eclipdemux format (UMI in read header)    ║"
-        console_msg "║  • Adapter trimming: Using eCLIP inline-barcode + TruSeq R2      ║"
-        console_msg "║  • Deduplication: UMI-aware collapse (CTK-compatible)            ║"
-        console_msg "╚══════════════════════════════════════════════════════════════════╝"
+        print_box -t "eCLIP PAIRED-END MODE ENABLED" \
+            " • Input: Read 2, post-eclipdemux format (UMI in read header)" \
+            " • Adapter trimming: Using eCLIP inline-barcode + TruSeq R2" \
+            " • Deduplication: UMI-aware collapse (CTK-compatible)" \
+            | while IFS= read -r _l; do console_msg "$_l"; done
         if [[ "$UMI_LEN" -gt 0 ]]; then
             console_msg "[WARNING] --eclip pe: -u ${UMI_LEN} will be ignored (UMI length auto-detected from header)"
         fi
@@ -800,28 +803,24 @@ if [[ "$CHILD_MODE" != "true" ]]; then
         fi
         console_msg "Threads: $THREADS | Mode: eCLIP PE (post-eclipdemux R2)"
     elif [[ "$ECLIP_MODE" == "se" ]]; then
-        console_msg "╔══════════════════════════════════════════════════════════════════╗"
-        console_msg "║                  eCLIP SINGLE-END MODE ENABLED                   ║"
-        console_msg "╠══════════════════════════════════════════════════════════════════╣"
-        console_msg "║  • Input: Raw Read 1, seCLIP format (UMI in read sequence)       ║"
-        console_msg "║  • UMI length: 10nt (hardcoded, Blue et al. 2022)               ║"
-        console_msg "║  • Adapter: TruSeq R1 (AGATCGGAAGAGCACACGTCTGAACTCCAGTCAC)      ║"
-        console_msg "╚══════════════════════════════════════════════════════════════════╝"
+        print_box -t "eCLIP SINGLE-END MODE ENABLED" \
+            " • Input: Raw Read 1, seCLIP format (UMI in read sequence)" \
+            " • UMI length: 10nt (hardcoded, Blue et al. 2022)" \
+            " • Adapter: TruSeq R1 (AGATCGGAAGAGCACACGTCTGAACTCCAGTCAC)" \
+            | while IFS= read -r _l; do console_msg "$_l"; done
         if [[ "$ADAPTER_3" != "GTGTCAGTCACTTCCAGCGG" ]]; then
             console_msg "[WARNING] --eclip se: -a will be ignored (TruSeq R1 adapter is hardcoded)"
         fi
         console_msg "Threads: $THREADS | Mode: eCLIP SE (raw seCLIP R1)"
     elif [[ "$PARCLIP_MODE" == "true" ]]; then
-        console_msg "╔══════════════════════════════════════════════════════════════════╗"
-        console_msg "║                     PAR-CLIP MODE ENABLED                        ║"
-        console_msg "╠══════════════════════════════════════════════════════════════════╣"
-        console_msg "║  • Layout: [UMI][READ][2nt spacer][6mer barcode][adapter]        ║"
-        console_msg "║  • Pass 1: UMI extraction + barcode+adapter trimming             ║"
-        console_msg "║  • Pass 2: 2nt spacer trim                                       ║"
-        console_msg "║  • Primary signal: T>C substitutions (use --run-clink for CIMS)  ║"
         _parclip_fa="${PARCLIP_ADAPTERS:-lib/parclip_adapters.fa}"
-        console_msg "║  • Adapter FASTA: $(basename "$_parclip_fa" | head -c 50)$(printf '%*s' $((50 - ${#_parclip_fa})) '')  ║"
-        console_msg "╚══════════════════════════════════════════════════════════════════╝"
+        print_box -t "PAR-CLIP MODE ENABLED" \
+            " • Layout: [UMI][READ][2nt spacer][6mer barcode][adapter]" \
+            " • Pass 1: UMI extraction + barcode+adapter trimming" \
+            " • Pass 2: 2nt spacer trim" \
+            " • Primary signal: T>C substitutions (use --run-clink for CIMS)" \
+            " • Adapter FASTA: $(basename "$_parclip_fa")" \
+            | while IFS= read -r _l; do console_msg "$_l"; done
         if [[ "${UMI_LEN:-0}" -eq 0 ]]; then
             console_msg "[ERROR] --parclip requires -u <umi_length>. Specify your UMI length (e.g. -u 4)."
             exit 1
@@ -2203,10 +2202,9 @@ log_info "Genome Index: $GENOME_INDEX"
 log_info "Threads: $THREADS"
 
 # Set Basename
-BASENAME=$(basename "$INPUT_FILE" .fastq.gz)
-if [[ "$BASENAME" == "$INPUT_FILE" ]]; then
-    BASENAME=$(basename "$INPUT_FILE" .fq.gz)
-fi
+BASENAME=$(basename "$INPUT_FILE")
+BASENAME="${BASENAME%.fastq.gz}"; BASENAME="${BASENAME%.fq.gz}"
+BASENAME="${BASENAME%.fastq}";    BASENAME="${BASENAME%.fq}"
 if [[ -n "$EXP_ID" ]]; then
     BASENAME="$(basename "$EXP_ID")"
 fi

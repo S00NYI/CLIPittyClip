@@ -184,11 +184,116 @@ check_repeat_index() {
     return 1
 }
 
+# Convert a 3' adapter name to its sequence. A DNA sequence passes through.
+# Names follow docs/CLIP_Read_Arch_index_v2.pdf. Prints the sequence on stdout.
+resolve_adapter() {
+    local name
+    name=$(echo "$1" | tr '[:lower:]' '[:upper:]')
+    case "$name" in
+        L32)                 echo "GTGTCAGTCACTTCCAGCGG" ;;
+        L3)                  echo "TGAGATCGGAAGAGCGGTTCAG" ;;
+        L3MOD)               echo "AGATCGGAAGAGCGGTTCAG" ;;   # irCLIP modified L3
+        L7|L19|INVRIL19)     echo "AGATCGGAAGAGCACACGTC" ;;
+        SRA3)                echo "TCGTATGCCGTCTTCTGCTTG" ;;
+        *)
+            if [[ "$name" =~ ^[ACGTN]+$ ]]; then
+                echo "$name"
+            else
+                echo "[ERROR] Unknown 3' adapter: '$1'. Use a DNA sequence or one of these names: L32, L3, L3MOD, L7 (L19), SRA3." >&2
+                return 1
+            fi
+            ;;
+    esac
+}
+
+# print_box [-s single|double] [-t TITLE] [-c COLOR] [-i INDENT] [-w MIN_WIDTH] [-C] LINE...
+# Draws a box that fits the widest line, up to the terminal width.
+#   -s  border style (default: double)
+#   -t  title: in the top border (single), or a centered first row (double)
+#   -c  border color, for example "$WIZ_CYAN"
+#   -i  spaces before the box
+#   -w  minimum inner width
+#   -C  center every line
+# A LINE of "---" draws a divider. Lines can hold color codes ('\033[1m').
+# A line wider than the terminal is cut in the middle with "...".
+print_box() {
+    local style=double title="" color="" indent=0 minw=0 center=0 opt OPTIND=1
+    while getopts "s:t:c:i:w:C" opt; do
+        case "$opt" in
+            s) style="$OPTARG" ;; t) title="$OPTARG" ;; c) color="$OPTARG" ;;
+            i) indent="$OPTARG" ;; w) minw="$OPTARG" ;; C) center=1 ;;
+        esac
+    done
+    shift $((OPTIND - 1))
+
+    local h v tl tr bl br ml mr
+    if [[ "$style" == "single" ]]; then
+        h='─'; v='│'; tl='┌'; tr='┐'; bl='└'; br='┘'; ml='├'; mr='┤'
+    else
+        h='═'; v='║'; tl='╔'; tr='╗'; bl='╚'; br='╝'; ml='╠'; mr='╣'
+    fi
+    local nc=''; [[ -n "$color" ]] && nc='\033[0m'
+    local pad; pad=$(printf '%*s' "$indent" '')
+    local cols="${COLUMNS:-$(tput cols 2>/dev/null || echo 80)}"
+    [[ "$cols" =~ ^[0-9]+$ ]] || cols=80
+
+    # Inner width = widest visible line (color codes removed).
+    local -a plains=()
+    local line p w="$minw"
+    for line in "$@"; do
+        p=$(printf '%s' "$line" | sed -e 's/\\033\[[0-9;]*m//g' -e $'s/\033\\[[0-9;]*m//g')
+        plains+=("$p")
+        (( ${#p} > w )) && w=${#p}
+    done
+    (( ${#title} + 2 > w )) && w=$(( ${#title} + 2 ))
+    local maxw=$(( cols - indent - 4 ))
+    (( maxw < 10 )) && maxw=10
+    (( w > maxw )) && w=$maxw
+
+    local rule; rule=$(printf '%*s' $(( w + 2 )) ''); rule="${rule// /$h}"
+
+    # _box_row TEXT PLAIN: one padded row
+    _box_row() {
+        local text="$1" plain="$2" fill left
+        if (( ${#plain} > w )); then
+            local keep=$(( w - 3 ))
+            plain="${plain:0:$(( keep - keep / 2 ))}...${plain:$(( ${#plain} - keep / 2 ))}"
+            text="$plain"
+        fi
+        fill=$(( w - ${#plain} ))
+        left=0; (( center )) && left=$(( fill / 2 ))
+        printf '%s%b%s%b %*s%b%*s %b%s%b\n' "$pad" "$color" "$v" "$nc" "$left" '' "$text" $(( fill - left )) '' "$color" "$v" "$nc"
+    }
+
+    if [[ -n "$title" && "$style" == "single" ]]; then
+        local tail; tail=$(printf '%*s' $(( w - ${#title} - 1 )) ''); tail="${tail// /$h}"
+        printf '%s%b%s%s %s %s%s%b\n' "$pad" "$color" "$tl" "$h" "$title" "$tail" "$tr" "$nc"
+    else
+        printf '%s%b%s%s%s%b\n' "$pad" "$color" "$tl" "$rule" "$tr" "$nc"
+        if [[ -n "$title" ]]; then
+            local save=$center; center=1
+            _box_row "\033[1m${title}\033[0m" "$title"
+            center=$save
+            printf '%s%b%s%s%s%b\n' "$pad" "$color" "$ml" "$rule" "$mr" "$nc"
+        fi
+    fi
+    local i
+    for (( i = 0; i < ${#plains[@]}; i++ )); do
+        if [[ "${plains[$i]}" == "---" ]]; then
+            printf '%s%b%s%s%s%b\n' "$pad" "$color" "$ml" "$rule" "$mr" "$nc"
+        else
+            _box_row "${@:$((i + 1)):1}" "${plains[$i]}"
+        fi
+    done
+    printf '%s%b%s%s%s%b\n' "$pad" "$color" "$bl" "$rule" "$br" "$nc"
+    unset -f _box_row
+}
+
 show_header() {
     echo "$separator_line"
     echo -e "${BLUE}CLIPittyClip: Modern CLIP-seq Analysis Pipeline${NC}"
     echo "$separator_line"
-    echo "Version 3.5.2"
+    echo "Version 3.5.3"
     echo "Author: Soon Yi (Updated by Antigravity)"
     echo "Last updated: $(date +'%Y-%m-%d')"
     echo "$separator_line"
@@ -196,7 +301,7 @@ show_header() {
     {
         echo "$separator_line"
         echo "CLIPittyClip: Modern CLIP-seq Analysis Pipeline"
-        echo "Version 3.5.2"
+        echo "Version 3.5.3"
         echo "$separator_line"
     } >> "${LOG_FILE}"
 }
