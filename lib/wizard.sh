@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # wizard.sh - Interactive configuration wizard for CLIPittyClip Suite
-# Part of CLIPittyClip v3.5.2
+# Part of CLIPittyClip v3.5.3
 
 # Colors for Wizard
 WIZ_CYAN='\033[1;36m'
@@ -26,9 +26,7 @@ _play_wizard_intro() {
 print_wizard_header() {
     local title="$1"
     clear
-    echo -e "${WIZ_CYAN}╔════════════════════════════════════════════════════════════════╗${WIZ_NC}"
-    echo -e "${WIZ_CYAN}║${WIZ_NC}                    ${WIZ_BOLD}${title}${WIZ_NC}"
-    echo -e "${WIZ_CYAN}╚════════════════════════════════════════════════════════════════╝${WIZ_NC}"
+    print_box -c "$WIZ_CYAN" -w 62 -C "${WIZ_BOLD}${title}${WIZ_NC}"
     echo ""
 }
 
@@ -46,17 +44,14 @@ print_doc_box() {
     local docs=("$@")
     
     echo ""
-    echo -e "${WIZ_YELLOW}┌────────────────────────────────────────────────────────────────┐${WIZ_NC}"
-    echo -e "${WIZ_YELLOW}│${WIZ_NC}                         ${WIZ_BOLD}DOCUMENTATION${WIZ_NC}                         ${WIZ_YELLOW}│${WIZ_NC}"
-    echo -e "${WIZ_YELLOW}├────────────────────────────────────────────────────────────────┤${WIZ_NC}"
-    echo -e "${WIZ_YELLOW}│${WIZ_NC} The prompts below show commonly modified options.              ${WIZ_YELLOW}│${WIZ_NC}"
-    echo -e "${WIZ_YELLOW}│${WIZ_NC} Additional options can be passed via command line.             ${WIZ_YELLOW}│${WIZ_NC}"
-    echo -e "${WIZ_YELLOW}│${WIZ_NC}                                                                ${WIZ_YELLOW}│${WIZ_NC}"
-    echo -e "${WIZ_YELLOW}│${WIZ_NC} For full documentation, see:                                   ${WIZ_YELLOW}│${WIZ_NC}"
+    local _rows=("The prompts below show commonly modified options."
+                 "Additional options can be passed via command line."
+                 ""
+                 "For full documentation, see:")
     for doc in "${docs[@]}"; do
-        printf "${WIZ_YELLOW}│${WIZ_NC}  • %-60s ${WIZ_YELLOW}│${WIZ_NC}\n" "$doc"
+        _rows+=(" • $doc")
     done
-    echo -e "${WIZ_YELLOW}└────────────────────────────────────────────────────────────────┘${WIZ_NC}"
+    print_box -s single -c "$WIZ_YELLOW" -w 62 -t "DOCUMENTATION" "${_rows[@]}"
     echo ""
 }
 
@@ -212,6 +207,37 @@ prompt_select() {
     done
 }
 
+# Prompt for the 3' adapter from the adapters in docs/CLIP_Read_Arch_index_v2.pdf.
+# Sets var_name to an adapter name (L32, L3, ...) or a custom DNA sequence.
+# resolve_adapter (lib/utils.sh) converts the name to a sequence at run time.
+prompt_adapter() {
+    local var_name="$1"
+    local _sel _seq
+    prompt_select "Select the 3' adapter:" _sel \
+        "L32    GTGTCAGTCACTTCCAGCGG    coCLIP (default)" \
+        "L3     TGAGATCGGAAGAGCGGTTCAG  iCLIP, iCLIP2" \
+        "L3MOD  AGATCGGAAGAGCGGTTCAG    irCLIP (modified L3)" \
+        "L7     AGATCGGAAGAGCACACGTC    iCLIP3, irCLIP2, eCLIP (also called InvRiL19)" \
+        "SRA3   TCGTATGCCGTCTTCTGCTTG   BrdU-CLIP, legacy PAR-CLIP and HITS-CLIP" \
+        "Custom sequence"
+    case "$_sel" in
+        1) eval "$var_name=L32" ;;
+        2) eval "$var_name=L3" ;;
+        3) eval "$var_name=L3MOD" ;;
+        4) eval "$var_name=L7" ;;
+        5) eval "$var_name=SRA3" ;;
+        6)
+            while true; do
+                read -p "  Enter the 3' adapter sequence: " _seq || { echo -e "${WIZ_RED}  ✗ Input stream closed — aborting wizard.${WIZ_NC}" >&2; exit 1; }
+                if resolve_adapter "$_seq" > /dev/null; then
+                    eval "$var_name=\"$_seq\""
+                    break
+                fi
+            done
+            ;;
+    esac
+}
+
 # Print configuration summary
 print_summary_box() {
     echo ""
@@ -262,10 +288,11 @@ _cc_knob_registry() {
     cat <<'EOF'
 1|threads|Threads|WIZ_THREADS|int|1|Number of parallel threads|-t
 1|umi_len|UMI Length|WIZ_UMI_LEN|int|0|UMI length in bp (0 if none)|-u
-1|adapter|3' Adapter|WIZ_ADAPTER|str|L32|3' adapter sequence (L32 default)|-a
+1|adapter|3' Adapter|WIZ_ADAPTER|str|L32|3' adapter: L32, L3, L3MOD, L7, SRA3, or a sequence|-a
 1|bc_len|Barcode Length|WIZ_BC_LEN|str||Barcode length (blank=auto-detect)|--bc-len
 1|spacer_len|Spacer Length|WIZ_SPACER_LEN|int|0|Spacer length trimmed after barcode|--spacer-len
 1|bc_first|Barcode First|WIZ_BC_FIRST|yn|false|Layout [BC][UMI] not [UMI][BC]|--bc-first
+1|trim3_len|3' Trim|WIZ_TRIM3_LEN|int|0|Bases trimmed from the 3' end after adapter removal (iCLIP3: 3)|--trim3
 1|min_qual|fastp Min Quality|WIZ_MIN_QUAL|int|30|fastp average quality threshold|--min-qual
 1|no_dedup|Disable Dedup|WIZ_NO_DEDUP|yn|false|Skip PCR deduplication|--no-dedup
 1|align_mismatches|Align Mismatches|WIZ_ALIGN_MISMATCHES|int|2|Max STAR alignment mismatches|--align-mismatches
@@ -296,7 +323,7 @@ _cc_knob_registry() {
 7|group_xlsite|Group Xlsite|WIZ_GROUP_XLSITE|yn|false|Group crosslink-site analysis (CTK and/or Clink)|--group-xlsite
 8|output|Output Name|WIZ_OUTPUT|str||Output folder name (blank=INPUT_output)|-o
 8|keep|Keep Intermediate|WIZ_KEEP|yn|false|Keep intermediate files|-k
-8|sample_size|Sample Size|WIZ_SAMPLE_SIZE|str||Test mode: process N reads only|-s
+8|sample_size|Sample Size|WIZ_SAMPLE_SIZE|int||Test mode: process N reads only|-s
 8|notification|Notifications|WIZ_NOTIFICATION|yn|false|System notifications on completion|--notification
 EOF
 }
@@ -327,8 +354,8 @@ _cc_should_show_category() {
 # Return 0 if knob is active for current WIZ_* state
 _cc_should_show_knob() {
     case "$1" in
-        bc_len|spacer_len|bc_first|demux_mismatches)
-            [[ "$WIZ_MODE" == "pooled" || "$WIZ_MODE" == "directory" ]] ;;
+        demux_mismatches)
+            [[ "$WIZ_MODE" == "pooled" ]] ;;
         peak_size|frag_len)
             [[ "$WIZ_PEAK_CALLER" == "homer" ]] ;;
         *) return 0 ;;
@@ -430,6 +457,10 @@ _cc_edit_knob() {
     type=$(_cc_field "$key" 5)
     def=$(_cc_field "$key" 6)
     echo ""
+    if [[ "$key" == "adapter" ]]; then
+        prompt_adapter "$var"
+        return 0
+    fi
     case "$type" in
         int)   prompt_value "  $label" "${!var:-$def}" "$var" "int" ;;
         float) prompt_value "  $label" "${!var:-$def}" "$var" "float" ;;
@@ -501,9 +532,7 @@ _cc_select_tracks() {
 
 _cc_render_top_menu() {
     clear
-    echo -e "${WIZ_CYAN}╔════════════════════════════════════════════════════════════════╗${WIZ_NC}"
-    echo -e "${WIZ_CYAN}║${WIZ_NC}              ${WIZ_BOLD}STEP 5.5: Review Defaults${WIZ_NC}                       ${WIZ_CYAN}║${WIZ_NC}"
-    echo -e "${WIZ_CYAN}╚════════════════════════════════════════════════════════════════╝${WIZ_NC}"
+    print_box -c "$WIZ_CYAN" -w 62 -C "${WIZ_BOLD}STEP 5.5: Review Defaults${WIZ_NC}"
     echo ""
     local _tracks="HOMER"
     [[ "$WIZ_RUN_CIMS" == "true" || "$WIZ_RUN_CITS" == "true" ]] && _tracks="$_tracks + CTK"
@@ -563,7 +592,7 @@ _cc_review_loop() {
 # Diff view: print only knobs changed from default
 _cc_print_diff() {
     local any=0
-    echo "  ┌─── Changed from defaults ──────────────────────────────────┐"
+    local _rows=()
     while IFS='|' read -r c key label var type def help flag; do
         _cc_should_show_category "$c" || continue
         _cc_should_show_knob "$key" || continue
@@ -572,10 +601,21 @@ _cc_print_diff() {
         local val; val=$(_cc_display_value "$key")
         local def_disp="$def"; [[ -z "$def_disp" ]] && def_disp="(blank)"
         [[ "$type" == "yn" ]] && { [[ "$def" == "true" ]] && def_disp="yes" || def_disp="no"; }
-        printf "  │ %-22s %-16s (default: %s)\n" "$label:" "$val" "$def_disp"
+        _rows+=("$(printf '%-22s %-16s (default: %s)' "$label:" "$val" "$def_disp")")
     done < <(_cc_knob_registry)
-    [[ "$any" -eq 0 ]] && echo "  │   (all defaults — nothing changed)"
-    echo "  └────────────────────────────────────────────────────────────┘"
+    [[ "$any" -eq 0 ]] && _rows+=("  (all defaults — nothing changed)")
+    print_box -s single -i 2 -w 58 -t "Changed from defaults" "${_rows[@]}"
+}
+
+# Print a value for a shell command line. Add quotes only when the value needs them.
+_wiz_q() {
+    if [[ "$1" =~ ^[A-Za-z0-9_./:=+,@%-]+$ ]]; then
+        printf '%s' "$1"
+    else
+        local v="$1"
+        v="${v//\\/\\\\}"; v="${v//\"/\\\"}"; v="${v//\$/\\\$}"; v="${v//\`/\\\`}"
+        printf '"%s"' "$v"
+    fi
 }
 
 # Build the equivalent CLIPittyClip.sh command line for the current WIZ_* state.
@@ -584,13 +624,13 @@ _cc_build_cmdline() {
     local cmd="CLIPittyClip.sh"
     # Input + index + barcodes/dir
     if [[ "$WIZ_MODE" == "pooled" ]]; then
-        cmd="$cmd -i \"$WIZ_INPUT_FILE\" -b \"$WIZ_BARCODE_FILE\""
+        cmd="$cmd -i $(_wiz_q "$WIZ_INPUT_FILE") -b $(_wiz_q "$WIZ_BARCODE_FILE")"
     elif [[ "$WIZ_MODE" == "single" ]]; then
-        cmd="$cmd -i \"$WIZ_INPUT_FILE\""
+        cmd="$cmd -i $(_wiz_q "$WIZ_INPUT_FILE")"
     elif [[ "$WIZ_MODE" == "directory" ]]; then
-        cmd="$cmd -d \"$WIZ_INPUT_DIR\""
+        cmd="$cmd -d $(_wiz_q "$WIZ_INPUT_DIR")"
     fi
-    cmd="$cmd -x \"$WIZ_GENOME_INDEX\""
+    cmd="$cmd -x $(_wiz_q "$WIZ_GENOME_INDEX")"
     [[ -n "$WIZ_ECLIP_MODE" ]]      && cmd="$cmd --eclip $WIZ_ECLIP_MODE"
     [[ "$WIZ_PARCLIP_MODE" == "true" ]] && cmd="$cmd --parclip"
     # Track flags
@@ -611,7 +651,7 @@ _cc_build_cmdline() {
         if [[ "$type" == "yn" ]]; then
             [[ "$val" == "true" ]] && cmd="$cmd $flag"
         else
-            [[ -n "$val" ]] && cmd="$cmd $flag \"$val\""
+            [[ -n "$val" ]] && cmd="$cmd $flag $(_wiz_q "$val")"
         fi
     done < <(_cc_knob_registry)
     echo "$cmd"
@@ -716,6 +756,7 @@ run_wizard_clipittyclip() {
     WIZ_BC_LEN=""
     WIZ_SPACER_LEN="0"
     WIZ_BC_FIRST="false"
+    WIZ_TRIM3_LEN="0"
     WIZ_MIN_QUAL="30"
     WIZ_NO_DEDUP="false"
     WIZ_ALIGN_MISMATCHES="2"
@@ -779,23 +820,25 @@ run_wizard_clipittyclip() {
         print_section "PREPROCESSING SETTINGS"
         echo ""
         prompt_value "  Enter number of threads" "1" WIZ_THREADS "int"
-        prompt_value "  Enter UMI length (0 if none)" "0" WIZ_UMI_LEN "int"
-        echo "  Adapter options: L32 (default), L19, or custom sequence"
-        prompt_value "  Enter 3' adapter" "L32" WIZ_ADAPTER
+        prompt_value "  Enter UMI length (0 if none)" "$WIZ_UMI_LEN" WIZ_UMI_LEN "int"
+        prompt_adapter WIZ_ADAPTER
 
-        if [[ "$WIZ_MODE" == "pooled" || "$WIZ_MODE" == "directory" ]]; then
-            echo ""
-            echo "  Barcode/spacer layout (used when demultiplexing):"
-            prompt_value "  Barcode length (blank = auto-detect from barcode file)" "" WIZ_BC_LEN
-            prompt_value "  Spacer length to trim after barcode" "0" WIZ_SPACER_LEN "int"
-            prompt_yesno "  Barcode precedes UMI? (e.g., BrdU-CLIP, irCLIP2)" "n" _yn
-            [[ "$_yn" == "y" ]] && WIZ_BC_FIRST="true"
+        echo ""
+        echo "  Read layout before the insert (see docs/CLIP_Read_Arch_index_v2.pdf):"
+        prompt_value "  Barcode length (blank = auto-detect from barcode file)" "$WIZ_BC_LEN" WIZ_BC_LEN
+        prompt_value "  Spacer length to trim after barcode" "$WIZ_SPACER_LEN" WIZ_SPACER_LEN "int"
+        local _bcf_def="n"; [[ "$WIZ_BC_FIRST" == "true" ]] && _bcf_def="y"
+        prompt_yesno "  Barcode precedes UMI? (e.g., BrdU-CLIP, irCLIP2)" "$_bcf_def" _yn
+        WIZ_BC_FIRST="false"; [[ "$_yn" == "y" ]] && WIZ_BC_FIRST="true"
+        prompt_value "  Bases to trim from the 3' end after adapter removal (e.g., 3 for iCLIP3)" "$WIZ_TRIM3_LEN" WIZ_TRIM3_LEN "int"
+        if [[ "$WIZ_MODE" == "pooled" ]]; then
             prompt_value "  Max barcode mismatches during demux" "1" WIZ_DEMUX_MISMATCHES "int"
         fi
 
         prompt_value "  fastp average quality threshold" "30" WIZ_MIN_QUAL "int"
-        prompt_yesno "  Disable PCR deduplication?" "n" _yn
-        [[ "$_yn" == "y" ]] && WIZ_NO_DEDUP="true"
+        local _nd_def="n"; [[ "$WIZ_NO_DEDUP" == "true" ]] && _nd_def="y"
+        prompt_yesno "  Disable PCR deduplication?" "$_nd_def" _yn
+        WIZ_NO_DEDUP="false"; [[ "$_yn" == "y" ]] && WIZ_NO_DEDUP="true"
         prompt_value "  Max alignment mismatches (STAR)" "2" WIZ_ALIGN_MISMATCHES "int"
 
         echo ""
@@ -883,7 +926,7 @@ run_wizard_clipittyclip() {
         echo ""
         prompt_yesno "  Keep intermediate files (-k)?" "n" _yn
         [[ "$_yn" == "y" ]] && WIZ_KEEP="true"
-        prompt_value "  Test mode: process N reads only (blank = all)" "" WIZ_SAMPLE_SIZE
+        prompt_value "  Test mode: process N reads only (blank = all)" "" WIZ_SAMPLE_SIZE "int"
         prompt_yesno "  Enable system notifications on completion?" "n" _yn
         [[ "$_yn" == "y" ]] && WIZ_NOTIFICATION="true"
 
@@ -897,32 +940,30 @@ run_wizard_clipittyclip() {
     # FINAL CONFIRMATION: summary + diff view + equivalent command line + confirm
     # ─────────────────────────────────────────────────────────────────────────
     clear
-    echo -e "${WIZ_CYAN}╔════════════════════════════════════════════════════════════════╗${WIZ_NC}"
-    echo -e "${WIZ_CYAN}║${WIZ_NC}                  ${WIZ_BOLD}FINAL CONFIRMATION${WIZ_NC}                          ${WIZ_CYAN}║${WIZ_NC}"
-    echo -e "${WIZ_CYAN}║${WIZ_NC}        ${WIZ_YELLOW}Review the settings below before starting.${WIZ_NC}              ${WIZ_CYAN}║${WIZ_NC}"
-    echo -e "${WIZ_CYAN}╚════════════════════════════════════════════════════════════════╝${WIZ_NC}"
+    print_box -c "$WIZ_CYAN" -w 62 -C "${WIZ_BOLD}FINAL CONFIRMATION${WIZ_NC}" \
+        "${WIZ_YELLOW}Review the settings below before starting.${WIZ_NC}"
     echo ""
     # Input/protocol/genome — always shown
-    echo "  ┌─── Inputs ─────────────────────────────────────────────────┐"
+    local _rows=()
     if [[ "$WIZ_MODE" == "pooled" ]]; then
-        printf "  │ %-18s %-40s │\n" "Input:" "$(basename "$WIZ_INPUT_FILE")"
-        printf "  │ %-18s %-40s │\n" "Barcodes:" "$(basename "$WIZ_BARCODE_FILE")"
+        _rows+=("$(printf '%-18s %s' "Input:" "$(basename "$WIZ_INPUT_FILE")")")
+        _rows+=("$(printf '%-18s %s' "Barcodes:" "$(basename "$WIZ_BARCODE_FILE")")")
     elif [[ "$WIZ_MODE" == "single" ]]; then
-        printf "  │ %-18s %-40s │\n" "Input:" "$(basename "$WIZ_INPUT_FILE")"
+        _rows+=("$(printf '%-18s %s' "Input:" "$(basename "$WIZ_INPUT_FILE")")")
     else
-        printf "  │ %-18s %-40s │\n" "Input Dir:" "$WIZ_INPUT_DIR"
+        _rows+=("$(printf '%-18s %s' "Input Dir:" "$WIZ_INPUT_DIR")")
     fi
     local _proto="Standard CLIP"
     [[ "$WIZ_ECLIP_MODE" == "pe" ]] && _proto="eCLIP-pe"
     [[ "$WIZ_ECLIP_MODE" == "se" ]] && _proto="eCLIP-se"
     [[ "$WIZ_PARCLIP_MODE" == "true" ]] && _proto="PAR-CLIP"
-    printf "  │ %-18s %-40s │\n" "Protocol:" "$_proto"
-    printf "  │ %-18s %-40s │\n" "Genome Index:" "$(basename "$WIZ_GENOME_INDEX")"
+    _rows+=("$(printf '%-18s %s' "Protocol:" "$_proto")")
+    _rows+=("$(printf '%-18s %s' "Genome Index:" "$(basename "$WIZ_GENOME_INDEX")")")
     local _tracks="HOMER"
     [[ "$WIZ_RUN_CIMS" == "true" || "$WIZ_RUN_CITS" == "true" ]] && _tracks="$_tracks + CTK"
     [[ "$WIZ_RUN_CLINK" == "true" ]] && _tracks="$_tracks + Clink"
-    printf "  │ %-18s %-40s │\n" "Tracks:" "$_tracks"
-    echo "  └────────────────────────────────────────────────────────────┘"
+    _rows+=("$(printf '%-18s %s' "Tracks:" "$_tracks")")
+    print_box -s single -i 2 -w 58 -t "Inputs" "${_rows[@]}"
     echo ""
 
     # Diff view: only knobs changed from default
@@ -946,7 +987,7 @@ run_wizard_clipittyclip() {
     export WIZ_MODE WIZ_INPUT_FILE WIZ_INPUT_DIR WIZ_BARCODE_FILE WIZ_GENOME_INDEX WIZ_GENOME_FASTA
     export WIZ_ECLIP_MODE WIZ_PARCLIP_MODE
     export WIZ_ALIGNER WIZ_THREADS WIZ_UMI_LEN WIZ_ADAPTER
-    export WIZ_BC_LEN WIZ_SPACER_LEN WIZ_BC_FIRST WIZ_MIN_QUAL
+    export WIZ_BC_LEN WIZ_SPACER_LEN WIZ_BC_FIRST WIZ_TRIM3_LEN WIZ_MIN_QUAL
     export WIZ_NO_DEDUP WIZ_ALIGN_MISMATCHES WIZ_DEMUX_MISMATCHES
     export WIZ_FILTER_REPEAT WIZ_NO_CHR_FILTER
     export WIZ_ALIGNER_ARGS WIZ_FASTP_ARGS WIZ_PEAK_CALLER_ARGS
@@ -1016,13 +1057,16 @@ run_wizard_prepittyprep() {
     # Defaults (match PREPittyPrep.sh)
     WIZ_THREADS="1"
     WIZ_UMI_LEN="0"
-    WIZ_ADAPTER="AGATCGGAAGAGC"
+    WIZ_ADAPTER="L32"
     WIZ_BC_LEN=""
     WIZ_SPACER_LEN="0"
+    WIZ_BC_FIRST="false"
+    WIZ_TRIM3_LEN="0"
     WIZ_NO_DEDUP="false"
-    WIZ_ECLIP="false"
+    WIZ_ECLIP_MODE=""
+    WIZ_PARCLIP_MODE="false"
     WIZ_DEMUX_MISMATCHES="1"
-    WIZ_FILTER_NCRNA="false"
+    WIZ_FILTER_REPEAT="false"
     WIZ_GENOME_INDEX=""
     WIZ_OUTPUT=""
     WIZ_KEEP="false"
@@ -1030,41 +1074,62 @@ run_wizard_prepittyprep() {
 
     if [[ "$WIZ_GEO_MODE" == "true" ]]; then
         echo ""
-        echo -e "  ${WIZ_YELLOW}GEO mode: skipping preprocessing & ncRNA prompts.${WIZ_NC}"
+        echo -e "  ${WIZ_YELLOW}GEO mode: skipping preprocessing & repeat-filter prompts.${WIZ_NC}"
     else
-        # ─── STEP 3: Preprocessing ─────────────────────────────────────────
-        print_section "STEP 3: Preprocessing"
+        # ─── STEP 3: Protocol ──────────────────────────────────────────────
+        print_section "STEP 3: Protocol"
         echo ""
-        prompt_value "  Enter UMI length (0 if none)" "0" WIZ_UMI_LEN "int"
-        echo "  Adapter default: AGATCGGAAGAGC (Illumina universal)"
-        prompt_value "  Enter 3' adapter" "AGATCGGAAGAGC" WIZ_ADAPTER
+        local _proto
+        prompt_select "Which CLIP protocol was used?" _proto \
+            "Standard CLIP (iCLIP, coCLIP, etc.)" \
+            "eCLIP — paired-end (post-eclipdemux R2, UMI in header)" \
+            "eCLIP — single-end / seCLIP (raw R1, UMI in sequence)" \
+            "PAR-CLIP (4SU; T>C signal)"
+        case "$_proto" in
+            2) WIZ_ECLIP_MODE="pe" ;;
+            3) WIZ_ECLIP_MODE="se" ;;
+            4) WIZ_PARCLIP_MODE="true" ;;
+        esac
 
-        if [[ -n "$WIZ_BARCODE_FILE" ]]; then
+        # ─── STEP 4: Preprocessing ─────────────────────────────────────────
+        print_section "STEP 4: Preprocessing"
+        echo ""
+        if [[ -n "$WIZ_ECLIP_MODE" ]]; then
+            echo -e "  ${WIZ_YELLOW}eCLIP mode sets the UMI and the adapters.${WIZ_NC}"
+        elif [[ "$WIZ_PARCLIP_MODE" == "true" ]]; then
+            prompt_value "  Enter UMI length (required for PAR-CLIP)" "4" WIZ_UMI_LEN "int"
+        else
+            prompt_value "  Enter UMI length (0 if none)" "0" WIZ_UMI_LEN "int"
+            prompt_adapter WIZ_ADAPTER
             echo ""
-            echo "  Barcode/spacer layout (used during demultiplexing):"
-            prompt_value "  Barcode length (blank = auto-detect)" "" WIZ_BC_LEN
-            prompt_value "  Spacer length to trim after barcode" "0" WIZ_SPACER_LEN "int"
+            echo "  Read layout before the insert (see docs/CLIP_Read_Arch_index_v2.pdf):"
+            prompt_value "  Barcode length (blank = auto-detect from barcode file)" "" WIZ_BC_LEN
+            prompt_value "  Spacer length to trim after barcode and UMI" "0" WIZ_SPACER_LEN "int"
+            prompt_yesno "  Barcode precedes UMI? (e.g., BrdU-CLIP, irCLIP2)" "n" _yn
+            [[ "$_yn" == "y" ]] && WIZ_BC_FIRST="true"
+            prompt_value "  Bases to trim from the 3' end after adapter removal (e.g., 3 for iCLIP3)" "0" WIZ_TRIM3_LEN "int"
+        fi
+        if [[ -n "$WIZ_BARCODE_FILE" ]]; then
             prompt_value "  Max barcode mismatches during demux" "1" WIZ_DEMUX_MISMATCHES "int"
         fi
 
         echo ""
-        prompt_yesno "  Disable PCR deduplication?" "n" _yn
-        [[ "$_yn" == "y" ]] && WIZ_NO_DEDUP="true"
-        prompt_yesno "  eCLIP mode (UMI in read header)?" "n" _yn
-        [[ "$_yn" == "y" ]] && WIZ_ECLIP="true"
+        local _nd_def="n"; [[ "$WIZ_NO_DEDUP" == "true" ]] && _nd_def="y"
+        prompt_yesno "  Disable PCR deduplication?" "$_nd_def" _yn
+        WIZ_NO_DEDUP="false"; [[ "$_yn" == "y" ]] && WIZ_NO_DEDUP="true"
 
-        # ─── STEP 4: ncRNA filter (optional) ───────────────────────────────
-        print_section "STEP 4: ncRNA Filter"
+        # ─── STEP 5: Repeat filter (optional) ──────────────────────────────
+        print_section "STEP 5: Repeat Filter"
         echo ""
-        prompt_yesno "  Enable ncRNA pre-filtering? (requires genome index)" "n" _yn
+        prompt_yesno "  Enable repeat-element pre-filter? (requires genome index with a repeat index)" "n" _yn
         if [[ "$_yn" == "y" ]]; then
-            WIZ_FILTER_NCRNA="true"
+            WIZ_FILTER_REPEAT="true"
             prompt_dir_path "  Enter path to genome index: " WIZ_GENOME_INDEX || return 1
         fi
     fi
 
-    # ─── STEP 5: Output / runtime ──────────────────────────────────────────
-    print_section "STEP 5: Output / Runtime"
+    # ─── STEP 6: Output / runtime ──────────────────────────────────────────
+    print_section "STEP 6: Output / Runtime"
     echo ""
     prompt_value "  Output folder name (blank = INPUT_output)" "" WIZ_OUTPUT
     prompt_value "  Number of threads" "1" WIZ_THREADS "int"
@@ -1075,47 +1140,54 @@ run_wizard_prepittyprep() {
     # ─── Summary + equivalent command ──────────────────────────────────────
     print_summary_box
     echo ""
-    echo "  ┌─── PREPittyPrep configuration ─────────────────────────────┐"
+    local _rows=()
     if [[ "$WIZ_MODE" == "single" ]]; then
-        printf "  │ %-18s %-40s │\n" "Input:" "$(basename "$WIZ_INPUT_FILE")"
+        _rows+=("$(printf '%-18s %s' "Input:" "$(basename "$WIZ_INPUT_FILE")")")
     else
-        printf "  │ %-18s %-40s │\n" "Input Dir:" "$WIZ_INPUT_DIR"
+        _rows+=("$(printf '%-18s %s' "Input Dir:" "$WIZ_INPUT_DIR")")
     fi
-    [[ -n "$WIZ_BARCODE_FILE" ]] && printf "  │ %-18s %-40s │\n" "Barcodes:" "$(basename "$WIZ_BARCODE_FILE")"
+    [[ -n "$WIZ_BARCODE_FILE" ]] && _rows+=("$(printf '%-18s %s' "Barcodes:" "$(basename "$WIZ_BARCODE_FILE")")")
     local _m="Standard prep"; [[ "$WIZ_GEO_MODE" == "true" ]] && _m="GEO deposit"
-    printf "  │ %-18s %-40s │\n" "Mode:" "$_m"
+    _rows+=("$(printf '%-18s %s' "Mode:" "$_m")")
     if [[ "$WIZ_GEO_MODE" != "true" ]]; then
-        printf "  │ %-18s %-40s │\n" "UMI Length:" "$WIZ_UMI_LEN"
-        printf "  │ %-18s %-40s │\n" "Adapter:" "$WIZ_ADAPTER"
+        local _p="Standard CLIP"
+        [[ -n "$WIZ_ECLIP_MODE" ]] && _p="eCLIP-$WIZ_ECLIP_MODE"
+        [[ "$WIZ_PARCLIP_MODE" == "true" ]] && _p="PAR-CLIP"
+        _rows+=("$(printf '%-18s %s' "Protocol:" "$_p")")
+        _rows+=("$(printf '%-18s %s' "UMI Length:" "$WIZ_UMI_LEN")")
+        [[ -z "$WIZ_ECLIP_MODE" && "$WIZ_PARCLIP_MODE" != "true" ]] && \
+            _rows+=("$(printf '%-18s %s' "Adapter:" "$WIZ_ADAPTER")")
         local _d="Enabled"; [[ "$WIZ_NO_DEDUP" == "true" ]] && _d="Disabled"
-        printf "  │ %-18s %-40s │\n" "Dedup:" "$_d"
-        [[ "$WIZ_ECLIP" == "true" ]] && printf "  │ %-18s %-40s │\n" "eCLIP mode:" "yes"
-        local _f="Disabled"; [[ "$WIZ_FILTER_NCRNA" == "true" ]] && _f="Enabled"
-        printf "  │ %-18s %-40s │\n" "ncRNA Filter:" "$_f"
+        _rows+=("$(printf '%-18s %s' "Dedup:" "$_d")")
+        local _f="Disabled"; [[ "$WIZ_FILTER_REPEAT" == "true" ]] && _f="Enabled"
+        _rows+=("$(printf '%-18s %s' "Repeat Filter:" "$_f")")
     fi
-    printf "  │ %-18s %-40s │\n" "Threads:" "$WIZ_THREADS"
-    [[ "$WIZ_KEEP" == "true" ]] && printf "  │ %-18s %-40s │\n" "Keep:" "yes"
-    echo "  └────────────────────────────────────────────────────────────┘"
+    _rows+=("$(printf '%-18s %s' "Threads:" "$WIZ_THREADS")")
+    [[ "$WIZ_KEEP" == "true" ]] && _rows+=("$(printf '%-18s %s' "Keep:" "yes")")
+    print_box -s single -i 2 -w 58 -t "PREPittyPrep configuration" "${_rows[@]}"
     echo ""
 
     # Build equivalent CLI
     local _cmd="PREPittyPrep.sh"
     if [[ "$WIZ_MODE" == "single" ]]; then
-        _cmd="$_cmd -i \"$WIZ_INPUT_FILE\""
+        _cmd="$_cmd -i $(_wiz_q "$WIZ_INPUT_FILE")"
     else
-        _cmd="$_cmd -d \"$WIZ_INPUT_DIR\""
+        _cmd="$_cmd -d $(_wiz_q "$WIZ_INPUT_DIR")"
     fi
-    [[ -n "$WIZ_BARCODE_FILE" ]] && _cmd="$_cmd -b \"$WIZ_BARCODE_FILE\""
+    [[ -n "$WIZ_BARCODE_FILE" ]] && _cmd="$_cmd -b $(_wiz_q "$WIZ_BARCODE_FILE")"
     [[ "$WIZ_GEO_MODE" == "true" ]] && _cmd="$_cmd --geo"
     [[ "$WIZ_UMI_LEN" != "0" ]] && _cmd="$_cmd -u $WIZ_UMI_LEN"
-    [[ "$WIZ_ADAPTER" != "AGATCGGAAGAGC" ]] && _cmd="$_cmd -a \"$WIZ_ADAPTER\""
+    [[ -n "$WIZ_ECLIP_MODE" ]] && _cmd="$_cmd --eclip $WIZ_ECLIP_MODE"
+    [[ "$WIZ_PARCLIP_MODE" == "true" ]] && _cmd="$_cmd --parclip"
+    [[ "$WIZ_ADAPTER" != "L32" ]] && _cmd="$_cmd -a $(_wiz_q "$WIZ_ADAPTER")"
     [[ -n "$WIZ_BC_LEN" ]] && _cmd="$_cmd --bc-len $WIZ_BC_LEN"
     [[ "$WIZ_SPACER_LEN" != "0" ]] && _cmd="$_cmd --spacer-len $WIZ_SPACER_LEN"
+    [[ "$WIZ_BC_FIRST" == "true" ]] && _cmd="$_cmd --bc-first"
+    [[ "$WIZ_TRIM3_LEN" != "0" ]] && _cmd="$_cmd --trim3 $WIZ_TRIM3_LEN"
     [[ "$WIZ_NO_DEDUP" == "true" ]] && _cmd="$_cmd --no-dedup"
-    [[ "$WIZ_ECLIP" == "true" ]] && _cmd="$_cmd --eclip"
     [[ "$WIZ_DEMUX_MISMATCHES" != "1" ]] && _cmd="$_cmd --demux-mismatches $WIZ_DEMUX_MISMATCHES"
-    [[ "$WIZ_FILTER_NCRNA" == "true" ]] && _cmd="$_cmd --filter-ncrna -x \"$WIZ_GENOME_INDEX\""
-    [[ -n "$WIZ_OUTPUT" ]] && _cmd="$_cmd -o \"$WIZ_OUTPUT\""
+    [[ "$WIZ_FILTER_REPEAT" == "true" ]] && _cmd="$_cmd --filter-repeat -x $(_wiz_q "$WIZ_GENOME_INDEX")"
+    [[ -n "$WIZ_OUTPUT" ]] && _cmd="$_cmd -o $(_wiz_q "$WIZ_OUTPUT")"
     [[ "$WIZ_KEEP" == "true" ]] && _cmd="$_cmd -k"
     [[ "$WIZ_THREADS" != "1" ]] && _cmd="$_cmd -t $WIZ_THREADS"
     [[ "$WIZ_SAMPLE_SIZE" != "0" ]] && _cmd="$_cmd -s $WIZ_SAMPLE_SIZE"
@@ -1133,8 +1205,8 @@ run_wizard_prepittyprep() {
 
     export WIZ_MODE WIZ_INPUT_FILE WIZ_INPUT_DIR WIZ_BARCODE_FILE WIZ_GEO_MODE
     export WIZ_THREADS WIZ_UMI_LEN WIZ_ADAPTER WIZ_BC_LEN WIZ_SPACER_LEN
-    export WIZ_NO_DEDUP WIZ_ECLIP WIZ_DEMUX_MISMATCHES
-    export WIZ_FILTER_NCRNA WIZ_GENOME_INDEX
+    export WIZ_BC_FIRST WIZ_TRIM3_LEN WIZ_NO_DEDUP WIZ_ECLIP_MODE WIZ_PARCLIP_MODE WIZ_DEMUX_MISMATCHES
+    export WIZ_FILTER_REPEAT WIZ_GENOME_INDEX
     export WIZ_OUTPUT WIZ_KEEP WIZ_SAMPLE_SIZE
     export CLIPITTY_EQUIV_CMD
 
@@ -1292,39 +1364,39 @@ run_wizard_mapittymap() {
     # ─────────────────────────────────────────────────────────────────────────
     print_summary_box
     echo ""
-    echo "  ┌─────────────────────────────────────────────────────────────┐"
-    printf "  │ %-20s %-38s │\n" "Input:" "$(basename "$WIZ_INPUT_FILE")"
-    printf "  │ %-20s %-38s │\n" "Genome Index:" "$(basename "$WIZ_GENOME_INDEX")"
-    [[ -n "$WIZ_GENOME_FASTA" ]] && printf "  │ %-20s %-38s │\n" "Genome FASTA:" "$(basename "$WIZ_GENOME_FASTA")"
+    local _rows=()
+    _rows+=("$(printf '%-20s %s' "Input:" "$(basename "$WIZ_INPUT_FILE")")")
+    _rows+=("$(printf '%-20s %s' "Genome Index:" "$(basename "$WIZ_GENOME_INDEX")")")
+    [[ -n "$WIZ_GENOME_FASTA" ]] && _rows+=("$(printf '%-20s %s' "Genome FASTA:" "$(basename "$WIZ_GENOME_FASTA")")")
     local _rf="Disabled"; [[ "$WIZ_FILTER_REPEAT" == "true" ]] && _rf="Enabled"
     local _cf="Enabled";  [[ "$WIZ_NO_CHR_FILTER" == "true" ]] && _cf="Disabled"
-    printf "  │ %-20s %-38s │\n" "Repeat Filter:" "$_rf"
-    printf "  │ %-20s %-38s │\n" "Chr Filter:" "$_cf"
-    echo "  ├─────────────────────────────────────────────────────────────┤"
-    printf "  │ %-20s %-38s │\n" "Aligner:" "$(echo "$WIZ_ALIGNER" | tr '[:lower:]' '[:upper:]')"
-    printf "  │ %-20s %-38s │\n" "Threads:" "$WIZ_THREADS"
-    printf "  │ %-20s %-38s │\n" "Max Mismatches:" "$WIZ_ALIGN_MISMATCHES"
-    [[ "$WIZ_UMI_LEN" != "0" ]] && printf "  │ %-20s %-38s │\n" "UMI Length:" "$WIZ_UMI_LEN"
-    [[ -n "$WIZ_OUTPUT_NAME" ]] && printf "  │ %-20s %-38s │\n" "Output Name:" "$WIZ_OUTPUT_NAME"
-    [[ -n "$WIZ_ALIGNER_ARGS" ]] && printf "  │ %-20s %-38s │\n" "Aligner Args:" "$WIZ_ALIGNER_ARGS"
-    echo "  ├─────────────────────────────────────────────────────────────┤"
+    _rows+=("$(printf '%-20s %s' "Repeat Filter:" "$_rf")")
+    _rows+=("$(printf '%-20s %s' "Chr Filter:" "$_cf")")
+    _rows+=("---")
+    _rows+=("$(printf '%-20s %s' "Aligner:" "$(echo "$WIZ_ALIGNER" | tr '[:lower:]' '[:upper:]')")")
+    _rows+=("$(printf '%-20s %s' "Threads:" "$WIZ_THREADS")")
+    _rows+=("$(printf '%-20s %s' "Max Mismatches:" "$WIZ_ALIGN_MISMATCHES")")
+    [[ "$WIZ_UMI_LEN" != "0" ]] && _rows+=("$(printf '%-20s %s' "UMI Length:" "$WIZ_UMI_LEN")")
+    [[ -n "$WIZ_OUTPUT_NAME" ]] && _rows+=("$(printf '%-20s %s' "Output Name:" "$WIZ_OUTPUT_NAME")")
+    [[ -n "$WIZ_ALIGNER_ARGS" ]] && _rows+=("$(printf '%-20s %s' "Aligner Args:" "$WIZ_ALIGNER_ARGS")")
+    _rows+=("---")
     local _cims="Disabled"; [[ "$WIZ_RUN_CIMS" == "true" ]] && _cims="Enabled"
     local _cits="Disabled"; [[ "$WIZ_RUN_CITS" == "true" ]] && _cits="Enabled"
     local _clink="Disabled"; [[ "$WIZ_RUN_CLINK" == "true" ]] && _clink="Enabled"
-    printf "  │ %-20s %-38s │\n" "CTK CIMS:" "$_cims"
-    printf "  │ %-20s %-38s │\n" "CTK CITS:" "$_cits"
-    printf "  │ %-20s %-38s │\n" "Clink:" "$_clink"
-    echo "  └─────────────────────────────────────────────────────────────┘"
+    _rows+=("$(printf '%-20s %s' "CTK CIMS:" "$_cims")")
+    _rows+=("$(printf '%-20s %s' "CTK CITS:" "$_cits")")
+    _rows+=("$(printf '%-20s %s' "Clink:" "$_clink")")
+    print_box -s single -i 2 -w 58 "${_rows[@]}"
     echo ""
 
     # Equivalent command line
     local _cmd="MAPittyMap.sh -i \"$WIZ_INPUT_FILE\" -x \"$WIZ_GENOME_INDEX\""
-    [[ -n "$WIZ_GENOME_FASTA" ]] && _cmd="$_cmd --genome-fasta \"$WIZ_GENOME_FASTA\""
+    [[ -n "$WIZ_GENOME_FASTA" ]] && _cmd="$_cmd --genome-fasta $(_wiz_q "$WIZ_GENOME_FASTA")"
     [[ "$WIZ_ALIGNER" != "star" ]] && _cmd="$_cmd --aligner $WIZ_ALIGNER"
     [[ "$WIZ_THREADS" != "1" ]] && _cmd="$_cmd -t $WIZ_THREADS"
     [[ "$WIZ_ALIGN_MISMATCHES" != "2" ]] && _cmd="$_cmd -m $WIZ_ALIGN_MISMATCHES"
     [[ "$WIZ_UMI_LEN" != "0" ]] && _cmd="$_cmd -u $WIZ_UMI_LEN"
-    [[ -n "$WIZ_OUTPUT_NAME" ]] && _cmd="$_cmd -o \"$WIZ_OUTPUT_NAME\""
+    [[ -n "$WIZ_OUTPUT_NAME" ]] && _cmd="$_cmd -o $(_wiz_q "$WIZ_OUTPUT_NAME")"
     [[ "$WIZ_FILTER_REPEAT" == "true" ]] && _cmd="$_cmd --filter-repeat"
     [[ "$WIZ_NO_CHR_FILTER" == "true" ]] && _cmd="$_cmd --no-chr-filter"
     if [[ "$WIZ_RUN_CIMS" == "true" && "$WIZ_RUN_CITS" == "true" ]]; then
@@ -1493,32 +1565,32 @@ run_wizard_peakittypeak() {
     # ─────────────────────────────────────────────────────────────────────────
     print_summary_box
     echo ""
-    echo "  ┌─────────────────────────────────────────────────────────────┐"
-    printf "  │ %-20s %-38s │\n" "Working Dir:" "$WIZ_WORK_DIR"
-    printf "  │ %-20s %-38s │\n" "BED Files:" "$WIZ_BED_COUNT files found"
+    local _rows=()
+    _rows+=("$(printf '%-20s %s' "Working Dir:" "$WIZ_WORK_DIR")")
+    _rows+=("$(printf '%-20s %s' "BED Files:" "$WIZ_BED_COUNT files found")")
     local _agg="Individual"; [[ "$WIZ_AGGREGATE" == "true" ]] && _agg="Aggregate"
-    printf "  │ %-20s %-38s │\n" "Mode:" "$_agg"
-    echo "  ├─────────────────────────────────────────────────────────────┤"
-    printf "  │ %-20s %-38s │\n" "Peak Caller:" "$(echo "$WIZ_PEAK_CALLER" | tr '[:lower:]' '[:upper:]')"
-    printf "  │ %-20s %-38s │\n" "Peak Distance/Gap:" "$WIZ_PEAK_DIST"
+    _rows+=("$(printf '%-20s %s' "Mode:" "$_agg")")
+    _rows+=("---")
+    _rows+=("$(printf '%-20s %s' "Peak Caller:" "$(echo "$WIZ_PEAK_CALLER" | tr '[:lower:]' '[:upper:]')")")
+    _rows+=("$(printf '%-20s %s' "Peak Distance/Gap:" "$WIZ_PEAK_DIST")")
     if [[ "$WIZ_PEAK_CALLER" == "homer" ]]; then
-        printf "  │ %-20s %-38s │\n" "Peak Size:" "$WIZ_PEAK_SIZE"
-        printf "  │ %-20s %-38s │\n" "Fragment Length:" "$WIZ_FRAG_LEN"
+        _rows+=("$(printf '%-20s %s' "Peak Size:" "$WIZ_PEAK_SIZE")")
+        _rows+=("$(printf '%-20s %s' "Fragment Length:" "$WIZ_FRAG_LEN")")
     fi
-    printf "  │ %-20s %-38s │\n" "Output Name:" "$WIZ_OUTPUT_NAME"
-    [[ -n "$WIZ_PEAK_CALLER_ARGS" ]] && printf "  │ %-20s %-38s │\n" "Caller Args:" "$WIZ_PEAK_CALLER_ARGS"
+    _rows+=("$(printf '%-20s %s' "Output Name:" "$WIZ_OUTPUT_NAME")")
+    [[ -n "$WIZ_PEAK_CALLER_ARGS" ]] && _rows+=("$(printf '%-20s %s' "Caller Args:" "$WIZ_PEAK_CALLER_ARGS")")
     if [[ -n "$WIZ_GROUPS_FILE" || -n "$WIZ_GROUP_PEAKS_FILE" ]]; then
-        echo "  ├─────────────────────────────────────────────────────────────┤"
-        [[ -n "$WIZ_GROUPS_FILE" ]] && printf "  │ %-20s %-38s │\n" "Groups File:" "$(basename "$WIZ_GROUPS_FILE")"
-        [[ -n "$WIZ_GROUP_PEAKS_FILE" ]] && printf "  │ %-20s %-38s │\n" "Group Peaks File:" "$(basename "$WIZ_GROUP_PEAKS_FILE")"
+        _rows+=("---")
+        [[ -n "$WIZ_GROUPS_FILE" ]] && _rows+=("$(printf '%-20s %s' "Groups File:" "$(basename "$WIZ_GROUPS_FILE")")")
+        [[ -n "$WIZ_GROUP_PEAKS_FILE" ]] && _rows+=("$(printf '%-20s %s' "Group Peaks File:" "$(basename "$WIZ_GROUP_PEAKS_FILE")")")
     fi
     if [[ -n "$WIZ_CTK_DIR" ]]; then
-        echo "  ├─────────────────────────────────────────────────────────────┤"
-        printf "  │ %-20s %-38s │\n" "CTK Dir:" "$(basename "$WIZ_CTK_DIR")"
-        printf "  │ %-20s %-38s │\n" "CIMS FDR:" "$WIZ_CIMS_FDR"
-        printf "  │ %-20s %-38s │\n" "CITS p-value:" "$WIZ_CITS_PVAL"
+        _rows+=("---")
+        _rows+=("$(printf '%-20s %s' "CTK Dir:" "$(basename "$WIZ_CTK_DIR")")")
+        _rows+=("$(printf '%-20s %s' "CIMS FDR:" "$WIZ_CIMS_FDR")")
+        _rows+=("$(printf '%-20s %s' "CITS p-value:" "$WIZ_CITS_PVAL")")
     fi
-    echo "  └─────────────────────────────────────────────────────────────┘"
+    print_box -s single -i 2 -w 58 "${_rows[@]}"
     echo ""
 
     # Equivalent command line
@@ -1528,11 +1600,11 @@ run_wizard_peakittypeak() {
     [[ "$WIZ_PEAK_DIST" != "50" ]] && _cmd="$_cmd -p $WIZ_PEAK_DIST"
     [[ "$WIZ_PEAK_CALLER" == "homer" && "$WIZ_PEAK_SIZE" != "20" ]] && _cmd="$_cmd -z $WIZ_PEAK_SIZE"
     [[ "$WIZ_PEAK_CALLER" == "homer" && "$WIZ_FRAG_LEN" != "25" ]] && _cmd="$_cmd -f $WIZ_FRAG_LEN"
-    [[ "$WIZ_OUTPUT_NAME" != "Combined" ]] && _cmd="$_cmd -n \"$WIZ_OUTPUT_NAME\""
-    [[ -n "$WIZ_PEAK_CALLER_ARGS" ]] && _cmd="$_cmd --peak-caller-args \"$WIZ_PEAK_CALLER_ARGS\""
-    [[ -n "$WIZ_GROUPS_FILE" ]] && _cmd="$_cmd -g \"$WIZ_GROUPS_FILE\""
-    [[ -n "$WIZ_GROUP_PEAKS_FILE" ]] && _cmd="$_cmd --group-peaks \"$WIZ_GROUP_PEAKS_FILE\""
-    [[ -n "$WIZ_CTK_DIR" ]] && _cmd="$_cmd --ctk-dir \"$WIZ_CTK_DIR\""
+    [[ "$WIZ_OUTPUT_NAME" != "Combined" ]] && _cmd="$_cmd -n $(_wiz_q "$WIZ_OUTPUT_NAME")"
+    [[ -n "$WIZ_PEAK_CALLER_ARGS" ]] && _cmd="$_cmd --peak-caller-args $(_wiz_q "$WIZ_PEAK_CALLER_ARGS")"
+    [[ -n "$WIZ_GROUPS_FILE" ]] && _cmd="$_cmd -g $(_wiz_q "$WIZ_GROUPS_FILE")"
+    [[ -n "$WIZ_GROUP_PEAKS_FILE" ]] && _cmd="$_cmd --group-peaks $(_wiz_q "$WIZ_GROUP_PEAKS_FILE")"
+    [[ -n "$WIZ_CTK_DIR" ]] && _cmd="$_cmd --ctk-dir $(_wiz_q "$WIZ_CTK_DIR")"
     [[ "$WIZ_CIMS_FDR" != "0.05" ]] && _cmd="$_cmd --cims-fdr $WIZ_CIMS_FDR"
     [[ "$WIZ_CITS_PVAL" != "0.05" ]] && _cmd="$_cmd --cits-pval $WIZ_CITS_PVAL"
     CLIPITTY_EQUIV_CMD="$_cmd"

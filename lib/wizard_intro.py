@@ -5,7 +5,8 @@ Plays a terminal animation: a paperclip appears, a wizard hat sweeps in
 from the left and absorbs it, then the pipeline title appears to the right.
 
 Requires a terminal of at least 96 cols × 28 rows.
-Falls back to a one-liner if the terminal is too small or non-interactive.
+In a smaller terminal (at least 42 × 6), types the title instead.
+Prints a one-liner if the terminal is smaller still or non-interactive.
 
 Usage:
     python3 wizard_intro.py          # run directly
@@ -69,6 +70,8 @@ CLIP = [
 # ── layout constants ─────────────────────────────────────────────────────────
 
 MIN_W, MIN_H = 96, 28
+SMALL_W, SMALL_H = 42, 6      # minimum size for the typed-title intro
+SMALL_HOLD = 1.5              # seconds the typed title stays before the wizard clears it
 GRID_W, GRID_H = 96, 28
 BUF = 3                       # edge-wipe buffer (chars between hat edge & clip)
 
@@ -227,13 +230,36 @@ def _move_home():
     sys.stdout.flush()
 
 
+# ── small-terminal intro ─────────────────────────────────────────────────────
+
+def _small_intro():
+    """Type the title in a box, show the tagline, then hold."""
+    title = "CLIPittyCLIP"
+    bar = "+" + "-" * (len(title) + 2) + "+"
+    out = sys.stdout
+    try:
+        _hide_cursor()
+        out.write("\n  " + bar + "\n  | ")
+        for ch in title:
+            out.write(ch)
+            out.flush()
+            time.sleep(0.06)
+        out.write(" |\n  " + bar + "\n  " + TAGLINE + "\n\n")
+        out.flush()
+        time.sleep(SMALL_HOLD)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        _show_cursor()
+
+
 # ── public API ───────────────────────────────────────────────────────────────
 
 def intro():
     """Play the wizard intro animation.
 
-    Gates on terminal size (96×28 minimum).
-    Falls back to a text one-liner if terminal is too small or not a TTY.
+    Gates on terminal size: full animation at 96×28 or more, typed title
+    at 42×6 or more, otherwise a text one-liner (also when not a TTY).
     """
     if not sys.stdout.isatty():
         print(f"\n  CLIPittyCLIP — {TAGLINE}\n")
@@ -245,8 +271,12 @@ def intro():
         print(f"\n  CLIPittyCLIP — {TAGLINE}\n")
         return
 
-    if cols < MIN_W or rows < MIN_H:
+    if cols < SMALL_W or rows < SMALL_H:
         print(f"\n  CLIPittyCLIP — {TAGLINE}\n")
+        return
+
+    if cols < MIN_W or rows < MIN_H:
+        _small_intro()
         return
 
     # center the animation in the terminal

@@ -3,7 +3,7 @@
 </p>
 
 # CLIPittyClip: Modern CLIP-seq Analysis Pipeline
-**Version 3.5.2**
+**Version 3.5.3**
 
 A comprehensive, single-command CLIP-seq analysis pipeline from raw FASTQ to peaks and crosslink sites. Supports iCLIP, irCLIP, eCLIP, PAR-CLIP, and related variant protocols.
 
@@ -228,7 +228,7 @@ Run `CLIPittyClip.sh --help` for full usage.
 | Short | Long | Default | Description |
 |-------|------|---------|-------------|
 | `-u` | `--umi-length` | auto | UMI length in bases |
-| `-a` | `--adapter` | L32 | 3' adapter sequence |
+| `-a` | `--adapter` | L32 | 3' adapter sequence, or a name: `L32`, `L3`, `L3MOD`, `L7` (`L19`), `SRA3` |
 | `-b` | `--barcodes` | — | Barcode file (enables demultiplexing) |
 | — | `--demux-mismatches` | `1` | Max barcode mismatches |
 | — | `--eclip` | — | eCLIP mode: `pe` (paired-end) or `se` (single-end) |
@@ -436,7 +436,7 @@ Output: `{INPUT}_prepped/PREPPED_FASTQ/*_prepped.fastq.gz` + `REPORTS/`
 
 GEO output: `{INPUT}_GEO/{sample}.fastq.gz` + `md5sums.txt`
 
-Key options: `-u` (UMI length), `-b` (barcodes), `-a` (adapter), `--bc-len`, `--spacer-len`, `--no-dedup`, `--geo`, `--filter-repeat`, `-k`, `-w`
+Key options: `-u` (UMI length), `-b` (barcodes), `-a` (adapter), `--bc-len`, `--spacer-len`, `--bc-first`, `--trim3`, `--eclip <pe|se>`, `--parclip`, `--no-dedup`, `--geo`, `--filter-repeat` (with `-x`), `-k`, `-w`. PREPittyPrep runs the same preprocessing steps as `CLIPittyClip.sh` and uses the same default adapter (L32).
 
 ---
 
@@ -624,12 +624,27 @@ RPM is calculated as `(reads mapped to element / total input reads) × 10⁶`.
 
 ## Changelog
 
+### v3.5.3
+
+**New**
+- **The `CLIPittyClip.sh` wizard asks for `--trim3`.** The barcode, spacer, and barcode-first settings now show for single-file input too.
+
+**Fixed**
+- **Wizard runs with the default adapter no longer fail at fastp.** The wizard passed the name `L32` to fastp as the adapter sequence, and fastp exited with an error. `CLIPittyClip.sh` and `PREPittyPrep.sh` now convert adapter names to sequences. `-a` accepts `L32`, `L3`, `L3MOD`, `L7` (also `L19` and `InvRiL19`), `SRA3`, or a DNA sequence. Any other value stops the run with an error. The wizards show a menu of these adapters.
+- **`-d` accepts plain `.fastq` and `.fq` files.** The input check accepted only `.fastq.gz` and `.fq.gz`, although the batch loop already read plain files.
+- **`PREPittyPrep.sh` matches the current preprocessing.** Pooled mode wrote the demultiplexed files to a folder named `false` and produced no output. Single and folder modes passed the wrong arguments to fastp, so the barcode was not trimmed. `--filter-ncrna` called functions that no longer exist. PREPittyPrep now runs the same steps as `CLIPittyClip.sh` and adds `--eclip <pe|se>`, `--parclip`, `--parclip-adapters`, `--bc-first`, `--trim3`, `--min-qual`, `--low-memory`, and `--filter-repeat`. `--filter-ncrna` is a deprecated alias for `--filter-repeat`. **The default adapter changes from `AGATCGGAAGAGC` to L32**, the same default as `CLIPittyClip.sh`.
+- **The wizard intro shows in terminals smaller than 96 × 28.** In those terminals, the intro printed one line that the wizard cleared at once. Terminals of at least 42 × 6 now show a typed title for 1.5 s.
+- **`docs/flags_summary.tsv` lists every public `CLIPittyClip.sh` flag.**
+- **Text boxes fit their content.** The wizard summaries and the eCLIP and PAR-CLIP banners used fixed widths, so long paths broke the right border. A new `print_box` function in `lib/utils.sh` sizes each box to its widest line. If a line is wider than the terminal, the function cuts the middle of the line.
+- **Wizard command lines quote a value only when it needs quotes.** The wizards put quotes around every changed setting (`-t "8"`) but not around `--eclip se`. Now a value gets quotes only when it holds a space or a shell character, for example `-o "test run"`.
+- **The wizard test-mode setting (`-s`) accepts only a number or blank.** Before, the wizard accepted any text, for example `-s N`, and passed it to the pipeline.
+
 ### v3.5.2
 
 **Fixed**
-- **HOMER peaks no longer get fake tags from splice-junction reads.** Since v3.3 (Clink integration, `44d642d`), HOMER built its tags from `bedtools bamtobed -split`, which writes one line per aligned block. Each read across a junction added a tag at the first base of the downstream exon, where no read started, and HOMER called peaks on those stacks. HOMER now builds tags from a separate tag BED (`02_COLLAPSED_BED/TAG_BED/`, `2_BED/TAG_BED/` in MAPittyMap): one line per read, holding only the block with the read's 5' end. This matches HOMER reading the BAM with `-format sam`. The split BED still feeds the bedgraphs, the peak matrix and the CTK peak caller. Clink and CTK crosslink sites are not affected. The log now checks that HOMER's tag total equals the read count. **HOMER peak sets from spliced data will change**: peaks at the start of exons drop, and the total peak count can drop. (S00NYI)
-- **`PEAKittyPeak.sh` log lines now reach the run log.** `CLIPittyClip.sh` set `LOG_FILE` but did not export it, so `PEAKittyPeak.sh` wrote its log lines, including the HOMER tag check, to `/dev/null`. `LOG_FILE` is now exported for the run log and the per-sample logs. Output files do not change. (S00NYI)
-- **Clink CIMS no longer runs out of RAM on large pileups.** `cims.py` loaded the whole pileup and computed the genome-wide background rates on genome-size arrays, so memory grew with genome size and large group pileups could be killed for lack of memory. `cims.py` now reads a pileup one chromosome and strand at a time and rebuilds the genome-wide background rates exactly from per-chromosome parts. Output files are byte-identical, run time is unchanged, and peak RAM drops by more than an order of magnitude. `--bam` input is unchanged. (S00NYI)
+- **HOMER peaks no longer get fake tags from splice-junction reads.** Since v3.3 (Clink integration, `44d642d`), HOMER built its tags from `bedtools bamtobed -split`, which writes one line per aligned block. Each read across a junction added a tag at the first base of the downstream exon, where no read started, and HOMER called peaks on those stacks. HOMER now builds tags from a separate tag BED (`02_COLLAPSED_BED/TAG_BED/`, `2_BED/TAG_BED/` in MAPittyMap): one line per read, holding only the block with the read's 5' end. This matches HOMER reading the BAM with `-format sam`. The split BED still feeds the bedgraphs, the peak matrix and the CTK peak caller. Clink and CTK crosslink sites are not affected. The log now checks that HOMER's tag total equals the read count. **HOMER peak sets from spliced data will change**: peaks at the start of exons drop, and the total peak count can drop.
+- **`PEAKittyPeak.sh` log lines now reach the run log.** `CLIPittyClip.sh` set `LOG_FILE` but did not export it, so `PEAKittyPeak.sh` wrote its log lines, including the HOMER tag check, to `/dev/null`. `LOG_FILE` is now exported for the run log and the per-sample logs. Output files do not change.
+- **Clink CIMS no longer runs out of RAM on large pileups.** `cims.py` loaded the whole pileup and computed the genome-wide background rates on genome-size arrays, so memory grew with genome size and large group pileups could be killed for lack of memory. `cims.py` now reads a pileup one chromosome and strand at a time and rebuilds the genome-wide background rates exactly from per-chromosome parts. Output files are byte-identical, run time is unchanged, and peak RAM drops by more than an order of magnitude. `--bam` input is unchanged.
 
 ### v3.5.1
 
@@ -641,15 +656,15 @@ RPM is calculated as `(reads mapped to element / total input reads) × 10⁶`.
 - **`--trim3` flag**: trims N bases from the 3' end *after* adapter removal, for protocols with a UMI/spacer between the read and the adapter (e.g. iCLIP3's 3nt second UMI). Implemented as a second fastp pass, same pattern PAR-CLIP mode already used.
 - **`--report-abundant-rna` / `--report-abundant-rna-custom`**: opt-in, non-destructive reporting of read fractions landing on abundant ncRNA classes (rRNA, tRNA, snRNA, snoRNA, miRNA, vault_RNA, YRNA, other_ncRNA, or user-defined BED/GTF regions), reported per sample and per group. Separate from `--filter-repeat`, which removes reads pre-alignment — this only reports, for diagnosing read sinks without committing to filtering them out. Output: `00_REPORTS/abundant_rna_report.tsv`.
 - **`--low-memory` flag**: dedup engine selection is now explicit instead of auto-switching on read count. Hash-based (`fastq_collapse_hash.py`) is the default at every library size; `--low-memory` forces the flat-RAM sort-based engine (`fastq_collapse_sort.sh`). A warning is printed above 30M reads recommending `--low-memory` if RAM is limited.
-- **`--clink-threads <N>`**: caps Clink pileup workers independently of `-t` (default `min(-t, 8)`). Group-merged BAMs are far denser than single samples, and `-t 16` could be OOM-killed. (S00NYI)
-- Large-library (>30M reads) dedup warning is now one inline `[!]` marker per sample plus a single end-of-run summary, instead of a multi-line block per sample. Log lines are timestamped. (S00NYI)
+- **`--clink-threads <N>`**: caps Clink pileup workers independently of `-t` (default `min(-t, 8)`). Group-merged BAMs are far denser than single samples, and `-t 16` could be OOM-killed.
+- Large-library (>30M reads) dedup warning is now one inline `[!]` marker per sample plus a single end-of-run summary, instead of a multi-line block per sample. Log lines are timestamped.
 
 **Fixed**
-- Batch mode dropped `--no-chr-filter` for per-sample runs, and `pileup.py` applied its own canonical-chromosome filter, so scaffold-level assemblies gave an empty pileup. Both now honor the flag (`--all-chroms`). (S00NYI)
-- Clink pileup: windows are bounded by read count (a short, very deep contig such as rDNA could drive one worker to very high memory), a dead worker now raises an error instead of hanging, and an off-by-one that dropped about one read per window boundary is fixed. Output verified identical across window sizes. (S00NYI)
+- Batch mode dropped `--no-chr-filter` for per-sample runs, and `pileup.py` applied its own canonical-chromosome filter, so scaffold-level assemblies gave an empty pileup. Both now honor the flag (`--all-chroms`).
+- Clink pileup: windows are bounded by read count (a short, very deep contig such as rDNA could drive one worker to very high memory), a dead worker now raises an error instead of hanging, and an off-by-one that dropped about one read per window boundary is fixed. Output verified identical across window sizes.
 - Batch dispatch passed quoted values (`--gtf`, `--rmsk`, `--peak-caller-args`, ...) to per-sample runs with literal quote characters; per-sample runs now receive them intact.
 - Groups-file handling hardened: line endings (CRLF and old-Mac CR-only) are now auto-detected and sanitized, and sample names in the groups file may include or omit `.fastq`/`.fastq.gz`/`.fq`/`.fq.gz` extensions — both now match correctly against internal sample identifiers.
-- Bowtie2 + crosslink-site warning reworded: crosslink positions stay valid (`--end-to-end`); the cost is junction-spanning reads. Now also shown for `--run-clink`, once. (S00NYI)
+- Bowtie2 + crosslink-site warning reworded: crosslink positions stay valid (`--end-to-end`); the cost is junction-spanning reads. Now also shown for `--run-clink`, once.
 - Demultiplexed batch path now produces `GROUP_PEAKS`; leading-zero folder-name and combined-peak path mismatches fixed; stray `REPORTS/` merged into `00_REPORTS/`. `--ctk-group` is now a deprecated alias of `--group-xlsite`.
 - Clink collapse output now says `Total input alignments` (was `Input reads`). Internal: dead legacy code paths removed; Benjamini-Hochberg FDR now uses scipy.
 

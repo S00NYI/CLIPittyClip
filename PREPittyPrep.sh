@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# PREPittyPrep.sh - Preprocessing Module for CLIPittyClip (v3.5.2)
+# PREPittyPrep.sh - Preprocessing Module for CLIPittyClip (v3.5.3)
 #
 # Runs the full CLIP-seq preprocessing stack and stops before alignment:
 #   dedup → [demux] → fastp → *_prepped.fastq.gz (ready to map)
@@ -24,11 +24,17 @@ EXP_ID=""
 UMI_LEN=0
 BC_LEN=""
 SPACER_LEN="0"
-ADAPTER_3="AGATCGGAAGAGC"   # Illumina universal adapter (override with -a)
+ADAPTER_3="L32"             # Same default as CLIPittyClip.sh (override with -a)
+BC_FIRST="false"
+TRIM3_LEN="0"
+FASTP_MIN_QUAL="30"
 DEDUP_MODE="true"
+LOW_MEMORY="false"
 GEO_MODE="false"
-ECLIP_MODE="false"
-FILTER_NCRNA="false"
+ECLIP_MODE=""               # "pe" or "se"; empty = off
+PARCLIP_MODE="false"
+PARCLIP_ADAPTERS=""
+FILTER_REPEAT="false"
 GENOME_INDEX=""
 DEMUX_MISMATCHES="1"
 SAMPLE_SIZE=0
@@ -40,30 +46,39 @@ function show_usage {
     echo ""
     echo "Usage: $0 [-i <input.fastq.gz> | -d <dir>] [options]"
     echo ""
-    echo "PREPittyPrep v3.5.2 - CLIP-seq Preprocessing Module"
+    echo "PREPittyPrep v3.5.3 - CLIP-seq Preprocessing Module"
     echo "Output: groomed, deduplicated, adapter-trimmed *_prepped.fastq.gz"
     echo ""
     echo "INPUT (choose one):"
-    echo "  -i <path>              Input FASTQ file (.fastq or .fastq.gz)"
-    echo "  -d <dir>               Directory of FASTQ files (batch mode)"
+    echo "  -i, --input-file <path>  Input FASTQ file (.fastq or .fastq.gz)"
+    echo "  -d, --input-dir <dir>    Directory of FASTQ files (batch mode)"
     echo ""
     echo "PREPROCESSING:"
-    echo "  -b <path>              Barcode file; triggers demux mode"
-    echo "  -u <int>               UMI length (default: 0)"
-    echo "  -a <str>               3' adapter sequence"
-    echo "  --bc-len <int>         Barcode length (auto-detected from -b)"
-    echo "  --spacer-len <int>     Spacer length to trim after barcode (default: 0)"
-    echo "  --no-dedup             Skip deduplication"
-    echo "  --eclip                eCLIP mode (UMI in read header)"
-    echo "  --demux-mismatches <N> Max barcode mismatches (default: 1)"
-    echo "  --filter-ncrna         Enable ncRNA pre-filtering (requires -x)"
-    echo "  -x <path>              Genome index (required only with --filter-ncrna)"
-    echo "  -s <int>               Test mode: process N reads only"
+    echo "  -b, --barcodes <path>    Barcode file; triggers demux mode (needs -i)"
+    echo "  -u, --umi-length <int>   UMI length (default: 0)"
+    echo "  -a, --adapter <str>      3' adapter sequence, or a name: L32, L3, L3MOD, L7 (L19), SRA3"
+    echo "                             (default: L32)"
+    echo "  --bc-len <int>           Barcode length (auto-detected from -b)"
+    echo "  --spacer-len <int>       Spacer length to trim after barcode (default: 0)"
+    echo "  --bc-first               Barcode precedes UMI: layout [BC][UMI][spacer][READ]"
+    echo "  --trim3 <int>            Bases to trim from the 3' end after adapter removal (default: 0)"
+    echo "  --min-qual <int>         fastp average quality threshold (default: 30)"
+    echo "  --no-dedup               Skip deduplication"
+    echo "  --low-memory             Use the flat-RAM sort-based dedup engine"
+    echo "  --eclip <pe|se>          eCLIP mode: 'pe' (post-eclipdemux R2, UMI in header) or"
+    echo "                             'se' (raw seCLIP R1, UMI in sequence)"
+    echo "  --parclip                PAR-CLIP mode: [UMI][READ][2nt spacer][6mer barcode][adapter]."
+    echo "                             Requires -u."
+    echo "  --parclip-adapters <fa>  Custom PAR-CLIP adapter FASTA (default: lib/parclip_adapters.fa)"
+    echo "  --demux-mismatches <N>   Max barcode mismatches (default: 1)"
+    echo "  --filter-repeat          Remove reads that map to the repeat index (needs -x)"
+    echo "  -x, --index <path>       Genome index that holds the repeat index (only with --filter-repeat)"
+    echo "  -s, --sample <int>       Test mode: process N reads only"
     echo ""
     echo "OUTPUT:"
-    echo "  -o <str>               Output folder name / path"
-    echo "  -k                     Keep intermediate files (including 0_DEMUX_FASTQ)"
-    echo "  -t <int>               Threads (default: 1)"
+    echo "  -o, --output <str>       Output folder name / path"
+    echo "  -k, --keep               Keep intermediate files (including 0_DEMUX_FASTQ)"
+    echo "  -t, --threads <int>      Threads (default: 1)"
     echo "  -w, --wizard           Launch interactive configuration wizard"
     echo "  -h, --help             Show this help"
     echo ""
@@ -91,22 +106,30 @@ if [[ $# -eq 0 ]]; then show_usage; exit 1; fi
 # ─── Argument Parsing ────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
     case $1 in
-        -i)                   INPUT_FILE="$2"; shift 2 ;;
-        -d)                   INPUT_DIR="$2"; shift 2 ;;
-        -b)                   BARCODE_FILE="$2"; shift 2 ;;
-        -o)                   EXP_ID="$2"; shift 2 ;;
-        -t)                   THREADS="$2"; shift 2 ;;
-        -u)                   UMI_LEN="$2"; shift 2 ;;
-        -a)                   ADAPTER_3="$2"; shift 2 ;;
+        -i|--input-file)      INPUT_FILE="$2"; shift 2 ;;
+        -d|--input-dir)       INPUT_DIR="$2"; shift 2 ;;
+        -b|--barcodes)        BARCODE_FILE="$2"; shift 2 ;;
+        -o|--output)          EXP_ID="$2"; shift 2 ;;
+        -t|--threads)         THREADS="$2"; shift 2 ;;
+        -u|--umi-length)      UMI_LEN="$2"; shift 2 ;;
+        -a|--adapter)         ADAPTER_3="$2"; shift 2 ;;
         --bc-len)             BC_LEN="$2"; shift 2 ;;
         --spacer-len)         SPACER_LEN="$2"; shift 2 ;;
+        --bc-first)           BC_FIRST="true"; shift ;;
+        --trim3)              TRIM3_LEN="$2"; shift 2 ;;
+        --min-qual)           FASTP_MIN_QUAL="$2"; shift 2 ;;
         --no-dedup)           DEDUP_MODE="false"; shift ;;
-        --eclip)              ECLIP_MODE="true"; shift ;;
-        --filter-ncrna)       FILTER_NCRNA="true"; shift ;;
-        -x)                   GENOME_INDEX="$2"; shift 2 ;;
+        --low-memory)         LOW_MEMORY="true"; shift ;;
+        --eclip)              ECLIP_MODE="$2"; shift 2 ;;
+        --parclip)            PARCLIP_MODE="true"; shift ;;
+        --parclip-adapters)   PARCLIP_ADAPTERS="$2"; shift 2 ;;
+        --filter-repeat)      FILTER_REPEAT="true"; shift ;;
+        --filter-ncrna)       echo "[WARNING] --filter-ncrna is deprecated; use --filter-repeat instead." >&2
+                              FILTER_REPEAT="true"; shift ;;
+        -x|--index)           GENOME_INDEX="$2"; shift 2 ;;
         --demux-mismatches)   DEMUX_MISMATCHES="$2"; shift 2 ;;
-        -s)                   SAMPLE_SIZE="$2"; shift 2 ;;
-        -k)                   KEEP_INTERMEDIATE="yes"; shift ;;
+        -s|--sample)          SAMPLE_SIZE="$2"; shift 2 ;;
+        -k|--keep)            KEEP_INTERMEDIATE="yes"; shift ;;
         --geo)                GEO_MODE="true"; shift ;;
         -w|--wizard|--advanced) WIZARD_MODE="true"; shift ;;
         -h|--help)            show_usage; exit 0 ;;
@@ -132,15 +155,21 @@ if [[ "$WIZARD_MODE" == "true" ]]; then
     ADAPTER_3="$WIZ_ADAPTER"
     [[ -n "$WIZ_BC_LEN" ]] && BC_LEN="$WIZ_BC_LEN"
     SPACER_LEN="$WIZ_SPACER_LEN"
+    [[ "$WIZ_BC_FIRST" == "true" ]] && BC_FIRST="true"
+    TRIM3_LEN="$WIZ_TRIM3_LEN"
     [[ "$WIZ_NO_DEDUP" == "true" ]] && DEDUP_MODE="false"
-    [[ "$WIZ_ECLIP" == "true" ]] && ECLIP_MODE="true"
+    [[ -n "$WIZ_ECLIP_MODE" ]] && ECLIP_MODE="$WIZ_ECLIP_MODE"
+    [[ "$WIZ_PARCLIP_MODE" == "true" ]] && PARCLIP_MODE="true"
     DEMUX_MISMATCHES="$WIZ_DEMUX_MISMATCHES"
-    [[ "$WIZ_FILTER_NCRNA" == "true" ]] && FILTER_NCRNA="true"
+    [[ "$WIZ_FILTER_REPEAT" == "true" ]] && FILTER_REPEAT="true"
     [[ -n "$WIZ_GENOME_INDEX" ]] && GENOME_INDEX="$WIZ_GENOME_INDEX"
     [[ -n "$WIZ_OUTPUT" ]] && EXP_ID="$WIZ_OUTPUT"
     [[ "$WIZ_KEEP" == "true" ]] && KEEP_INTERMEDIATE="yes"
     SAMPLE_SIZE="$WIZ_SAMPLE_SIZE"
 fi
+
+# Convert an adapter name to its sequence
+ADAPTER_3=$(resolve_adapter "$ADAPTER_3") || exit 1
 
 # ─── Validation ──────────────────────────────────────────────────────────────
 if [[ -n "$INPUT_DIR" && -n "$INPUT_FILE" ]]; then
@@ -158,14 +187,26 @@ fi
 if [[ -n "$BARCODE_FILE" && "$GEO_MODE" == "false" && -z "$INPUT_FILE" ]]; then
     log_error "Demux mode (-b) requires a single pooled input file (-i), not -d."; exit 1
 fi
-if [[ "$FILTER_NCRNA" == "true" && -z "$GENOME_INDEX" ]]; then
-    log_error "--filter-ncrna requires a genome index (-x)."; exit 1
+if [[ "$FILTER_REPEAT" == "true" && -z "$GENOME_INDEX" ]]; then
+    echo "[ERROR] --filter-repeat requires a genome index (-x) that holds the repeat index." >&2; exit 1
+fi
+if [[ -n "$ECLIP_MODE" && "$ECLIP_MODE" != "pe" && "$ECLIP_MODE" != "se" ]]; then
+    echo "[ERROR] --eclip requires 'pe' or 'se' (got: '$ECLIP_MODE')." >&2; exit 1
+fi
+if [[ -n "$ECLIP_MODE" && "$PARCLIP_MODE" == "true" ]]; then
+    echo "[ERROR] Use --eclip or --parclip, not both." >&2; exit 1
+fi
+if [[ "$PARCLIP_MODE" == "true" && "${UMI_LEN:-0}" -le 0 ]]; then
+    echo "[ERROR] --parclip requires -u <umi_length>. Specify the UMI length (for example -u 4)." >&2; exit 1
+fi
+if [[ -n "$PARCLIP_ADAPTERS" && ! -f "$PARCLIP_ADAPTERS" ]]; then
+    echo "[ERROR] PAR-CLIP adapter FASTA not found: $PARCLIP_ADAPTERS" >&2; exit 1
 fi
 
 # ─── Dependency checks ───────────────────────────────────────────────────────
 check_dependency fastp
 if [[ -n "$BARCODE_FILE" ]]; then check_dependency cutadapt; fi
-if [[ "$FILTER_NCRNA" == "true" ]]; then check_dependency bowtie2; fi
+if [[ "$FILTER_REPEAT" == "true" ]]; then check_dependency bowtie2; fi
 
 # ─── Barcode length auto-detection ───────────────────────────────────────────
 if [[ -n "$BARCODE_FILE" ]]; then
@@ -202,7 +243,7 @@ fi
 
 # ─── Banner ──────────────────────────────────────────────────────────────────
 echo "════════════════════════════════════════════════════════════════════════════════"
-echo "  PREPittyPrep v3.5.2"
+echo "  PREPittyPrep v3.5.3"
 echo "  Started: $(date '+%Y-%m-%d %H:%M:%S')"
 if [[ -n "$INPUT_DIR" ]]; then
     echo "  Input:   $INPUT_DIR  [directory mode]"
@@ -214,6 +255,9 @@ if [[ "$GEO_MODE" == "true" ]]; then
 else
     echo "  Mode:    PREPROCESS  [dedup → fastp → _prepped.fastq.gz]"
     [[ -n "$BARCODE_FILE" ]] && echo "           + DEMUX  [cutadapt → per-sample]"
+fi
+if   [[ -n "$ECLIP_MODE" ]];           then echo "  Protocol: eCLIP ${ECLIP_MODE}"
+elif [[ "$PARCLIP_MODE" == "true" ]]; then echo "  Protocol: PAR-CLIP"
 fi
 echo "  UMI:     ${UMI_LEN}bp | BC: ${BC_LEN}bp | Spacer: ${SPACER_LEN}bp | Threads: $THREADS"
 echo "════════════════════════════════════════════════════════════════════════════════"
@@ -263,15 +307,19 @@ mkdir -p "$SCRATCH"
 # Helper: preprocess one sample → _prepped.fastq.gz in $out_dir
 # Args: $1=input_fastq $2=sample_name $3=work_dir
 # ─────────────────────────────────────────────────────────────────────────────
+# Same steps and order as the CLIPittyClip.sh per-sample preprocessing.
+# Args: $1=input_fastq $2=sample_name $3=work_dir $4=skip_dedup (true after pool dedup)
 preprocess_one() {
     local in_file="$1"
     local sname="$2"
     local wdir="$3"
+    local skip_dedup="${4:-false}"
     local work="$in_file"
+    local prefix="${wdir}/${sname}"
 
-    # 1. Dedup
-    if [[ "$DEDUP_MODE" == "true" ]]; then
-        local dd_out="${wdir}/${sname}_dedup.fastq"
+    # 1. Dedup (the eCLIP preprocessors deduplicate inside their own steps)
+    if [[ "$DEDUP_MODE" == "true" && -z "$ECLIP_MODE" && "$skip_dedup" != "true" ]]; then
+        local dd_out="${prefix}_dedup.fastq"
         if run_dedup "$in_file" "$dd_out"; then
             work="$dd_out"
         else
@@ -279,26 +327,39 @@ preprocess_one() {
         fi
     fi
 
-    # 2. Optional ncRNA filter
-    if [[ "$FILTER_NCRNA" == "true" && -n "$GENOME_INDEX" ]]; then
-        local ncrna_dir="${wdir}/ncRNA_Mapping"
-        local ncrna_out="${wdir}/${sname}_ncrna_filtered.fastq"
-        local ncrna_idx
-        ncrna_idx=$(check_ncrna_index "$GENOME_INDEX")
-        if [[ -n "$ncrna_idx" ]]; then
-            run_ncrna_filter "$work" "$ncrna_out" "$ncrna_dir" "$ncrna_idx" "$THREADS" "$sname"
-            work="$ncrna_out"
+    # 2. Adapter trimming and UMI extraction, by protocol
+    if   [[ "$ECLIP_MODE" == "pe" ]]; then
+        run_eclip_pe_preprocessing "$work" "$prefix" "$THREADS" "$SAMPLE_SIZE" "$UMI_LEN"
+    elif [[ "$ECLIP_MODE" == "se" ]]; then
+        run_eclip_se_preprocessing "$work" "$prefix" "$THREADS" "$SAMPLE_SIZE"
+    elif [[ "$PARCLIP_MODE" == "true" ]]; then
+        run_parclip_preprocessing "$work" "$prefix" "$UMI_LEN" "$THREADS" "$SAMPLE_SIZE" "$PARCLIP_ADAPTERS"
+    else
+        run_fastp "$work" "$prefix" "$UMI_LEN" "$ADAPTER_3" "$THREADS" "$SAMPLE_SIZE" \
+            "$BC_LEN" "$SPACER_LEN" "$BC_FIRST" "$FASTP_MIN_QUAL" "$TRIM3_LEN"
+    fi
+    local cleaned="${prefix}_cleaned.fastq"
+
+    # 3. Optional repeat-element filter (after trimming, as in CLIPittyClip.sh)
+    if [[ "$FILTER_REPEAT" == "true" && -s "$cleaned" ]]; then
+        local repeat_idx
+        repeat_idx=$(check_repeat_index "$GENOME_INDEX")
+        if [[ -n "$repeat_idx" ]]; then
+            local repeat_dir="${wdir}/Repeat_Mapping"
+            local repeat_out="${prefix}_repeat_filtered.fastq"
+            run_repeat_filter "$cleaned" "$repeat_out" "$repeat_dir" "$repeat_idx" "$THREADS" "$sname"
+            run_repeat_quantify "${repeat_dir}/${sname}_repeat.bam" \
+                "${repeat_dir}/${sname}_repeat_stats.txt" "$repeat_dir" "$sname"
+            if [[ -s "$repeat_out" ]]; then
+                mv "$repeat_out" "$cleaned"
+            fi
         else
-            log_warning "ncRNA index not found. Skipping ncRNA filter for $sname."
+            log_warning "Repeat index not found in $GENOME_INDEX or $GENOME_INDEX/Repeat. Skipping repeat filter for $sname."
         fi
     fi
 
-    # 3. fastp (adapter trim, UMI extraction, front trim)
-    run_fastp "$work" "${wdir}/${sname}" "$UMI_LEN" "$ADAPTER_3" "$THREADS" "$SAMPLE_SIZE" "$ECLIP_MODE" "$BC_LEN" "$SPACER_LEN"
-
     # 4. Gzip cleaned output → _prepped.fastq.gz
-    local cleaned="${wdir}/${sname}_cleaned.fastq"
-    local prepped="${wdir}/${sname}_prepped.fastq.gz"
+    local prepped="${prefix}_prepped.fastq.gz"
     if [[ -s "$cleaned" ]]; then
         gzip -c "$cleaned" > "$prepped"
         rm -f "$cleaned"
@@ -320,14 +381,19 @@ collect_one() {
         cp "${wdir}/${sname}_fastp.html" "$OUTPUT_ROOT/REPORTS/FASTP_REPORT/"
     [[ -f "${wdir}/${sname}_fastp.json" ]] && \
         cp "${wdir}/${sname}_fastp.json" "$OUTPUT_ROOT/REPORTS/FASTP_REPORT/"
+    if [[ -d "${wdir}/Repeat_Mapping" ]]; then
+        mkdir -p "$OUTPUT_ROOT/REPORTS/Repeat_Mapping"
+        cp "${wdir}/Repeat_Mapping"/*.{txt,tsv} "$OUTPUT_ROOT/REPORTS/Repeat_Mapping/" 2>/dev/null
+    fi
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
 # DIRECTORY MODE
 # ─────────────────────────────────────────────────────────────────────────────
 if [[ -n "$INPUT_DIR" ]]; then
-    mapfile -t SAMPLE_FILES < <(ls "$INPUT_DIR"/*.fastq.gz "$INPUT_DIR"/*.fq.gz \
-                                    "$INPUT_DIR"/*.fastq "$INPUT_DIR"/*.fq 2>/dev/null | sort)
+    # Plain array assignment instead of mapfile, for macOS bash 3.2
+    SAMPLE_FILES=($(ls "$INPUT_DIR"/*.fastq.gz "$INPUT_DIR"/*.fq.gz \
+                       "$INPUT_DIR"/*.fastq "$INPUT_DIR"/*.fq 2>/dev/null | sort))
     total=${#SAMPLE_FILES[@]}
     echo ""
     echo "[DIRECTORY MODE] Found $total input files"
@@ -383,7 +449,7 @@ elif [[ -n "$BARCODE_FILE" ]]; then
     echo "[DEMULTIPLEXING]"
     echo "  > Barcodes: $(basename "$BARCODE_FILE")"
     pushd "$SCRATCH" > /dev/null
-    run_demultiplexing "$WORK_INPUT" "$BARCODE_FILE" "$SAMPLE_SIZE" "false"
+    run_demultiplexing "$WORK_INPUT" "$BARCODE_FILE" "$SAMPLE_SIZE" "demux_fastq"
     popd > /dev/null
     [[ -f "$POOL_DEDUP" ]] && rm -f "$POOL_DEDUP"
 
@@ -420,13 +486,8 @@ elif [[ -n "$BARCODE_FILE" ]]; then
         sdir="${SCRATCH}/${sname}"
         mkdir -p "$sdir"
         printf "  %3d/%-3d  %-28s" "$current" "$total_samples" "$sname"
-        # For demux samples, dedup already done on pool; skip dedup here
-        # Run fastp directly (dedup was already done on the pooled file)
-        run_fastp "$f" "${sdir}/${sname}" "$UMI_LEN" "$ADAPTER_3" "$THREADS" "$SAMPLE_SIZE" "$ECLIP_MODE" "$BC_LEN" "$SPACER_LEN"
-        cleaned="${sdir}/${sname}_cleaned.fastq"
-        if [[ -s "$cleaned" ]]; then
-            gzip -c "$cleaned" > "${sdir}/${sname}_prepped.fastq.gz"
-            rm -f "$cleaned"
+        # Dedup already ran on the pooled file, so skip it here
+        if preprocess_one "$f" "$sname" "$sdir" "true"; then
             printf "  ✓\n"
             collect_one "$sname" "$sdir"
         else
