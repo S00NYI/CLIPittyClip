@@ -501,6 +501,17 @@ Key options: `-i` (BED dir), `-n` (output prefix), `--aggregate` / `--no-aggrega
 
 HOMER builds its tags from the matching file in `<input>/TAG_BED/` (one line per read). The split BEDs in `<input>/` are used for the peak matrix. A sample with no tag BED (output from before this fix) falls back to its split BED, with a warning.
 
+### Claude Code skill
+
+`skills/clipittyclip/` is a [Claude Code](https://claude.com/claude-code) skill. It asks the wizard questions in chat and checks each answer against your files. It measures the read layout from the first 100,000 reads and compares it with the protocol you name. It shows the full command and starts the run only after you confirm. If CLIPittyClip is not installed, it offers to install it and asks first. To install the skill for all projects, run these commands from the CLIPittyClip folder:
+
+```bash
+mkdir -p ~/.claude/skills
+ln -s "$PWD/skills/clipittyclip" ~/.claude/skills/clipittyclip
+```
+
+Then ask Claude Code to analyze your CLIP data, or type `/clipittyclip`.
+
 ---
 
 ## Genome Index Setup
